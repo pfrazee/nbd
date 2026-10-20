@@ -58,7 +58,7 @@ Large media, seeking, or early playback needs a separate versioned format authen
 
 ## Validation cases
 
-Each row requires implementation evidence; prose/link checks do not satisfy it.
+Each row requires implementation evidence; prose/link checks do not satisfy it. Conformance vectors MUST include exact inputs, ordered observations, starting local state, expected result/reason, durable state changes, and permitted network/key-release actions. Cross-implementation comparisons use the same local history; different observed histories need not produce identical authorization decisions.
 
 | Area | Required cases |
 | --- | --- |
@@ -91,3 +91,15 @@ Each row requires implementation evidence; prose/link checks do not satisfy it.
 | Auditing | TOFU substitution detected through honest issuer repo and retained own history despite source withholding. Forged audit signatures, stale formerly authorized versus never-authorized keys, legitimate revisions, suppression/collusion, unknown history, observations versus grants. Signature attributes statement, not PDS misconduct or decryption. Review metadata and transferable-signature privacy. |
 | Retention and sync | Indefinite grants, exact evidence, declarations including superseded snapshots/branches/resolutions; preserve through migration/rotation/revocation/membership/restore. Host discovery plus retained participants, former repos while authorized, audit before key delivery, interrupted checkpoints/gaps, expiry/deletion/unavailable history. Offline catch-up, retained local auditing after removal without promised further access; no all-grants-seen claim. Background gaps neither bypass grant checks nor block unrelated work. |
 | Recovery/transfer | Surviving approval or independent helper verification of fresh keys, one eligible holder can restore retained epochs without transferring trust to others. Reject PDS-only replacement, fresh-TOFU fallback, revived withdrawals or re-invitation history reset. Authenticated/confidential keys plus pins/provenance/order/withdrawals/conflicts; older imports preserve newer known state. Missing/incomparable history cannot invent prior acceptance; key-only restore cannot recreate trust; all copies and wrapping paths lost means plaintext lost. |
+
+### Procedure and transition coverage
+
+| Procedure | Required mapping and additional cases |
+| --- | --- |
+| [G1–G6: exchange authorization](core.md#grant-authorization) | Host authority, verification, selections, withdrawals, and locally current state. Both local roles; known denial versus missing evidence; no release before `OK`; authorization changes between validation and release. |
+| [A1–A7: grant acceptance](core.md#grant-acceptance) | Encoding, policy, evidence/archives, and history audit. No decryption before required checks; current versus archive mode; later revocation alone does not invalidate history; known historical contradiction blocks new acceptance while uncertain issuance timing alone need not. No trust promotion or active-epoch rollback. |
+| [D1–D4: ancestry](device-enrollment.md#declaration-ancestry) | Bootstrap, ancestry, selections/conflicts, and recovery. Pending comparisons never become conflicts or empty selections; old ancestors cannot replace the head; resolutions cover every retained/newly discovered tip; invalid input cannot erase state. |
+| [R1–R4: revocations](device-enrollment.md#revocation-cycles) | Withdrawals/cycles, recovery, and bounded validation. Explicit acceptance/first-withdrawal positions; known unaccepted bindings versus missing acceptance history; late edges and overlapping cycles use frozen history; inactive candidates do not establish trust; no partial-cycle effects; preserve valid ordinary withdrawals when cycle validation is incomplete. |
+| [C1–C4: context](core.md#context-validation) | Rotation events, grant retries, and availability recovery. Unidentified event scope blocks the exchange; known unrelated scope avoids unrelated private trust requirements; affected authority/ancestry gaps block only affected exchanges. All required public evidence remains mandatory. |
+| [H1–H4 and T1–T7: activation](core.md#activation) | Activation, availability/recovery, abuse controls, and writers. Exercise every transition with a crash before/after persistence or network action; unavailable validation or throttling leaves no terminal outcome; exact retries return the original result after membership/epoch changes; cancellation is not rejection; no candidate grant or rollback. |
+| [P1–P8: publication](audit.md#publication) | Publication retries, evidence, and retention/sync. Every transition, partial uploads, acknowledgment loss, absent/different repo bytes, reauthorization before each release, and late acknowledgment after stopping. Stopping preserves prior exposure facts. |
