@@ -2,7 +2,7 @@
 
 Paul's End-to-end Encryption Proposal (PEEP) for atproto spaces. **Incomplete.**
 
-Users publish device public keys publicly. Spaces establish which accounts may participate. Each participant declares their exact device keys. Issuers accept bindings through trust on first use (TOFU) or independent verification, and publish device-signed grant evidence in their own in-space repos for participants to audit through direct sync.
+Users publish device public keys publicly. Spaces establish which accounts may participate. Each participant declares their exact device keys. Issuers accept bindings locally through trust on first use (TOFU) or independent verification, and publish device-signed grants with their supporting evidence in their own in-space repos. Each grant is also its audit record, retained indefinitely and available through direct sync under normal Spaces access rules.
 
 Selected devices encrypt and decrypt locally. Servers store ciphertext, encrypted grants, public key publications, and permissioned declarations/evidence. Independent verification can prevent PDS key substitution; TOFU allows initial substitution, with detection conditional on the affected client receiving evidence and checking its authorization history. Revocation freshness is a separate guarantee.
 

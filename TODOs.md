@@ -1,8 +1,8 @@
 # PEEP: Open Questions and Validation Work
 
-The specs select optional independent verification, supported TOFU, and mandatory grant auditing through issuers' own repos. The items below track remaining decisions and validation; alternatives within them are not selected requirements. TODO-11 and TODO-13 are deferred extensions.
+The specs select optional independent verification local to each issuer, supported TOFU, and signed grants as mandatory audit records published with their evidence in issuers' own repos. The items below track remaining decisions and validation; alternatives within them are not selected requirements. Cross-user verification attestations in TODO-02, and TODO-11 and TODO-13, are deferred extensions.
 
-Suggested decision order: audit delivery/retention (09), trust/bootstrap (02), authority (03), approval (01), declarations/evidence (04–05), freshness/rotation/recovery (06–08), then validation (10, 12). IDs remain stable for links.
+Suggested decision order: trust/bootstrap (02), authority (03), approval (01), declarations/evidence (04–05), remaining audit details (09), freshness/rotation/recovery (06–08), then validation (10, 12). IDs remain stable for links.
 
 <a id="todo-01"></a>
 ## TODO-01: Authenticate the user's selection
@@ -12,9 +12,13 @@ Choose the approval and continuity mechanism for both TOFU and independently ver
 [Spec: substitution prevention](device-enrollment.md#preventing-pds-substitution).
 
 <a id="todo-02"></a>
-## TODO-02: First trust and its distribution
+## TODO-02: First trust and local verification
 
-Select independent verification methods and define what pairing/invitations authenticate, including space configuration. Specify who can attest to bindings, attestation scope, reuse across spaces, and how every issuer—including new or restored installations—obtains evidence. TOFU is supported: define pin storage, verification status, transition to verified trust, and explicit handling of changed bindings or lost state. Decide how a space can require verified issuance by all issuers.
+Settled: verification is local to each issuer. Its verification decision does not establish verified trust for other users, and a device needs only one valid grant from an authorized issuer for each epoch's key.
+
+Define exactly which account/device/key binding is pinned, independent verification methods, reuse across spaces, and authentication of space configuration. Specify pin storage, verification status, transition from TOFU to verified trust, and explicit handling of changed bindings or lost state. Define authenticated transfer/restore of local trust state between the issuer's own trusted installations. Decide how a space can require verified issuance by all issuers.
+
+Deferred: cross-user verification attestations and their trust/delegation rules. This does not settle whether an accepted device can authorize additional devices for its own account; see [TODO-01](#todo-01) and [TODO-03](#todo-03).
 
 [Spec: first trusted binding](device-enrollment.md#establishing-the-first-trusted-binding).
 
@@ -35,7 +39,7 @@ Define the lexicon, location, canonical encoding, and direct-key or immutable-re
 <a id="todo-05"></a>
 ## TODO-05: Grant evidence and wire format
 
-Finalize the provisional `enrollmentReference.declaration` binding and approval, trust-status/bootstrap, membership, and issuer-authority evidence. Specify what accompanies a grant, what is retained/retrieved, rejection behavior, and validation of archived grants. Prefer reusing the signed grant as an issuance receipt where it meets [TODO-09](#todo-09), retaining exact declaration/key/approval bytes. Verification and audit evidence must be readable without the granted key or a substituted recipient private key.
+Finalize the provisional `enrollmentReference.declaration` binding, approval, membership, and issuer-authority evidence, and reporting of the issuer's local trust decision. Any reported verification status is an issuer statement, not a transferable verification attestation. Specify what accompanies a grant, what is retained/retrieved, rejection behavior, and validation of archived grants. The signed grant is the audit record: finalize how its published record carries exact declaration/key/approval bytes, cryptographically bound to the grant, under [TODO-09](#todo-09). Verification and audit evidence must be readable without the granted key or a substituted recipient private key.
 
 Define historical-authority checks without assuming a trusted issuance timestamp or registry commit receipt.
 
@@ -52,7 +56,7 @@ Choose a default and any supported alternatives:
 | Expiring approval | Limits old-approval replay if expiration is enforced and trusted approvers stop renewing withdrawn selections; requires renewal and reliable clocks. |
 | Fresh per-grant approval | Requires an online trusted approver; bind an issuer nonce, exact selection, and target epoch, with a response deadline and replay protection. |
 
-Apply freshness to membership, recipients, and approving/issuing authority in both trust modes. Define behavior for unavailable evidence, stale approvers, clock uncertainty, cached state, and restore. Any revocation bound must state its assumptions; independent verification, audit receipts, or a fresh response alone do not establish globally current authorization.
+Apply freshness to membership, recipients, and approving/issuing authority in both trust modes. Define behavior for unavailable evidence, stale approvers, clock uncertainty, cached state, and restore. Any revocation bound must state its assumptions; independent verification, grant audit records, or a fresh response alone do not establish globally current authorization.
 
 [Spec: grant freshness](device-enrollment.md#grant-freshness).
 
@@ -73,12 +77,13 @@ Choose recovery through surviving devices, previously authenticated recovery mat
 <a id="todo-09"></a>
 ## TODO-09: Grant auditing through issuer repos
 
-Define the mandatory audit flow using device-signed evidence in each issuer's own permissioned repo:
+Settled: the signed grant itself is the audit record. Publish it with exact supporting evidence in the issuer's own permissioned repo; direct delivery forwards the same record only after publication is acknowledged. Retain grants and evidence indefinitely under normal Spaces access rules. Former members may keep synced evidence; further audit access is not guaranteed. See [Core's retention and access rules](core.md#grant-delivery). Packaging remains [TODO-05](#todo-05).
 
-- Choose the receipt/observation lexicon and signing context, binding exact declarations, keys, trust status, and grants; distinguish observations from issuance claims.
-- Define retention of evidence and clients' authorization history, publication ordering relative to grant exposure, retries, and crash/failure handling. A repo write acknowledgment does not prove durable availability to other clients.
-- Define issuer discovery and direct-sync coverage, catch-up, access before receiving keys and after removal, and behavior when a PDS withholds evidence or credentials expire. Set any retention window and its offline-audit limits explicitly.
-- Specify comparison, alerts, missing-history handling, and what establishes unauthorized selection, stale authorization, or attributable misconduct. Account for legitimate revisions/concurrent edits, receipt-signer trust, and metadata/transferable-signature privacy.
+Remaining decisions:
+
+- Define retries, duplicate handling, and recovery from crashes or uncertain write outcomes. An acknowledgment does not prove durable availability; a missing acknowledgment does not prove the grant was never exposed.
+- Define issuer discovery, direct-sync coverage, and catch-up under normal Spaces access rules, including access before receiving keys and behavior when a PDS withholds evidence or credentials expire.
+- Specify preservation of clients' authorization history, comparison, alerts, missing-history handling, and what establishes unauthorized selection, stale authorization, or attributable misconduct. Account for legitimate revisions/concurrent edits, issuer-signature trust, and metadata/transferable-signature privacy.
 
 No separate witness or global log is required. Detection remains conditional on an honest issuer and eventual access to retained evidence and authorization history; neither a detection deadline nor universal proof of a clean history is promised.
 
@@ -89,7 +94,7 @@ No separate witness or global log is required. Detection remains conditional on 
 
 Publish byte-exact vectors and validate independent implementations of fingerprints, CBOR contexts, signatures, HPKE grants, and content envelopes. Exercise malformed encodings, modified contexts, cross-account/space reuse, missing approval, unauthorized issuers, bootstrap for every issuer, replacement, concurrency, replay after withdrawal, restore, and removal during issuance/rotation.
 
-Test verified-binding rejection of substituted keys; TOFU substitution followed by detection through an honest issuer's repo; changed pins and verification downgrades; one TOFU issuer exposing a shared key; missing declaration bytes/history, forged receipts, suppressed evidence, and publication failures. Tests must distinguish incomplete audits from clean results and observations from issuance.
+Test verified-binding rejection of substituted keys; TOFU substitution followed by detection through an honest issuer's repo; changed pins and verification downgrades; isolation of issuers' local verification decisions; misuse of a published grant as a verification attestation; one TOFU issuer exposing a shared key; missing declaration bytes/history, forged grant audit records, suppressed evidence, publication failures, and attempts to deliver directly before publication is acknowledged. Validate retention through rotation, revocation, membership changes, and migration; offline catch-up while access remains authorized; and local auditing of synced evidence after removal without guaranteed further retrieval. Tests must distinguish incomplete audits from clean results and observations from issuance.
 
 [Spec: grant profile](core.md#mandatory-grant-profile).
 

@@ -21,19 +21,19 @@ Standard Spaces membership determines account eligibility; each participant's de
 Before exposing a grant to any recipient or relay, the issuer must verify:
 
 1. The account's eligibility to participate.
-2. The declaration's exact recipient keys for this space, required signatures, and continuity against the issuer's accepted account-to-key binding, recording whether that binding is TOFU or independently verified.
+2. The declaration's exact recipient keys for this space, required signatures, and continuity against the issuer's locally accepted account-to-key binding, recording whether that binding is TOFU or independently verified.
 3. Its own authority to issue the requested current or historical key.
 4. Compliance with the [grant freshness policy](device-enrollment.md#grant-freshness), including known withdrawals.
 
 Missing or invalid required evidence blocks release. Independent verification is optional where policy permits TOFU; failed signatures or conflicting pins cannot be treated as first use. A space credential alone never authorizes a raw-key response or a grant to an arbitrary supplied key. Device selection does not implicitly confer approval, issuance, or administrative powers.
 
-Every grant also requires retained, device-signed evidence published in the issuer's own in-space repo under the [audit requirements](device-enrollment.md#detecting-inconsistent-views). Auditing records the issuance decision; it does not turn a TOFU binding into verified consent.
+The signed grant itself is the audit record and must be retained and published with its supporting evidence in the issuer's own in-space repo under the [audit requirements](device-enrollment.md#detecting-inconsistent-views). Auditing records the issuance decision; it does not turn a TOFU binding into verified consent. An issuer's reported verification status does not transfer verified trust to another issuer or replace a recipient's or auditor's own trust checks.
 
 ## Grant creation
 
 An eligible issuer encrypts to the selected recipient encryption key using `peep-hpke-v1`. Recipient keys are separate from authentication and short-lived DPoP keys.
 
-The following draft encoding requires all shown fields and rejects extra fields. Its declaration/evidence binding is provisional under [TODO-05](TODOs.md#todo-05). `CID` is a CBOR link.
+The following draft encoding requires all shown fields and rejects extra fields. Its declaration/evidence binding and packaging with supporting evidence in the published record remain provisional under [TODO-05](TODOs.md#todo-05). `CID` is a CBOR link.
 
 ```typescript
 type DeviceIdentity = { account: string; deviceId: string };
@@ -80,9 +80,15 @@ HPKE Base mode does not authenticate the sender, so the issuer signature is mand
 
 ## Grant delivery
 
-Grants may be exchanged directly or stored on permissioned servers. Retrieval uses normal Spaces credential and DPoP checks and returns an already encrypted grant.
+The issuer publishes the signed grant together with its exact supporting evidence as a record in its own permissioned repo for the space. This is the normal delivery path and produces the [audit record](device-enrollment.md#detecting-inconsistent-views) as part of releasing the grant. Retrieval uses normal Spaces credential and DPoP checks.
 
-Required verification evidence must be accessible before opening the grant, without the content key being granted. Grant evidence must also be available for [auditing through the issuer's repo](device-enrollment.md#detecting-inconsistent-views), even when delivery is direct. It may remain permissioned. Evidence packaging remains [TODO-05](TODOs.md#todo-05).
+Direct delivery may forward the same published record after the issuer's repo acknowledges publication. Acknowledgment does not prove durable availability to other clients; a failed or missing acknowledgment does not prove the grant was never exposed. Retry and crash handling remain [TODO-09](TODOs.md#todo-09).
+
+The supporting evidence must be accessible to authorized readers before opening the grant and for auditing, without the content key being granted or the possibly substituted recipient private key. Record packaging remains [TODO-05](TODOs.md#todo-05).
+
+Issuers must retain published grants and their exact supporting evidence indefinitely, preserving them during migration. There is no automatic expiration or pruning on key rotation, device revocation, or membership changes. Continued availability depends on the repo remaining hosted and accessible.
+
+Retrieval and auditing follow normal Spaces access rules. Users who leave or are removed may keep and audit what they already synced; further audit access is not guaranteed, including access to grants addressed to their own account. Indefinite retention does not extend read authorization.
 
 A PDS holding only a credential and encrypted grant cannot unwrap it. Once exposed to a recipient or relay, a grant cannot reliably be withdrawn by deleting its record. Archived grants do not establish current enrollment.
 
