@@ -2,11 +2,13 @@
 
 ## Scope
 
-Each space uses a symmetric content key per epoch. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, declarations, evidence, and encrypted grants. PEEP provides neither forward secrecy, post-compromise security, nor metadata hiding. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes and repo hosts may be malicious.
+Each space uses a symmetric content key per epoch. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, declarations, evidence, and encrypted grants. PEEP provides no forward secrecy, post-compromise security, or general metadata-hiding guarantee. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes, repo hosts, and storage providers may be malicious.
 
 The [space host](#trusted-host-state) determines account eligibility, configuration, administration, and epoch order. Credentials and writer discovery do not establish membership or device trust. [Signed declarations](device-enrollment.md#declarations) select devices; no enrollment registry, global enrollment chain, creator-device approval, or issuer appointment is required.
 
 Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. A grant also unlocks connected [historical keys](#backward-history-wrapping). Reading an existing epoch requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
+
+PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or relax the verification policy. Admission alone cannot bypass the policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
 
 ## Protocol conventions
 
@@ -50,6 +52,8 @@ Authenticate values by direct host retrieval or a retained local observation of 
 
 Expose change notifications and resumable reconciliation for membership, configuration, and epochs. Notifications are fetch hints; cached validated state follows [freshness rules](device-enrollment.md#freshness). Unsupported deployments must report the missing capabilities. [Rotation](#rotation) defines epoch/activation semantics.
 
+When learned, clients must visibly surface authenticated member additions, removals, readmissions, and verification-policy changes, identifying the affected account or old/new policy. Explain that admission permits access to retained history. Notices add no approval gate and need not precede grants; learning about a change has no deadline.
+
 ## Device verification policy
 
 Authenticated configuration selects a policy for both granting and accepting keys:
@@ -67,7 +71,7 @@ The policy covers current and historical keys, publication retries, direct deliv
 
 Before releasing a grant to a recipient or relay, verify:
 
-1. Both accounts are eligible and both exact device bindings are selected by authenticated, current declarations.
+1. Both accounts are eligible and both exact device bindings are selected by authenticated, [current](device-enrollment.md#freshness) declarations.
 2. The recipient meets the device verification policy, with the local trust decision and approval evidence retained.
 3. The issuer holds the requested key; [declaration continuity/conflict](device-enrollment.md#enrollment-history) and [withdrawal/freshness](device-enrollment.md#freshness) checks pass for both parties.
 4. The epoch's [rotation context](#rotation-context) permits the grant, including inherited restrictions.
@@ -145,45 +149,53 @@ Records and blobs share this envelope:
 
 ```typescript
 {
-  $type: "com.example.envelope"
+  $type: "com.example.peep.envelope"
   format: 1
   keyId: string // "71329bda9cf34bf7a8f68f475e166981"
   nonce: bytes // exactly 24 bytes
-  ciphertext: bytes // combined ciphertext and authentication tag
+  ciphertext: bytes // encrypted payload frame and appended 16-byte tag
   blobs: [references to encrypted blobs]
 }
 ```
 
-Format 1 uses XChaCha20-Poly1305 with the 256-bit key identified by `keyId`. Generate a fresh cryptographically random 24-byte nonce for every encryption, including edits and re-encryption. Never reuse a nonce with the same key across records, blobs, or history wraps. Ciphertext includes the appended 16-byte authentication tag and is exactly 16 bytes longer than plaintext.
+Format 1 uses XChaCha20-Poly1305 with the 256-bit key identified by `keyId`. Generate a fresh cryptographically random 24-byte nonce for every encryption, including edits and re-encryption. Never reuse a nonce with the same key across records, blobs, or history wraps. Ciphertext includes the appended 16-byte authentication tag and is exactly 16 bytes longer than the encoded [payload frame](#payload-framing-and-padding).
 
 Associated-data arrays below use normalized CBOR: labels are literal strings, `1` is an integer, and identifiers are strings. Use the exact authenticated `spaceURI` and its corresponding `keyId`. Distinct record/blob labels separate their cryptographic contexts.
 
-Only the shown envelope fields are permitted; `nonce` and `ciphertext` are CBOR byte strings. Reject duplicate or unexpected fields, unknown formats, invalid nonce lengths, ciphertext shorter than 16 bytes, unavailable keys, and failed authentication. Authenticate the complete ciphertext in the expected context before exposing plaintext.
+Only the shown envelope fields are permitted; `nonce` and `ciphertext` are CBOR byte strings. Reject an incorrect `$type`, duplicate or unexpected fields, unknown formats, invalid nonce lengths, ciphertext shorter than 19 bytes, unavailable keys, and failed authentication. Authenticate the complete ciphertext in the expected context before exposing plaintext.
+
+### Payload framing and padding
+
+Format 1 always encrypts `CBOR([payload, padding])`, exactly two byte strings. `payload` holds encoded record content or original file bytes; `padding` contains only zero bytes and may be empty. Even unpadded content uses this frame. Payload length is encoded inside encryption; no outer original-length or padding field is added. Grants and history wraps retain their separate plaintext formats.
+
+After whole-ciphertext authentication, decode the frame with bounded lengths/work; reject non-normalized CBOR, wrong element counts/types, nonzero padding, or trailing bytes. Check declared lengths against available bytes and resource limits before allocation. Discard padding and process only `payload`; never fall back to unframed content.
+
+Applications choose padding amounts or size buckets, accounting for CBOR overhead. Readers support empty and nonempty padding within their resource limits. Ciphertext limits include the frame, padding, and tag; blob limits cover the entire encrypted envelope. Padding can obscure exact content lengths; counts, timing, blob relationships, and padded record/blob sizes remain visible.
 
 ### Encrypted records
 
-Plaintext is one normalized ATProto CBOR map containing the application's content object and `$type`. Each record lexicon declares its outer collection/type and inner schema. After authentication, reject non-normalized encoding, duplicate keys, trailing bytes, a non-map root, or an incorrect content `$type`; validate the inner schema before rendering or indexing.
+`payload` is the normalized ATProto CBOR encoding of one map containing the application's content object and `$type`. Each record lexicon declares its outer collection/type and inner schema. After authentication and frame validation, decode `payload` and reject non-normalized encoding, duplicate keys, trailing bytes, a non-map root, or an incorrect content `$type`; validate the inner schema before rendering or indexing.
 
 The outer `$type` must match the collection. Application semantics belong inside the encrypted content; additional outer fields need separate authentication before influencing trusted presentation. Applications must declare finite ciphertext-size, nesting-depth, and collection-size limits and enforce them before allocation and during bounded decoding, including for authenticated content.
 
 ```typescript
+const content = { $type: "app.example.message#content", text: "Hello!" };
+const plaintext = CBOR([CBOR(content), new Uint8Array(0)]);
+// Encrypt plaintext with the record associated data below.
 {
   $type: "app.example.message",
   envelope: {
-    $type: "com.example.envelope",
+    $type: "com.example.peep.envelope",
     format: 1,
     keyId: "71329bda9cf34bf7a8f68f475e166981",
     nonce: Uint8(...),
-    ciphertext: /* encrypted blob that contains: */ {
-      $type: "app.example.message#content",
-      text: "Hello!"
-    },
+    ciphertext: Uint8(...),
     blobs: []
   }
 }
 ```
 
-Blob references must appear in the envelope for PDS retention, even when also included in plaintext. Record associated data is:
+Blob references must appear in the envelope for PDS retention, even when also included in content. After authentication and schema validation, receivers check every blob reference throughout the decoded content, including nested maps/arrays, for an identical entry in the authenticated envelope `blobs` list. Compare the complete normalized CBOR reference, including CID, MIME type, and size; reject missing or mismatched entries before rendering, indexing, or using the references. Ordinary CID links are not blob references; extra envelope entries are allowed for retention. Record associated data is:
 
 ```text
 ["peep/record", 1, spaceURI, authorDID, collection, recordKey, keyId, blobs]
@@ -197,15 +209,15 @@ A malicious author PDS colluding with a key holder can forge attribution. Applic
 
 ### Encrypted blobs
 
-Encrypt the original file bytes as one envelope with `blobs: []`. Upload its normalized CBOR encoding as `application/octet-stream`. Blob associated data is:
+Frame the original file bytes as `payload`, then encrypt the frame as one envelope with `blobs: []`. Upload its normalized CBOR encoding as `application/octet-stream`. Blob associated data is:
 
 ```text
 ["peep/blob", 1, spaceURI, keyId]
 ```
 
-Omitting the blob CID and containing record location permits reuse within the same space. Following the [ATProto blob format](https://atproto.com/specs/blob), the reference uses CIDv1 with the raw codec and SHA-256 of the entire uploaded envelope; `size` counts those envelope bytes. Store the original MIME type, filename, and other metadata in the encrypted record. Record authentication binds the resulting reference. A reused blob retains its original `keyId`.
+Omitting the blob CID and containing record location permits reuse within the same space. Following the [ATProto blob format](https://atproto.com/specs/blob), the reference uses CIDv1 with the raw codec and SHA-256 of the entire uploaded envelope; `size` counts all those envelope bytes, including framing, padding, and the authentication tag. Store the original MIME type, filename, and other metadata in the encrypted record. Record authentication binds the resulting reference. A reused blob retains its original `keyId`.
 
-Verify the referenced CID and size before decoding, then apply envelope validation and authentication. Reject malformed or non-normalized CBOR and trailing bytes.
+Verify the referenced CID and size before decoding, then apply envelope validation, authentication, and frame validation. Reject malformed or non-normalized CBOR and trailing bytes. Return only the recovered `payload` as the original file.
 
 The authenticated configuration sets a positive, finite `maxEncryptedBlobBytes`, defaulting to 16 MiB (16,777,216 bytes), for the complete envelope. Configuration updates may change it; enforce any smaller transport limit. Check size before download/allocation and cap actual bytes received regardless of the server's reported size.
 

@@ -109,6 +109,8 @@ Publish supported limits and check each block before allocation. Resource exhaus
 
 ### Freshness
 
+For client decisions, "current" means the latest authenticated state known locally under the relevant ancestry and monotonic-revision rules, including all learned withdrawals and unresolved conflicts. Arrival order is not authority; missing required evidence still blocks.
+
 Approvals are reusable without expiry or fresh per-grant approval, including while approvers are offline. Enforce authenticated membership/device/approval-authority withdrawals as soon as learned; cached approvals cannot override them. Neither a host read, OOB verification, audit record, nor an empty revocation update establishes freshness. Withholding may leave stale authorization usable indefinitely, including compromised approvers issuing new approvals. No bounded propagation delay is promised; stricter profiles are [deferred](TODOs.md#todo-06).
 
 ## Recovery
@@ -147,5 +149,7 @@ Hardware backing and cross-app sharing are not assumed.
 | Windows | [CNG](https://learn.microsoft.com/en-us/windows/desktop/SecCNG/key-storage-and-retrieval) stores keys; [DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) does not by itself isolate same-user apps. |
 | Linux | [Secret Service](https://specifications.freedesktop.org/secret-service/latest-single/) leaves application access controls to implementations. |
 | Web | [WebCrypto](https://www.w3.org/TR/WebCryptoAPI/#concepts-key-storage) storage is normally origin-separated, without a common device keychain. |
+
+Browser clients trust the application origin and its code-delivery infrastructure. Replacement code served on a subsequent load can use available installation keys to decrypt and exfiltrate content without enrolling another device. Non-extractable keys do not prevent this. Device verification and grant auditing neither prevent nor guarantee detection of this compromise.
 
 Operation, storage, and pairing validation remain [TODO-12](TODOs.md#todo-12). Storage protections do not protect plaintext from malicious application code or updates.
