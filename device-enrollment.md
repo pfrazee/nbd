@@ -129,7 +129,7 @@ A surviving, locally accepted, unwithdrawn device may approve fresh same-account
 
 One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. This also handles revocation cycles that disable every device.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups loses historical plaintext. Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
 
 ## Platform notes
 

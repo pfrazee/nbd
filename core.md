@@ -6,7 +6,7 @@ Each space uses a symmetric content key per epoch. Usable keys, plaintext, cache
 
 The [space host](#trusted-host-state) determines account eligibility, configuration, administration, and epoch order. Credentials and writer discovery do not establish membership or device trust. [Signed declarations](device-enrollment.md#declarations) select devices; no enrollment registry, global enrollment chain, creator-device approval, or issuer appointment is required.
 
-Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. Availability requires an eligible key holder; [recovery](device-enrollment.md#recovery) cannot recreate lost keys.
+Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. Reading an existing epoch requires its key; [device recovery](device-enrollment.md#recovery) cannot recreate lost keys.
 
 ## Protocol conventions
 
@@ -215,7 +215,7 @@ Act when authenticated changes are learned. Exclusion requires a fresh key, auth
 
 ### Epochs
 
-The creator generates the first key; an eligible enrolled client generates each replacement. Use a fresh independent random 256-bit key after processing the trigger evidence and its restrictions. Never reuse a candidate generated/distributed under an earlier authorization context.
+The creator generates the first key; an eligible enrolled client generates each replacement. Use a fresh independent random 256-bit key after processing the inherited context and any newly known events. Never reuse a candidate generated/distributed under an earlier authorization context.
 
 The [trusted host](#trusted-host-state) orders accepted epoch metadata; a local proposal or grant cannot activate it. Epoch numbers start at 1 and increment through 2^53−1. Each has a unique random `keyId` and commitment `SHA-256(CBOR(["peep/key", 1, spaceURI, epoch, keyId, keyBytes]))`. The commitment checks agreement; it does not give the host usable key material.
 
@@ -248,14 +248,22 @@ Before sending, durably persist key bytes, proposal, context, exact request/ID, 
 
 The host atomically checks the expected predecessor, persists the outcome/metadata, and advances the active pointer. Competing requests become stale and must never activate later. Request IDs are scoped to space/proposer account; different bytes under one ID are an error. Durably retain terminal outcomes. Exact retries return the original outcome even after later rotations; fetch current active metadata separately without rolling back known state. If an uncertain request has no terminal result, resend identical bytes; cancellation does not prove nonacceptance.
 
-A stale/rejected proposal authorizes neither writes nor grants. Follow the accepted active epoch; if a trigger remains, generate a new key/ID and proposal against it. Distribute grants only after authenticated acceptance, under [Core's exchange rules](core.md). Generator authority is evaluated at activation; later withdrawal does not invalidate the historical commitment.
+A stale/rejected proposal authorizes neither writes nor grants. Follow the accepted active epoch; if a security trigger or need for [availability recovery](#availability-recovery) remains, generate a new key/ID and proposal against it. Distribute grants only after authenticated acceptance, under [Core's exchange rules](core.md). Generator authority is evaluated at activation; later withdrawal does not invalidate the historical commitment.
 
 Activation requires no grants, including self-grants, or recipient acknowledgments. Missing recipient evidence or offline recipients need not block it; eligible holders may grant later using current authorization. Devices without the key cannot read the epoch. Loss of the sole copy without a recoverable backup loses its content. Host acceptance proves neither durable key storage, delivery, nor independent device verification. Generation/order assertions are not cryptographic proof of randomness, timing, absence of leakage/hidden events, or universal exclusion.
+
+### Availability recovery
+
+Any eligible enrolled device may propose a fresh successor when it cannot obtain the active key, without holding that key or presenting a new security trigger. No proof of zero grants, recipient acknowledgment, or protocol-wide timeout is required. Applications may use local retrieval retries/backoff or offer a user-initiated recovery action.
+
+Use normal activation and grant procedures, inheriting the full rotation context and incorporating newly known events; no availability event type is needed. Recovery cannot bypass required authorization/context evidence or the verification policy for granting and accepting keys. After acceptance, distribute the successor key and resume content writes as clients obtain it. Content under the unavailable key remains unreadable unless that key is recovered.
+
+A disruptive eligible member can repeatedly activate epochs and prevent progress. The trusted host may throttle activation requests or remove the participant through existing membership controls; this recovery mechanism does not guarantee progress while disruption continues.
 
 ### Writers
 
 Use the latest authenticated active epoch known, including cached state. A trigger initiates rotation without a separate write pause; normal Spaces write authorization and immediate learned-withdrawal enforcement for grants still apply.
 
-After learning a newer active epoch, re-encrypt unpublished records, edits, and blobs with fresh nonces. Pause publication if its key is unavailable; never fall back or roll back. Recheck the known active epoch before each publication operation. In-flight old-key uploads may already be exposed despite cancellation: retain that fact, upload replacements as needed, and do not link old-key objects as though they excluded former holders.
+After learning a newer active epoch, re-encrypt unpublished records, edits, and blobs with fresh nonces. Pause content publication if its key is unavailable; [availability recovery](#availability-recovery) remains permitted. Never fall back or roll back. Recheck the known active epoch before each publication operation. In-flight old-key uploads may already be exposed despite cancellation: retain that fact, upload replacements as needed, and do not link old-key objects as though they excluded former holders.
 
 Offline reads and protected local drafts remain available. Old-key content remains readable by former key holders who obtain it, including reused blobs. There is no deadline for all writers to learn the new epoch. [Private state and restore](device-enrollment.md#recovery) preserve known epochs and pending operations.
