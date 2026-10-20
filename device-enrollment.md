@@ -31,6 +31,8 @@ Verifying an exact TOFU pin upgrades future local decisions, including valid app
 
 ## Declarations
 
+Selection is explicit authorization of an app installation for a particular space. Adding an app/device does not select it account-wide. This preserves access boundaries between applications and spaces; reused account DIDs and device keys do not provide cross-space unlinkability.
+
 A declaration is the complete device selection for one account in one space. A valid replacement removes omitted devices; an authenticated empty selection selects none. Missing/deleted records are not empty selections. Per-space removal changes neither membership nor reusable device trust, and cannot override account-wide revocation.
 
 ```typescript
@@ -50,6 +52,8 @@ Sign with `Ed25519.Sign(signerKey, CBOR(["peep/declaration", 1, declarationWitho
 Before signing, authenticate added bindings through pairing or independent verification and confirm the account, space, and every selection change, including removal of the last device. Possession alone or a PDS-supplied list is insufficient user intent. Persist the signed snapshot and authorization locally before publication.
 
 An accepted, unwithdrawn device may approve selections for its own account. Validate paths outward from a locally accepted binding, checking each signature, exact selection, and same-account scope. Preserve the root's TOFU/verified provenance and exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Apply [revocations](#device-revocations) before accepting new authority.
+
+Applications may offer one enrollment action for a user-chosen set of spaces, reusing device verification but signing a separate declaration against each space's current history. Confirm the exact keys, selected spaces, and changes together. Preserve other selections, durably track each publication, retry safely, and report incomplete updates. Reconcile concurrent changes under the normal ancestry/conflict rules; retries must not expand the authorized set of spaces or bypass withdrawals. This batches the interaction, while still requiring one declaration update per space.
 
 ## Enrollment history
 
@@ -129,7 +133,7 @@ A surviving, locally accepted, unwithdrawn device may approve fresh same-account
 
 One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. This also handles revocation cycles that disable every device.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
 
 ## Platform notes
 

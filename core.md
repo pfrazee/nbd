@@ -6,7 +6,7 @@ Each space uses a symmetric content key per epoch. Usable keys, plaintext, cache
 
 The [space host](#trusted-host-state) determines account eligibility, configuration, administration, and epoch order. Credentials and writer discovery do not establish membership or device trust. [Signed declarations](device-enrollment.md#declarations) select devices; no enrollment registry, global enrollment chain, creator-device approval, or issuer appointment is required.
 
-Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. Reading an existing epoch requires its key; [device recovery](device-enrollment.md#recovery) cannot recreate lost keys.
+Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. A grant also unlocks connected [historical keys](#backward-history-wrapping). Reading an existing epoch requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
 
 ## Protocol conventions
 
@@ -41,7 +41,7 @@ Retain these authenticated values by content reference:
 | --- | --- |
 | Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "peep-hpke-v1"`, `deviceVerification: "tofu-permitted" \| "verified-only"`, positive `maxEncryptedBlobBytes` (default 16,777,216). |
 | Membership decision | `version: 1`, `kind: "membership"`, `space`, `account`, positive per-account monotonic `revision`, `eligible: boolean`. Eligibility is the host's explicit PEEP participation decision under its management rules. |
-| Epoch metadata | `version: 1`, `space`, positive `epoch`, `keyId: RandomId`, `commitment: Digest`, `previous: CID \| null`, `context: CID`. |
+| Epoch metadata | `version: 1`, `space`, positive `epoch`, `keyId: RandomId`, `commitment: Digest`, `previous: CID \| null`, `context: CID`, `history: HistoryWrap \| null` ([backward wrapping](#backward-history-wrapping)). |
 | Activation outcome | `version: 1`, `space`, `requestId: RandomId`, `request: CID`, `status: "accepted" \| "stale" \| "rejected"`, `active: CID \| null`. An accepted outcome identifies the exact epoch accepted for that request. |
 
 Expose authenticated reads of current configuration, per-account membership, active epoch, historical values by CID, and each epoch's accepted activation request/outcome. Preserve exact history and monotonic revisions through restart/migration. Unknown history is unavailable, not reconstructed as current state. Defaults apply only to authenticated creation. Clients retain their highest known revisions: lower revisions cannot replace them, and equal revisions with different bytes are errors. A later eligible membership decision may re-admit an account without resetting device trust/history.
@@ -75,6 +75,12 @@ Before releasing a grant to a recipient or relay, verify:
 Missing or invalid required evidence blocks release. Known removals and withdrawals apply even to key holders. Credentials never authorize raw-key responses or grants to arbitrary supplied keys. New grants of old keys use these same current checks; historical reading uses [archive validation](audit.md#archived-grants).
 
 Publish each signed grant with its [evidence](audit.md#evidence) in the issuer's own space repo. The [publication procedure](audit.md#publication) governs retries and direct forwarding; the grant is its audit record.
+
+### Distribution scheduling
+
+After activation, the generator makes the first grant pass for selected devices it can authorize. Other eligible holders fill gaps after randomized backoff or a recipient request; newly selected devices use the same path. For a given epoch and recipient binding, reuse prepared grants under the [publication rules](audit.md#publication); observed grants may defer duplicate work but never establish recipient acceptance or complete coverage. The generator has no exclusive authority or mandatory delivery deadline.
+
+Recipients may request another eligible issuer even when a grant exists: its issuer may fail their local verification policy, or its evidence/ciphertext may be unusable. Applications provide a request path usable without the missing content key. Requests identify the space, epoch reference, and exact recipient binding; they are scheduling hints, never authorization. Resolve selections and apply normal grant checks independently. Bound request processing/retries; delays and partial views can still cause duplicates or gaps.
 
 ### Grant format
 
@@ -148,7 +154,7 @@ Records and blobs share this envelope:
 }
 ```
 
-Format 1 uses XChaCha20-Poly1305 with the 256-bit key identified by `keyId`. Generate a fresh cryptographically random 24-byte nonce for every encryption, including edits and re-encryption. Never reuse a nonce with the same key across records or blobs. Ciphertext includes the appended 16-byte authentication tag and is exactly 16 bytes longer than plaintext.
+Format 1 uses XChaCha20-Poly1305 with the 256-bit key identified by `keyId`. Generate a fresh cryptographically random 24-byte nonce for every encryption, including edits and re-encryption. Never reuse a nonce with the same key across records, blobs, or history wraps. Ciphertext includes the appended 16-byte authentication tag and is exactly 16 bytes longer than plaintext.
 
 Associated-data arrays below use normalized CBOR: labels are literal strings, `1` is an integer, and identifiers are strings. Use the exact authenticated `spaceURI` and its corresponding `keyId`. Distinct record/blob labels separate their cryptographic contexts.
 
@@ -219,6 +225,27 @@ The creator generates the first key; an eligible enrolled client generates each 
 
 The [trusted host](#trusted-host-state) orders accepted epoch metadata; a local proposal or grant cannot activate it. Epoch numbers start at 1 and increment through 2^53−1. Each has a unique random `keyId` and commitment `SHA-256(CBOR(["peep/key", 1, spaceURI, epoch, keyId, keyBytes]))`. The commitment checks agreement; it does not give the host usable key material.
 
+### Backward history wrapping
+
+Epoch metadata has a required `history` field: `null` at creation, otherwise either `null` or:
+
+```typescript
+type HistoryWrap = {
+  nonce: bytes;       // Fresh random 24-byte nonce.
+  ciphertext: bytes;  // Raw 32-byte predecessor key plus 16-byte authentication tag.
+};
+```
+
+When the generator holds an accepted key for `previous`, include its wrap before activation. Otherwise use `null`; missing history never blocks availability recovery. Encrypt that predecessor key with the new epoch key using [XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction). Associated data is `CBOR(["peep/history", 1, H])`, where `H` is the proposed epoch metadata without `history`. This binds the space, both epoch identities through `previous`, new key commitment, and rotation context without a reference cycle. Nonces must not repeat under the same key, including content encryption.
+
+The activation signature and authenticated epoch reference commit to the exact wrap. Once accepted, neither its bytes nor a `null` value may change. Do not later publish supplementary wraps under an existing epoch key: removed devices may still hold it. Backfill missing keys through ordinary device grants using current authorization; each such grant can unlock its own connected history.
+
+A signed grant supplies its starting key and all keys reachable through these committed wraps. First acceptance of each derived key applies the [device verification policy](#device-verification-policy) to that grant's issuer, including after policy tightening. Historical traversal needs no separate grant from each earlier generator and transfers no device-verification status. Resolve predecessor metadata by CID and authenticate it under the host rules. Require the same space, the immediately preceding epoch number, exact fields/lengths, successful AEAD authentication, exactly 32 decrypted bytes, and a matching predecessor commitment before using each key. Preserve the starting grant and traversal evidence.
+
+Traverse lazily with cached results and finite resumable byte/node/work limits. Creation ends traversal normally. A later null wrap, unavailable/invalid predecessor metadata, failed wrap authentication/commitment, or exhausted budget stops that path and is reported explicitly. Structural errors in the starting metadata fail the starting grant; traversal failures do not invalidate an otherwise accepted starting key. Request a normal grant for a missing historical epoch and continue from there. Older-key reads cannot roll back the active write epoch. The host retains exact wraps indefinitely as part of immutable epoch history; initial key acceptance need not replay it all.
+
+One starting grant replaces per-device grants along a connected chain, while reading its full history still costs one small wrap per epoch. A leaked key exposes all history reachable from it. Older keys cannot derive fresh successors, and deleting a wrap cannot undo exposure. A key is lost only when no direct copy, decryptable backup, or decryptable path from a surviving later key remains.
+
 ### Rotation context
 
 Every epoch references `{ version: 1, space, events: CID[] }`, with `events` a set. Creation is empty unless applicable restrictions are already known. Each successor includes the predecessor's entire event set plus newly addressed events. Retain event/context bytes in host epoch history and grant evidence.
@@ -242,15 +269,15 @@ Track each pending event with its at-risk key. It is addressed only by an accept
 
 ### Activation
 
-Request `{ version: 1, requestId: RandomId, proposal: EpochMetadata, proposer: Binding, declaration: CID, evidence: CID, proof: bytes }`, signed over `CBOR(["peep/activate-epoch", 1, requestWithoutProof])`. [Evidence](audit.md#evidence) supplies proposer authorization and context/events. The signature binds the proposal/commitment/context and asserts eligibility, enrollment, durable key possession, and generation after processing events.
+Request `{ version: 1, requestId: RandomId, proposal: EpochMetadata, proposer: Binding, declaration: CID, evidence: CID, proof: bytes }`, signed over `CBOR(["peep/activate-epoch", 1, requestWithoutProof])`. [Evidence](audit.md#evidence) supplies proposer authorization and context/events. The signature binds the proposal/commitment/context/history and asserts eligibility, enrollment, durable key possession, and generation after processing events.
 
-Before sending, durably persist key bytes, proposal, context, exact request/ID, and local status. `proposal.previous` names the expected active epoch, or `null` at creation. The host authenticates the requesting account, verifies signature/presented declaration binding and eligibility, and rejects malformed commitments, repeated key IDs, incorrect context inheritance, or incorrect/overflowed epoch numbers.
+Before sending, durably persist key bytes, proposal, context, exact request/ID, and local status. `proposal.previous` names the expected active epoch, or `null` at creation. The host authenticates the requesting account, verifies signature/presented declaration binding and eligibility, and rejects malformed commitments/history fields, non-null history at creation, repeated key IDs, incorrect context inheritance, or incorrect/overflowed epoch numbers. The host cannot verify history ciphertext decryption; readers validate it.
 
 The host atomically checks the expected predecessor, persists the outcome/metadata, and advances the active pointer. Competing requests become stale and must never activate later. Request IDs are scoped to space/proposer account; different bytes under one ID are an error. Durably retain terminal outcomes. Exact retries return the original outcome even after later rotations; fetch current active metadata separately without rolling back known state. If an uncertain request has no terminal result, resend identical bytes; cancellation does not prove nonacceptance.
 
 A stale/rejected proposal authorizes neither writes nor grants. Follow the accepted active epoch; if a security trigger or need for [availability recovery](#availability-recovery) remains, generate a new key/ID and proposal against it. Distribute grants only after authenticated acceptance, under [Core's exchange rules](core.md). Generator authority is evaluated at activation; later withdrawal does not invalidate the historical commitment.
 
-Activation requires no grants, including self-grants, or recipient acknowledgments. Missing recipient evidence or offline recipients need not block it; eligible holders may grant later using current authorization. Devices without the key cannot read the epoch. Loss of the sole copy without a recoverable backup loses its content. Host acceptance proves neither durable key storage, delivery, nor independent device verification. Generation/order assertions are not cryptographic proof of randomness, timing, absence of leakage/hidden events, or universal exclusion.
+Activation requires no grants, including self-grants, or recipient acknowledgments. Missing recipient evidence or offline recipients need not block it; eligible holders may grant later using current authorization. Devices without the key cannot read the epoch. Loss of all recoverable copies, including backups and later history wraps, loses its content. Host acceptance proves neither durable key storage, delivery, nor independent device verification. Generation/order assertions are not cryptographic proof of randomness, timing, absence of leakage/hidden events, or universal exclusion.
 
 ### Availability recovery
 
@@ -258,7 +285,11 @@ Any eligible enrolled device may propose a fresh successor when it cannot obtain
 
 Use normal activation and grant procedures, inheriting the full rotation context and incorporating newly known events; no availability event type is needed. Recovery cannot bypass required authorization/context evidence or the verification policy for granting and accepting keys. After acceptance, distribute the successor key and resume content writes as clients obtain it. Content under the unavailable key remains unreadable unless that key is recovered.
 
-A disruptive eligible member can repeatedly activate epochs and prevent progress. The trusted host may throttle activation requests or remove the participant through existing membership controls; this recovery mechanism does not guarantee progress while disruption continues.
+### Abuse controls
+
+The host applies configurable activation-request budgets per authenticated account, with bounded queues/work; additional device IDs do not reset the account budget. Preserve idempotent results and terminal outcomes under throttling. Hosts and clients bound compromise-report processing, deduplicate identical reports, and combine applicable known events into one proposal where possible. Coalescing must not postpone enforcing learned withdrawals or discard unresolved events.
+
+Signed reports establish who asserted compromise, not proof of a leak; availability recovery requires no security trigger. The protocol imposes no minimum interval between accepted epochs. Allow existing administrators to adjust limits for urgent rotation or remove abusers; expose throttling rather than claiming a request succeeded. Repeated disruption can still prevent progress; limits may delay recovery and provide no unconditional availability guarantee.
 
 ### Writers
 
