@@ -1,7 +1,6 @@
-<!-- BEGIN REVIEW S3: Consolidate authorization and lifecycle explanations; retain cryptographic formats and validation rules -->
 # PEEP: Core
 
-Status: Discussion draft · October 19, 2026
+Status: Discussion draft · October 20, 2026
 
 ## Scope
 
@@ -9,7 +8,7 @@ PEEP keeps usable content keys and plaintext on user app installations. Servers 
 
 Each space uses a symmetric content key per epoch. Grants can include retained historical keys; revocation cannot withdraw keys already disclosed. PEEP provides neither forward secrecy, post-compromise security, nor metadata hiding. Endpoints, their software and updates, and authorized recipients remain trusted.
 
-[Device Enrollment](device-enrollment.md) defines recipient selection and its trust requirements. Enrollment authentication and bootstrap remain unresolved, so this is not yet a complete interoperable protocol.
+[Device Enrollment](device-enrollment.md) defines TOFU or independently verified recipient bindings and mandatory grant auditing. Prevention of PDS substitution depends on independent verification; detection depends on evidence reaching the affected client. Approval, bootstrap, and audit formats remain unresolved.
 
 ## Configuration and authorization
 
@@ -22,11 +21,13 @@ Standard Spaces membership determines account eligibility; each participant's de
 Before exposing a grant to any recipient or relay, the issuer must verify:
 
 1. The account's eligibility to participate.
-2. The user's authenticated selection of the exact recipient keys for this space.
+2. The declaration's exact recipient keys for this space, required signatures, and continuity against the issuer's accepted account-to-key binding, recording whether that binding is TOFU or independently verified.
 3. Its own authority to issue the requested current or historical key.
 4. Compliance with the [grant freshness policy](device-enrollment.md#grant-freshness), including known withdrawals.
 
-Missing or invalid evidence blocks release. A space credential alone never authorizes a raw-key response or a grant to an arbitrary supplied key. Device selection does not implicitly confer approval, issuance, or administrative powers.
+Missing or invalid required evidence blocks release. Independent verification is optional where policy permits TOFU; failed signatures or conflicting pins cannot be treated as first use. A space credential alone never authorizes a raw-key response or a grant to an arbitrary supplied key. Device selection does not implicitly confer approval, issuance, or administrative powers.
+
+Every grant also requires retained, device-signed evidence published in the issuer's own in-space repo under the [audit requirements](device-enrollment.md#detecting-inconsistent-views). Auditing records the issuance decision; it does not turn a TOFU binding into verified consent.
 
 ## Grant creation
 
@@ -73,7 +74,7 @@ proof = Ed25519.Sign(issuerPrivateKey,
   CBOR(["peep/grant-signature", 1, grantWithoutProof]))
 ```
 
-Before opening a grant, the recipient validates its fields, types, lengths, profile, space, epoch, and key ID; verifies the referenced declaration and exact recipient binding; checks the [authorization evidence](#authorization-before-grant-release); and verifies the issuer signature. A CID authenticates bytes, not consent or freshness. The opened plaintext must be exactly 32 bytes and match the authenticated [epoch commitment](#revocation-and-rotation).
+Before opening a grant, the recipient validates its fields, types, lengths, profile, space, epoch, and key ID; verifies the referenced declaration and exact recipient binding; checks [membership, selection approval, and issuer-authority evidence](#authorization-before-grant-release) under the applicable trust and freshness policies; and verifies the issuer signature. A CID authenticates bytes, not consent or freshness. The opened plaintext must be exactly 32 bytes and match the authenticated [epoch commitment](#revocation-and-rotation).
 
 HPKE Base mode does not authenticate the sender, so the issuer signature is mandatory. Do not fall back to another suite after verification failure; profile changes require authenticated configuration updates. Interoperability vectors and independent validation remain [TODO-10](TODOs.md#todo-10).
 
@@ -81,9 +82,11 @@ HPKE Base mode does not authenticate the sender, so the issuer signature is mand
 
 Grants may be exchanged directly or stored on permissioned servers. Retrieval uses normal Spaces credential and DPoP checks and returns an already encrypted grant.
 
-Required verification evidence must be accessible before opening the grant, without the content key being granted. It may still be permissioned. Evidence packaging remains [TODO-05](TODOs.md#todo-05).
+Required verification evidence must be accessible before opening the grant, without the content key being granted. Grant evidence must also be available for [auditing through the issuer's repo](device-enrollment.md#detecting-inconsistent-views), even when delivery is direct. It may remain permissioned. Evidence packaging remains [TODO-05](TODOs.md#todo-05).
 
 A PDS holding only a credential and encrypted grant cannot unwrap it. Once exposed to a recipient or relay, a grant cannot reliably be withdrawn by deleting its record. Archived grants do not establish current enrollment.
+
+Acceptance rules for archived grants remain [TODO-05](TODOs.md#todo-05), separate from checks before issuing a new grant.
 
 ## Encryption envelope
 
@@ -110,7 +113,7 @@ Only the shown envelope fields are permitted; `nonce` and `ciphertext` are CBOR 
 
 Plaintext is one normalized ATProto CBOR map containing the application's content object and `$type`. Each record lexicon declares its outer collection/type and inner schema. After authentication, reject non-normalized encoding, duplicate keys, trailing bytes, a non-map root, or an incorrect content `$type`; validate the inner schema before rendering or indexing.
 
-The outer `$type` must match the collection. Application semantics belong inside the encrypted content; additional outer fields need separate authentication before influencing trusted presentation. Enforce finite ciphertext-size, nesting-depth, and collection-size limits before allocation and during bounded decoding, including for authenticated content.
+The outer `$type` must match the collection. Application semantics belong inside the encrypted content; additional outer fields need separate authentication before influencing trusted presentation. Applications must declare finite ciphertext-size, nesting-depth, and collection-size limits and enforce them before allocation and during bounded decoding, including for authenticated content.
 
 ```typescript
 {
@@ -171,7 +174,7 @@ Offline reads and protected local drafts remain possible. Publication while stal
 
 ### Recovery and succession
 
-Recovery must authenticate a replacement binding before new grants. PDS account recovery alone is insufficient. Server backups must remain encrypted so the server cannot decrypt them or reset their protection.
+Recovery must establish a replacement binding under the approval/recovery policy before new grants, preserving its trust status. PDS account recovery alone cannot establish verified trust or silently reset an existing pin. Server backups must remain encrypted so the server cannot decrypt them or reset their protection.
 
 Device authority, content-key recovery, and administration are separate: authorization cannot reconstruct lost keys, and key possession grants no administrative powers. Without a surviving key copy or decryptable backup, historical plaintext is lost. Recovery and succession policy remain [TODO-08](TODOs.md#todo-08).
 
@@ -184,4 +187,3 @@ Device authority, content-key recovery, and administration are separate: authori
 - [Libsodium XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction).
 
 PEEP's configuration, grant, and storage formats are proposed extensions, not standardized Spaces features.
-<!-- END REVIEW S3 -->

@@ -1,4 +1,3 @@
-<!-- BEGIN REVIEW S3: Centralize enrollment requirements and link shared grant, rotation, and recovery rules -->
 # PEEP: Device Enrollment
 
 Status: Discussion draft
@@ -6,9 +5,9 @@ Status: Discussion draft
 1. Users publish device public keys publicly.
 2. Standard Spaces membership determines participating accounts.
 3. Each participant publishes an in-space declaration selecting their exact device keys.
-4. Key issuers authenticate those selections before granting keys.
+4. Key issuers use those declarations to select grant recipients and publish device-signed issuance evidence for auditing.
 
-Declarations are the enrollment state. This model requires neither a separate enrollment registry service, a global chain, nor creator approval for every device addition. Selection authentication and first-device bootstrap remain open; candidate mechanisms below are not settled requirements.
+Declarations are the enrollment state. This model requires neither a separate enrollment registry service, a global chain, nor creator approval for every device addition. Independent key verification is optional; signature validation, exact-key matching, continuity checks, and grant auditing are required. Approval, bootstrap, and audit formats remain open.
 
 ## Device keys
 
@@ -25,7 +24,7 @@ Each app installation generates Ed25519 signing and X25519 recipient-encryption 
 }
 ```
 
-Both public keys use the profile's 32-byte encodings. The publication is reusable across spaces and contains no membership or per-space selection. Replacing either key requires a new authenticated selection; a mutable record URL cannot redirect an existing approval.
+Both public keys use the profile's 32-byte encodings. The publication is reusable across spaces and contains no membership or per-space selection. Replacing either key requires a new selection accepted under the enrollment trust policy; a mutable record URL cannot redirect an existing approval.
 
 ### Storage & its implications
 
@@ -52,27 +51,38 @@ Declaration encoding, replacement, withdrawal, and concurrent updates remain [TO
 
 ### Preventing PDS substitution
 
-A PDS could show the user their original declaration and an issuer a forged one. The issuer must authenticate the selection before releasing a key; the user inspecting their own view does not prevent disclosure.
+A PDS could show the user their original declaration and an issuer a forged one. Inspecting one's own declaration cannot prevent that disclosure. Issuers support two trust modes:
 
-One candidate is a trusted-device approval covering the protocol purpose/version, exact space, account, and complete selected key bindings. The client could attach it when publishing, allowing verification while offline. For this to work:
+- **Independently verified:** bind the intended account to exact keys through out-of-band (OOB) verification or an already verified trust path, then validate the selected recipients against that binding.
+- **TOFU:** accept and pin an initial account-to-key binding without independent verification. This permits substitution at first acceptance; later continuity checks do not repair a compromised initial binding.
 
-- The issuer must trust the approving key through evidence independent of the declaration being verified.
-- The client must authenticate the intended keys, such as through pairing, rather than blindly signing a PDS-supplied list.
-- The issuer must validate approval and encrypt only to the exact authorized recipient key.
+Optional verification concerns the account-to-key binding, not cryptographic validation. Neither mode permits skipping required signatures, exact-key matching, or continuity checks. A new binding must follow the approval or recovery policy rather than silently replacing a pin.
 
-With an authenticated, uncompromised approver, this prevents a PDS from introducing a recipient the approver never selected. It does not prove that a previously approved selection or signer remains authorized. The mechanism and signing rules remain [TODO-01](TODOs.md#todo-01).
+One approval candidate is an accepted device signing the protocol purpose/version, exact space, account, and complete selected key bindings. It could attach the approval when publishing for offline verification. The approving client must authenticate the intended keys, such as through pairing, rather than blindly sign a PDS-supplied list. Issuers validate the approval against their accepted binding and encrypt only to the exact selected key. The approval mechanism remains [TODO-01](TODOs.md#todo-01).
+
+An independently verified, uncompromised binding and valid selection authorization prevent PDS substitution for grants made against them. They do not prove that a selection or signer remains authorized. Space-wide prevention requires every issuer of the same content key to enforce verified bindings: one TOFU grant can expose that key despite other issuers' verification.
 
 ### Establishing the first trusted binding
 
-Self-signatures, possession challenges, PDS login, repository publication, and witness receipts do not independently bind a key to the intended user. Bootstrap could reuse a verified binding or establish one through pairing or a trusted inviter.
+Self-signatures, possession challenges, PDS login, and repository publication do not independently bind a key to the intended user. Verification could reuse a verified binding or establish one through pairing or a trusted inviter; an account-only invitation is insufficient. The joining device also needs a trust decision for the space configuration.
 
-Every issuer needs an authenticated trust path, including new or restored issuers. Verification must bind the intended account and exact keys; the joining device must authenticate the space configuration. An account-only invitation is insufficient.
-
-TOFU permits active substitution at first acceptance. Deletion, rejoining, reinstall, or state loss must not silently reset verified trust to TOFU. Bootstrap, transferable evidence, and any TOFU policy remain [TODO-02](TODOs.md#todo-02).
+Every issuer, including new or restored installations, must record accepted bindings and distinguish TOFU from independently verified trust. Deletion, rejoining, reinstall, or state loss must not silently reset trust or downgrade verification. Bootstrap methods, transferable evidence, verification status, and trust retention remain [TODO-02](TODOs.md#todo-02).
 
 ### Detecting inconsistent views
 
-Retained evidence, client comparisons, or optional witnesses may reveal inconsistent views. They cannot undo disclosure after a grant or guarantee discovery while clients are isolated. Publication evidence proves observation, not consent; different authentic selections may be legitimate revisions or concurrent edits. Audit design remains [TODO-09](TODOs.md#todo-09).
+Auditing is part of the baseline. [Spaces applications sync each participant's repo directly from its host](https://github.com/bluesky-social/proposals/tree/main/0016-permissioned-data#spaces), providing an evidence path outside the affected user's PDS:
+
+1. Alice's PDS shows Bob a forged declaration selecting attacker-controlled keys.
+2. Bob's device signs grant evidence identifying that declaration and the exact recipient keys, and publishes it in Bob's own permissioned repo for the space.
+3. Alice syncs Bob's repo, validates the evidence, and compares it with her authorized selections. She can detect keys she never authorized even if her PDS keeps showing her the original declaration.
+
+For every grant, the issuer must retain and publish device-signed issuance evidence binding the issuer, space, epoch/key ID, recipient account/device, exact declaration and keys, and grant. The existing signed grant may serve as the receipt. Retain the full declaration, resolved public keys, and approval evidence used; hashes alone are insufficient if the source PDS withholds the bytes. Publication accompanies grant release, including directly delivered grants; ordering and failure handling remain [TODO-09](TODOs.md#todo-09).
+
+Clients must audit evidence addressed to their account against retained authorization history and alert on unauthorized keys or conflicting selections. Verify the issuer's device signature under the recorded trust policy; repository authentication alone is insufficient. Distinguish observation-only records from issuance evidence, legitimate revisions from conflicts, and stale authorized selections from keys never authorized. An issuer's signature attests to its statement; by itself it does not prove PDS misconduct or that a recipient decrypted the grant.
+
+Detection depends on an honest issuer retaining and publishing evidence, the affected client eventually obtaining it, and sufficient authorization history to recognize the mismatch. Direct sync removes the affected PDS as the sole evidence path; it does not guarantee discovery under withholding or colluding hosts, loss of read access, or indefinite isolation. Report known gaps or lost history as an incomplete audit; matching receipts do not prove all grants were observed. Detection cannot undo disclosure and has no promised deadline.
+
+Evidence must be readable without the key being granted or the possibly substituted recipient private key. It may remain permissioned; no public disclosure of space membership is required. Retention, discovery, access after removal, privacy, and the receipt format remain [TODO-09](TODOs.md#todo-09) and [TODO-05](TODOs.md#todo-05).
 
 ## Key issuance and content flow
 
@@ -86,7 +96,7 @@ Devices encrypt and decrypt locally; plaintext caches, search, previews, and exp
 
 Issuers must honor authenticated withdrawals they learn about. A PDS can replay an older selection to other issuers; hiding an approver's revocation can also enable new malicious approvals if its key is compromised.
 
-Freshness applies to membership, recipients, and approval/issuer authority. No bounded revocation delay is promised. Reusable, expiring, and fresh per-grant approvals have different availability and replay tradeoffs; choosing a policy remains [TODO-06](TODOs.md#todo-06).
+Freshness applies to membership, recipients, and approval/issuer authority in both trust modes. Neither OOB verification nor audit receipts establish freshness or a bounded revocation delay. Reusable, expiring, and fresh per-grant approvals have different availability and replay tradeoffs; choosing a policy remains [TODO-06](TODOs.md#todo-06).
 
 A nonce proves recent participation, not current knowledge or authority. A challenge to the proposed recipient alone does not authenticate user consent.
 
@@ -99,4 +109,3 @@ See Core for [content-key rotation](core.md#revocation-and-rotation) and [recove
 - [Repository](https://atproto.com/specs/repository) and [sync](https://atproto.com/specs/sync): publication evidence and its limits.
 
 Device publications, declarations, and enrollment evidence are proposed extensions.
-<!-- END REVIEW S3 -->
