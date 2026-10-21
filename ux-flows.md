@@ -75,12 +75,13 @@ Alice gets a new laptop.
 3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins, verification status, and floors move to the laptop so it does not TOFU everyone afresh. Afterwards, [trust sync](device-enrollment.md#own-device-trust-sync) keeps the devices current as Alice verifies people on either one. Provenance is preserved.
 4. **The phone grants immediately** for each space's current epoch; the laptop reads full history. The laptop accepts because it paired directly with the phone.
 5. **Partial progress:** "3 of 4 spaces enabled. Retrying Work…"
+6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, not per space, and none on the approving phone. Removing it revokes the laptop and rotates affected spaces. This catches a compromised device approving an attacker's device, which only Alice can recognise ([own-account notices](audit.md#direct-sync)).
 
 **TOFU vs verified:** no difference for Alice. For other members:
 
 - If they verified Alice's phone, the laptop is automatically *Verified via approval* and works in verified-only spaces without a new ceremony.
 - If they pinned the phone by TOFU, the laptop is trusted on that TOFU basis.
-- The spec does not require notifying other members of new devices.
+- Other members get no timeline notice for approved additions. Alice's device list shows it: "Alice · 3 devices", with *Laptop* added 2 days ago and *Verified via Alice's iPhone*. Apps may add a subtle indicator in verified-only spaces, never a gate.
 
 **No surviving device (phone lost):**
 
@@ -137,6 +138,6 @@ Delivery needs a running key holder. Applications layer three mechanisms:
 | UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flows 2, 4 | Addressed: per-device [enrollment preferences](device-enrollment.md#enrollment-preferences) reduce joining to one Join tap with no device questions. Joining itself stays explicit; auto-join rules are [deferred](TODOs.md#deferred-extensions). |
 | UX-4 | **Losing every device forces re-verification**, and content where the user held the only key copies is lost. | Flow 3 | Addressed: in TOFU spaces, members accept the new device as a surfaced [TOFU key change](device-enrollment.md#local-trust). Where verification matters, an optional [recovery kit](#recovery-kits) restores trust decisions and keys and approves the new device; without one, re-verification starts from a single screen. |
 | UX-5 | **Joining always includes full history.** "From now on" requires a new space. | Flow 2 | Open |
-| UX-6 | **Other members aren't told about device additions.** Whether to show them is an open product choice. | Flow 3 | Partly addressed: unapproved changes accepted as TOFU key changes must be shown. Approved additions remain a product choice. |
+| UX-6 | **Other members aren't told about device additions.** | Flow 3 | Addressed: the account holder's own devices [notify them](audit.md#direct-sync) of every device change they didn't approve, with removal; unapproved TOFU key changes are shown to everyone; approved additions appear passively in device lists. Users with no honest device online get no notice. |
 | UX-7 | **Sole key copy at creation.** Until a second device or backup holds epoch 1, losing the creating device loses that content. | Flow 1 | Partly addressed: a selected [recovery kit](#recovery-kits) receives epoch 1 in the first grant pass. Users without a kit, a second device, or a backup keep the risk. |
 | UX-8 | **Floors don't follow derived spaces.** Clients cannot tell spaces are related without application metadata. | Flow 4 | Open |
