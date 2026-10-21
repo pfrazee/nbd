@@ -10,6 +10,7 @@ Users publish device keys publicly and select them through signed in-space decla
 | [Device enrollment](device-enrollment.md) | Bindings, verification, declarations, [history and revocation](device-enrollment.md#enrollment-history), [recovery](device-enrollment.md#recovery), and [platform notes](device-enrollment.md#platform-notes). |
 | [Auditing](audit.md) | Evidence, publication, retention, historical validation, and sync. |
 | [Rationale](rationale.md) | Design choices and comparison with MLS, Megolm, Signal sender keys, and Keybase team keys (informative). |
+| [UX flows](ux-flows.md) | User-facing flows for space creation, membership, devices, and derived spaces, with [rough edges](ux-flows.md#rough-edges) (informative). |
 | [Remaining work](TODOs.md) | Implementation, [validation cases](TODOs.md#validation-cases), and deferred extensions. |
 
 Future work could support AppView enrollment when the backend is a trusted member.

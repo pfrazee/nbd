@@ -23,11 +23,78 @@ Each client MUST keep its own trust decisions, distinguishing direct verificatio
 
 ## Independent verification
 
-The payload is `CBOR(["peep/verify-device", 1, binding])`. A QR encodes `peep:verify:` followed by unpadded base64url of that payload. Verifiers MUST strictly decode/re-encode and compare every binding component. The safety code is its full lowercase hexadecimal SHA-256, displayed as sixteen groups of four characters; verifiers MUST compare every group. No space, handle, display name, or timestamp participates.
+Independent verification is a mutual verification session between two installations. The initiator creates a single-use secret and delivers it to the responder over an out-of-band channel; both then run a password-authenticated key exchange through an untrusted relay. A successful session authenticates both exact bindings to each other in one ceremony. No space, handle, display name, or timestamp participates.
 
-Verification UI MUST display the account DID and device and require confirmation of a QR scanned directly from the intended person's device or a complete code match over an independently authenticated channel. Delivery through the same potentially malicious PDS is insufficient. A friendlier display MUST NOT silently shorten comparison.
+### Channels
 
-Verifying an exact TOFU pin upgrades future local decisions, including valid approval paths rooted in it. Clients MUST preserve prior grants' trust decisions; the upgrade proves neither past authorization nor absence of disclosure. A mismatch records a dispute and blocks dependent grants/key acceptance until approval or independent recovery resolves it. Verification cannot revive revoked bindings or bypass [withdrawn-approver rules](#withdrawing-an-approver).
+| Channel | Secret | Delivery | `expectedResponder` |
+| --- | --- | --- | --- |
+| `qr` | 32 random bytes | QR scanned directly from the initiator's screen. | Account DID or `null`. |
+| `link` | 32 random bytes | Link sent through an application independent of both parties' PDSes. | REQUIRED. |
+| `pin` | Six uniformly random decimal digits, as ASCII bytes | Read aloud or sent through an application independent of both parties' PDSes. | REQUIRED. |
+
+QR and link payloads are `peep:verify:` followed by unpadded base64url of `CBOR(["peep/verify-invite", 1, sessionId, initiatorAccount, secret])`. Links MUST carry the payload where web servers do not receive it, such as a URL fragment. For `pin`, the responder discovers the session from an `open` message naming its account and the user enters the digits.
+
+Delivery through either party's PDS, the relay, or Spaces content is insufficient: anyone who learns the secret before the intended responder can complete the session in its place. Verification UI MUST state this for `link` and `pin`.
+
+### Session messages
+
+```typescript
+type VerifyOpen = {
+  version: 1;
+  kind: "open";
+  sessionId: string;                 // RandomId.
+  channel: "qr" | "link" | "pin";
+  initiator: Binding;
+  expectedResponder: string | null;  // Account DID; see channel table.
+  share: bytes;                      // SPAKE2 pA.
+};
+
+type VerifyRespond = {
+  version: 1;
+  kind: "respond";
+  sessionId: string;
+  responder: Binding;
+  share: bytes;                      // SPAKE2 pB.
+  confirm: bytes;                    // SPAKE2 cB.
+};
+
+type VerifyConfirm = {
+  version: 1;
+  kind: "confirm";
+  sessionId: string;
+  confirm: bytes;                    // SPAKE2 cA.
+};
+```
+
+Messages use the [shared encoding rules](core.md#encoding-and-identifiers) but are ephemeral: they are not published as records and confer no authority outside the session. The relay is untrusted; its transport mapping remains [TODO-14](TODOs.md#todo-14).
+
+### Key exchange
+
+Profile `peep-verify-v1` uses [SPAKE2](https://www.rfc-editor.org/rfc/rfc9382.html) with the edwards25519, SHA-256, HKDF-SHA256, HMAC-SHA256 ciphersuite. The initiator is party A and the responder party B, with:
+
+```text
+pw  = CBOR(["peep/verify-secret", 1, sessionId, channel, secret])
+A   = CBOR(initiator)
+B   = CBOR(responder)
+AAD = CBOR(["peep/verify-session", 1, sessionId, channel, expectedResponder])
+```
+
+`w` is derived from `pw` as RFC 9382 specifies; MHF parameters and test vectors remain [TODO-14](TODOs.md#todo-14). Confirmation MACs cover the RFC 9382 transcript, binding both exact bindings, both shares, and `AAD`. Implementations MUST apply RFC 9382's point validation and MUST NOT accept a session without verifying the peer's confirmation. Security against an active relay rests on single use: each session permits at most one online guess, and a wrong guess fails visibly.
+
+### Procedure
+
+1. **V1 — Open.** The initiator generates `sessionId` and the secret from a cryptographically secure source, durably records the session as open with a local expiry, sends `open`, and displays or exports the channel payload. `pin` sessions MUST expire within 15 minutes; other sessions SHOULD expire within 24 hours.
+2. **V2 — Respond.** The responder obtains the secret out of band, fetches `open`, and checks that `expectedResponder` is `null` or its own account. It durably records its single attempt for `sessionId` before computing the exchange and sending `respond`. A responder MUST NOT make a second attempt for the same session.
+3. **V3 — Consume.** The initiator discards a `respond` whose responder account does not equal a non-null `expectedResponder`. Otherwise it durably marks the session consumed before verifying `confirm`; the first such `respond` consumes the session whatever the outcome. Expired or consumed sessions accept nothing.
+4. **V4 — Confirm.** If `cB` verifies, the initiator sends `confirm`. The responder verifies `cA`. Either failure ends the session for both parties.
+5. **V5 — Record.** On success, each party records direct verification of the other's exact binding with the channel used. Verification UI MUST display the peer's account DID and device and require the user to confirm it is the intended person, especially for `qr` sessions without `expectedResponder`.
+
+A failed, expired, or consumed session MUST NOT change pins, trust, or disputes; typing errors and interference are indistinguishable. Clients MUST NOT retry a session automatically, SHOULD present a new session as the remedy, and SHOULD recommend `qr` after repeated failures with the same account.
+
+### Effects
+
+Verifying an exact TOFU pin upgrades future local decisions, including valid approval paths rooted in it. Clients MUST preserve prior grants' trust decisions; the upgrade proves neither past authorization nor absence of disclosure. A successful session verifying keys that differ from an existing pin for the same account and device ID records a dispute and blocks dependent grants/key acceptance until approval or independent recovery resolves it. Verification cannot revive revoked bindings or bypass [withdrawn-approver rules](#withdrawing-an-approver).
 
 ## Declarations
 
@@ -162,7 +229,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; per-space verification floors and recorded effective-policy decisions; TOFU/direct/approval-derived verification and disputes; private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; per-space verification floors and recorded effective-policy decisions; TOFU/direct/approval-derived verification, verification channels, and disputes; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust). Known missing floor state MUST NOT silently default to TOFU: recover the setting or obtain an explicit local user choice before permitting TOFU.
 
