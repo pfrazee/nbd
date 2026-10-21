@@ -12,7 +12,7 @@ Allocate production namespaces and implement concrete Lexicon/XRPC mappings for 
 <a id="todo-08"></a>
 ### 08: Recovery and backup
 
-Implement and validate the application's [protected backup/pairing container](device-enrollment.md#backup-and-transfer), including ownership, encryption/KDF, atomic import, corruption, rollback limits, and recoverability.
+Implement and validate optional [recovery bindings](device-enrollment.md#recovery-bindings) and the application's [protected backup/pairing container](device-enrollment.md#backup-and-transfer), including ownership, encryption/KDF, atomic import, corruption, rollback limits, and recoverability.
 
 <a id="todo-09"></a>
 ### 09: Publication and sync
@@ -37,7 +37,7 @@ Map [verification session](device-enrollment.md#independent-verification) messag
 <a id="todo-15"></a>
 ### 15: Background issuance and trust sync
 
-Map [own-device trust sync](device-enrollment.md#own-device-trust-sync) messages to a confidential transport under [TODO-03](#todo-03) and publish vectors. Validate background processing of [key requests](core.md#distribution-scheduling) and push wake-up on each [platform](#todo-12), including iOS notification extensions, key availability while locked, and member prompts when no grant arrives.
+Map [own-device trust sync](device-enrollment.md#own-device-trust-sync) messages to a confidential transport under [TODO-03](#todo-03) that retains the latest snapshot per source for offline [recovery bindings](device-enrollment.md#recovery-bindings), and publish vectors. Validate background processing of [key requests](core.md#distribution-scheduling) and push wake-up on each [platform](#todo-12), including iOS notification extensions, key availability while locked, and member prompts when no grant arrives.
 
 ## Specified baselines
 
@@ -54,7 +54,7 @@ Map [own-device trust sync](device-enrollment.md#own-device-trust-sync) messages
 
 - **02:** Cross-user verification attestations. Verifying parties that cannot run a session, such as published fingerprints for unattended devices.
 - **06:** Expiring approval needs reliable clocks and renewal by approvers that stop renewing withdrawn selections. Per-grant approval needs an online trusted approver, issuer nonce, exact selection/epoch, deadline, and replay protection. A fresh response alone proves neither current authority nor consent; any delay bound must state its assumptions.
-- **08:** Dedicated recovery-key authority and cross-application backup portability.
+- **08:** Cross-application backup portability.
 
 <a id="todo-13"></a>
 ### 13: Authenticated streaming
@@ -101,6 +101,7 @@ Each row requires implementation evidence; prose/link checks do not satisfy it. 
 | Publication retries | Durable bytes/identity before release, evidence-first upload, crashes before/after publication/ack, identical retries give one record. Changed bytes are new issuance. Recheck both parties/policy/context/withdrawals/conflicts/evidence on retries/direct delivery, even after acknowledgment. Missing acknowledgment leaves exposure uncertain and forbids direct forwarding; stopped retries preserve published audit records. |
 | Auditing | TOFU substitution, at first contact or through a TOFU key change, detected promptly through honest issuer repos and retained own history despite source withholding; alarms for grants to unselected own bindings and for unaccepted declarations/device records in the local account's repos, including when the account's PDS hides them from its own reads. Forged audit signatures, stale formerly authorized versus never-authorized keys, legitimate revisions, suppression/collusion, unknown history, observations versus grants. Signature attributes statement, not PDS misconduct or decryption. Review metadata and transferable-signature privacy. |
 | Retention and sync | Indefinite grants, exact evidence, declarations including superseded snapshots/branches/resolutions; preserve through migration/rotation/revocation/membership/restore. Host discovery plus retained participants, former repos while authorized, audit before key delivery, interrupted checkpoints/gaps, expiry/deletion/unavailable history. Offline catch-up, retained local auditing after removal without promised further access; no all-grants-seen claim. Background gaps neither bypass grant checks nor block unrelated work. |
+| Recovery bindings | Optional: no operation requires one, and suggestions appear only with verified bindings, `verified` recipient trust, or verified-only membership. Derivation vectors for device ID and independent Ed25519/X25519 keys; code never retained or backed up. Anchor signed by the recovery key and published with the device record; peers gain no authority from it. Selected and granted like any device, including the generator's first pass. Recovery rejects missing/invalid anchors, accepts own bindings only via approval paths from the anchor, applies only snapshots from accepted sources, verifies grant issuers with restored trust, and never falls back to TOFU in verified-only spaces. Approves a fresh binding that peers with verified provenance accept without re-verification; revoking a used or exposed binding triggers rotation. |
 | Recovery/transfer | Surviving approval or independent helper verification of fresh keys, one eligible holder can restore retained epochs without transferring trust to others. Clients holding verified bindings reject PDS-only replacement; TOFU-permitted clients may accept it only as a recorded, surfaced TOFU key change. Reject revived withdrawals or re-invitation history reset. Authenticated/confidential keys plus pins/provenance/order/withdrawals/conflicts and per-space floors; older imports preserve newer known state. Floors survive restart, leaving/rejoining, and host migration. Merge floors using the stricter value; only explicit local user action disables one. Known missing floor state requires recovery or an explicit choice before TOFU; undetectable backup rollback retains its stated limits. Missing/incomparable history cannot invent prior acceptance; key-only restore cannot recreate trust; all copies and wrapping paths lost means plaintext lost. |
 
 ### Procedure and transition coverage

@@ -18,7 +18,7 @@ Informative. This document sketches user-facing flows implied by [Core](core.md)
 
 **TOFU vs verified:** nearly identical. Only the creator's account is involved and its devices trust each other through pairing; policy matters once someone else joins.
 
-**Suggestion:** until another device or a backup holds the epoch 1 key, this device has the only copy. A quiet "Only on this device" indicator would be honest.
+**Suggestion:** until another device or a backup holds the epoch 1 key, this device has the only copy. A quiet "Only on this device" indicator would be honest. If the user already has a [recovery kit](#recovery-kits) selected in the space, the first grant pass covers it and the indicator never appears.
 
 ## 2. Adding a member
 
@@ -84,9 +84,10 @@ Alice gets a new laptop.
 
 **No surviving device (phone lost):**
 
-- **Restore from backup** (same keys and state) or **start fresh**.
+- **Restore from backup** (same keys and state), **use a recovery kit**, or **start fresh**.
+- **With a [recovery kit](#recovery-kits):** "Enter your recovery code." The new phone restores Alice's verifications of others, recovers every key granted to the kit, and approves itself. Members who verified Alice accept the new phone as *Verified via approval*; nobody re-verifies. Finish with "Your old devices have been removed" and "Save a new recovery kit?"
 - **Starting fresh in TOFU spaces is cheap.** Members who only pinned Alice by TOFU accept her new device as a key change and see "Alice's devices changed." Alice's new device pins everyone again. She loses no protection she had at first contact.
-- **Starting fresh is expensive where Alice is verified.** Anyone who verified Alice, and everyone in verified-only spaces, must [re-verify](device-enrollment.md#replacement) her with one verification session each. Copy: "Alice has a new device that isn't linked to her old ones. Verify to share with her."
+- **Starting fresh is expensive where Alice is verified.** Anyone who verified Alice, and everyone in verified-only spaces, must [re-verify](device-enrollment.md#replacement) her with one verification session each. Copy: "Alice has a new device that isn't linked to her old ones. Verify to share with her." Alice's new device lists those contacts and opens one verification session per contact from a single screen.
 - **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
 - Copy must be honest: "Resetting your account password can't restore encrypted access."
 
@@ -110,6 +111,15 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 **Live mirroring** (true sub-spaces) would be host-side; PEEP consumes the resulting membership decisions. A parent removal would remove the account from every child, each of which must [rotate](core.md#triggers).
 
+## Recovery kits
+
+A [recovery binding](device-enrollment.md#recovery-bindings) is optional and is suggested only where losing every device would be costly. Users in TOFU-only situations never see a prompt: a [TOFU key change](device-enrollment.md#local-trust) already makes starting fresh cheap.
+
+- **When to suggest:** after the user's first successful verification, when joining or creating a verified-only space, or on learning someone verified them. Copy: "You've verified people. Save a recovery kit so you won't need to verify them again if you lose all your devices." Dismissing it is permanent until the situation changes. Settings always offers it.
+- **Setup:** show the code once, ask the user to write it down or save it in a password manager, and confirm a few words. Then "Use the kit in: ☑ Work (verified) ☑ Family (verified) ☐ Book club", defaulting to verified-only spaces. The app keeps no copy of the code.
+- **Other members** see one more device for the user, approved by an existing one. It needs no attention.
+- **If the code may be exposed:** "Replace recovery kit" revokes the old one and creates a new one, which rotates the affected spaces.
+
 ## Keeping spaces available
 
 Delivery needs a running key holder. Applications layer three mechanisms:
@@ -125,8 +135,8 @@ Delivery needs a running key holder. Applications layer three mechanisms:
 | UX-1 | **Locked until another member is online.** No server can hand out keys; a new member or device waits for an eligible holder. | Flows 2, 4 | Mitigated: [background issuing](core.md#distribution-scheduling) on push, visible member prompts as fallback, and always-on devices made viable in verified-only spaces by [own-device trust sync](device-enrollment.md#own-device-trust-sync). A space whose holders are all offline and unreachable by push still waits. |
 | UX-2 | **Verified-only verification is mutual and heavy.** Each direction needed its own check, both with the same member, and remote checks meant comparing 64 characters. | Flow 2 | Addressed: single-use mutual [verification sessions](device-enrollment.md#independent-verification) over QR, link, or 6-digit PIN; the static code is removed. |
 | UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flow 4 | Open |
-| UX-4 | **Losing every device forces re-verification**, and content where the user held the only key copies is lost. | Flow 3 | Partly addressed: in TOFU spaces, members accept the new device as a surfaced [TOFU key change](device-enrollment.md#local-trust). Re-verification remains for verified relationships and verified-only spaces, and sole-copy key loss remains. |
+| UX-4 | **Losing every device forces re-verification**, and content where the user held the only key copies is lost. | Flow 3 | Addressed: in TOFU spaces, members accept the new device as a surfaced [TOFU key change](device-enrollment.md#local-trust). Where verification matters, an optional [recovery kit](#recovery-kits) restores trust decisions and keys and approves the new device; without one, re-verification starts from a single screen. |
 | UX-5 | **Joining always includes full history.** "From now on" requires a new space. | Flow 2 | Open |
 | UX-6 | **Other members aren't told about device additions.** Whether to show them is an open product choice. | Flow 3 | Partly addressed: unapproved changes accepted as TOFU key changes must be shown. Approved additions remain a product choice. |
-| UX-7 | **Sole key copy at creation.** Until a second device or backup holds epoch 1, losing the creating device loses that content. | Flow 1 | Open |
+| UX-7 | **Sole key copy at creation.** Until a second device or backup holds epoch 1, losing the creating device loses that content. | Flow 1 | Partly addressed: a selected [recovery kit](#recovery-kits) receives epoch 1 in the first grant pass. Users without a kit, a second device, or a backup keep the risk. |
 | UX-8 | **Floors don't follow derived spaces.** Clients cannot tell spaces are related without application metadata. | Flow 4 | Open |
