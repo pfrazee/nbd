@@ -8,7 +8,7 @@ The [space host](#trusted-host-state) determines account eligibility, configurat
 
 Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. A grant also unlocks connected [historical keys](#backward-history-wrapping). Reading an existing epoch requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
 
-PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or misreport the [verification policy](#device-verification-policy) to clients that have not yet observed it. The policy is fixed at creation, and clients reject later changes. Admission alone cannot bypass the effective policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
+PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or misreport the [verification policy](#device-verification-policy) to clients that have not yet observed it. The policy is fixed at creation, and clients reject later changes. Admission alone cannot bypass the effective policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); In TOFU-permitted exchanges, a malicious PDS can substitute keys at first contact or later through a [TOFU key change](device-enrollment.md#local-trust); [auditing](audit.md#direct-sync) and change notices are the only defense and detect rather than prevent substitution.
 
 ## Protocol conventions
 
@@ -68,13 +68,13 @@ Clients MUST authenticate values by direct host retrieval or a retained local ob
 
 The host MUST expose change notifications and resumable reconciliation for membership, configuration, and epochs. Notifications are fetch hints; cached validated state follows [freshness rules](device-enrollment.md#freshness). Unsupported deployments MUST report the missing capabilities. [Rotation](#rotation) defines epoch/activation semantics.
 
-When learned, clients MUST visibly surface authenticated member additions, removals, and readmissions, identifying the affected account. Membership UI MUST explain that admission permits access to retained history. Notices add no approval gate and need not precede grants; learning about a change has no deadline.
+When learned, clients MUST visibly surface authenticated member additions, removals, and readmissions, and accepted [TOFU key changes](device-enrollment.md#local-trust), identifying the affected account. Membership UI MUST explain that admission permits access to retained history. Notices add no approval gate and need not precede grants; learning about a change has no deadline.
 
 ## Device verification policy
 
 The creating configuration selects the host policy, and it is immutable for the life of the space:
 
-- **TOFU permitted (default):** clients MAY use TOFU or independently verified bindings.
+- **TOFU permitted (default):** clients MAY use TOFU, including [TOFU key changes](device-enrollment.md#local-trust), or verified bindings. Defense against a malicious PDS is detection through [auditing](audit.md#direct-sync) and change notices, except between parties holding verified bindings.
 - **Verified-only:** a client MUST independently verify the other device's exact binding, or validate same-account approval rooted in its own verified binding, before granting that device a key or accepting a key from it.
 
 The host MUST reject configuration updates that change `deviceVerification`. Clients MUST retain the first authenticated policy observed for each exact space URI and reject a configuration with a different value as `INVALID`, retaining the last valid configuration. Clients MUST surface such a configuration as a host integrity alarm, not as a policy change. Changing policy requires a new space. This removes policy relaxation as a way for a malicious PDS, including an administrator's, to enable TOFU substitution in a verified-only space.

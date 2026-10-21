@@ -42,7 +42,8 @@ Admin Alice adds Bob.
 
 5. Carol's device sees Bob's declaration, pins his device on first sight, and issues a grant. Bob's device pins Carol's device on first sight and accepts. One grant unlocks all reachable history.
 6. Each shows the other as *Unverified* with an optional, non-blocking Verify action. Verifying later upgrades future decisions only.
-7. **Alarm case:** if Bob's keys later change without approval from an already-trusted Bob device, clients block: "Bob's device changed. Verify to continue." Pins are never silently replaced.
+7. **Key changes:** if Bob's keys later change without approval from a Bob device already pinned, clients that only pinned him by TOFU accept the change as a [TOFU key change](device-enrollment.md#local-trust) and show a notice: "Bob's devices changed." Nothing blocks. Clients that verified Bob block until he is re-verified: "Bob's device changed. Verify to continue." Pins are never silently replaced.
+8. **What protects TOFU spaces:** detection, not prevention. Bob's client alarms if it finds grants to a device he never selected, or records in his repo for devices he doesn't recognise ([auditing](audit.md#direct-sync)). Members see every unapproved device change. Copy for space info: "Devices in this space aren't verified. Changes are shown, but not blocked."
 
 **Verified-only path:**
 
@@ -84,7 +85,8 @@ Alice gets a new laptop.
 **No surviving device (phone lost):**
 
 - **Restore from backup** (same keys and state) or **start fresh**.
-- **Starting fresh is expensive, even in TOFU spaces.** Anyone who already pinned Alice must [re-verify](device-enrollment.md#replacement) with one verification session each; reinstalling is never fresh TOFU. Copy: "Alice has a new device that isn't linked to her old ones. Verify to share with her."
+- **Starting fresh in TOFU spaces is cheap.** Members who only pinned Alice by TOFU accept her new device as a key change and see "Alice's devices changed." Alice's new device pins everyone again. She loses no protection she had at first contact.
+- **Starting fresh is expensive where Alice is verified.** Anyone who verified Alice, and everyone in verified-only spaces, must [re-verify](device-enrollment.md#replacement) her with one verification session each. Copy: "Alice has a new device that isn't linked to her old ones. Verify to share with her."
 - **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
 - Copy must be honest: "Resetting your account password can't restore encrypted access."
 
@@ -123,8 +125,8 @@ Delivery needs a running key holder. Applications layer three mechanisms:
 | UX-1 | **Locked until another member is online.** No server can hand out keys; a new member or device waits for an eligible holder. | Flows 2, 4 | Mitigated: [background issuing](core.md#distribution-scheduling) on push, visible member prompts as fallback, and always-on devices made viable in verified-only spaces by [own-device trust sync](device-enrollment.md#own-device-trust-sync). A space whose holders are all offline and unreachable by push still waits. |
 | UX-2 | **Verified-only verification is mutual and heavy.** Each direction needed its own check, both with the same member, and remote checks meant comparing 64 characters. | Flow 2 | Addressed: single-use mutual [verification sessions](device-enrollment.md#independent-verification) over QR, link, or 6-digit PIN; the static code is removed. |
 | UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flow 4 | Open |
-| UX-4 | **Losing every device forces re-verification even under TOFU**, and content where the user held the only key copies is lost. | Flow 3 | Open |
+| UX-4 | **Losing every device forces re-verification**, and content where the user held the only key copies is lost. | Flow 3 | Partly addressed: in TOFU spaces, members accept the new device as a surfaced [TOFU key change](device-enrollment.md#local-trust). Re-verification remains for verified relationships and verified-only spaces, and sole-copy key loss remains. |
 | UX-5 | **Joining always includes full history.** "From now on" requires a new space. | Flow 2 | Open |
-| UX-6 | **Other members aren't told about device additions.** Whether to show them is an open product choice. | Flow 3 | Open |
+| UX-6 | **Other members aren't told about device additions.** Whether to show them is an open product choice. | Flow 3 | Partly addressed: unapproved changes accepted as TOFU key changes must be shown. Approved additions remain a product choice. |
 | UX-7 | **Sole key copy at creation.** Until a second device or backup holds epoch 1, losing the creating device loses that content. | Flow 1 | Open |
 | UX-8 | **Floors don't follow derived spaces.** Clients cannot tell spaces are related without application metadata. | Flow 4 | Open |
