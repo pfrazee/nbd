@@ -122,6 +122,12 @@ type TrustSyncPayload = {
   sequence: number;                  // Per-source monotonic.
   trust: TrustEntry[];               // Set; at most one entry per binding ID.
   floors: string[];                  // Set of exact space URIs with an enabled floor.
+  enrollment: EnrollmentPreference[]; // Set; at most one entry per deviceId.
+};
+
+type EnrollmentPreference = {
+  deviceId: string;                  // The source itself or a recovery binding it anchors.
+  preference: "automatic" | "ask" | "never";
 };
 
 type TrustSync = {
@@ -140,7 +146,7 @@ The sender seals `CBOR(TrustSyncPayload)` to the recipient's X25519 key under th
 
 ### Sending
 
-An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, or floor change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
+An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, floor, or [enrollment preference](#enrollment-preferences) change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
 
 ### Receiving
 
@@ -154,6 +160,7 @@ An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of
    - An entry whose binding differs from a local verified pin for the same account and device ID records a dispute; it MUST NOT replace the pin. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry is handled as a [TOFU key change](#local-trust) where permitted, and otherwise records a dispute.
    - Revoked bindings stay revoked.
    For each listed space, enable the local floor. Absence from `floors` MUST NOT disable a floor.
+   Record each `enrollment` entry for the source itself or a recovery binding anchored by the source, replacing that device's earlier synced preference; ignore entries for other devices.
 5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
 
 Synced decisions are retained if the source later withdraws or stops sending; a later snapshot omitting an entry does not remove it. Downgrading or clearing trust requires explicit local action, as for any pin. Sync cannot verify the local account's own new installations; those use [pairing or approval](#declarations).
@@ -183,6 +190,12 @@ Before signing, the approving installation MUST authenticate added bindings thro
 An accepted, unwithdrawn device MAY approve selections for its own account. Clients MUST validate paths outward from a locally accepted binding, checking each signature, exact selection, and same-account scope. Clients MUST preserve the root's TOFU/verified provenance and exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Clients MUST apply [revocations](#device-revocations) before accepting new authority.
 
 Applications MAY offer one enrollment action for a user-chosen set of spaces, reusing device verification but signing a separate declaration against each space's current history. A batch enrollment UI MUST confirm the exact keys, selected spaces, and changes together. Batching clients MUST preserve other selections, durably track each publication, retry safely, and report incomplete updates. Reconcile concurrent changes under the normal ancestry/conflict rules; retries MUST NOT expand the authorized set of spaces or bypass withdrawals. This batches the interaction, while still requiring one declaration update per space.
+
+### Enrollment preferences
+
+Each own installation, and each [recovery binding](#recovery-bindings), MAY carry a standing preference for spaces the user joins later: `automatic`, `ask`, or `never`. The user sets an installation's preference on that installation or while linking it, and a recovery binding's on its anchor installation; changes never alter existing selections. Preferences reach other installations through [trust sync](#own-device-trust-sync).
+
+When the user explicitly joins a space on an installation, that installation MAY satisfy the confirmation duty above for its own account's locally accepted, unwithdrawn bindings by applying their previously confirmed preferences: select `automatic` bindings, offer `ask` bindings unselected, and omit `never` bindings unless the user adds them. The join UI MUST show the resulting device set and allow changes before signing. Only the joining installation signs, producing one declaration; other installations MUST NOT sign declarations from preferences without a join action on themselves. Host admission alone is not a join action. Adding a binding not yet accepted still requires pairing or independent verification.
 
 ## Enrollment history
 
@@ -291,7 +304,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; per-space verification floors, first-observed host policies, and recorded effective-policy decisions; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; per-space verification floors, first-observed host policies, and recorded effective-policy decisions; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust). Known missing floor state MUST NOT silently default to TOFU: recover the setting or obtain an explicit local user choice before permitting TOFU.
 

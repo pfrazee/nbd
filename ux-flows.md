@@ -11,7 +11,7 @@ Informative. This document sketches user-facing flows implied by [Core](core.md)
 ## 1. Creating a new space
 
 1. **"New space" form**: name, optional members, and *Allow unverified devices* / *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space." For spaces that allow unverified devices, Advanced offers "Always require verification on this device" (the floor).
-2. **"Which of your devices can read this space?"** This device is checked and locked; other paired devices are listed and checked by default. One confirmation.
+2. **"Creating on 3 devices · Change."** The device set comes from each device's [enrollment preference](device-enrollment.md#enrollment-preferences): *Automatically* devices are included, *Ask* devices appear unchecked, *Never* devices are omitted. This device is always included. Creating the space is the confirmation.
    - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](device-enrollment.md#bindings-and-publication). It signs the initial [declaration](device-enrollment.md#declarations) with `previous: []`.
 3. **"Securing space…"**: the epoch 1 key is generated and the [activation request](core.md#client-activation-states) submitted. Posting waits for acceptance. On network loss, the draft persists and the exact request is retried; the UI should not report failure while the outcome is unknown.
 4. **Space opens.** Other devices receive grants in the background when they come online.
@@ -31,7 +31,7 @@ Admin Alice adds Bob.
 
 **Bob:**
 
-3. **Notification, then "Enable this space on this device?"**, listing his other devices too. This signs his declaration.
+3. **Notification, then "Join Book club" with "Joining on 3 devices · Change."** One tap. The device set comes from his [enrollment preferences](device-enrollment.md#enrollment-preferences), and this device signs one declaration for all of them.
 4. **Locked state: "Waiting for a member's device…"** The space name and member list (host data) are visible; content is not. His app publishes a [key request](core.md#key-requests). Bob can write drafts locally; they send when the space unlocks.
    - **Background issuing:** members' devices are woken by a push notification and grant [in the background](core.md#distribution-scheduling). On iOS, the visible "Bob joined Book club" notification is the wake-up: its notification extension issues the grant. Usually Bob unlocks within seconds without anyone opening the app.
    - **Visible prompt:** if nothing arrives within a short window, members get "Bob is waiting to join Book club. Open to share access." Opening the app grants immediately.
@@ -71,7 +71,7 @@ Alice gets a new laptop.
 **Old device available:**
 
 1. **Laptop:** install, log in, show "Link this device" with a QR code. Generating keys and publishing the device record grants nothing on its own.
-2. **Phone:** Devices → Link → scan. Then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☐ Family." Selection is per space, so this is a real choice; [batch enrollment](device-enrollment.md#declarations) MUST show exact spaces and changes. The phone signs one declaration per space.
+2. **Phone:** Devices → Link → scan. Then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☐ Family." Selection is per space, so this is a real choice; [batch enrollment](device-enrollment.md#declarations) MUST show exact spaces and changes. The phone signs one declaration per space. The same screen asks once about the future: "Include *Alice's Laptop* in spaces you join later?" (*Automatically* / *Ask each time* / *Never*). The answer becomes the laptop's [enrollment preference](device-enrollment.md#enrollment-preferences) and syncs to Alice's other devices.
 3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins, verification status, and floors move to the laptop so it does not TOFU everyone afresh. Afterwards, [trust sync](device-enrollment.md#own-device-trust-sync) keeps the devices current as Alice verifies people on either one. Provenance is preserved.
 4. **The phone grants immediately** for each space's current epoch; the laptop reads full history. The laptop accepts because it paired directly with the phone.
 5. **Partial progress:** "3 of 4 spaces enabled. Retrying Work…"
@@ -103,8 +103,8 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 | | Policy and floors: the app can copy host policy, and a derived space is how a group changes policy; local floors are private and tied to the exact space URI. |
 
 1. **"New space from Book club…"** prefills the parent's members and policy. Copy: "Members are copied; messages aren't."
-2. **Creator:** as in [flow 1](#1-creating-a-new-space). The device picker defaults to devices enabled in the parent.
-3. **Each member:** "Alice added you to *Book club – spoilers*." Each must open the space and confirm "Enable on this device (+ my other devices)." Auto-enrolling devices in future spaces is forbidden, so members stay locked until they act.
+2. **Creator:** as in [flow 1](#1-creating-a-new-space); enrollment preferences choose the devices.
+3. **Each member:** "Alice added you to *Book club – spoilers*." Each taps **Join** once; [enrollment preferences](device-enrollment.md#enrollment-preferences) choose their devices, and their other devices unlock through background issuing. Being added alone enrolls nothing, so members who never tap Join stay locked.
 4. **Key exchange is fast.** Pairs verified in the parent are already verified; even in a verified-only space, grants arrive as soon as a member's declaration lands.
 
 **Floors don't follow.** Bob's floor on the parent does not apply, and his client has no protocol-level way to know the spaces are related. If the app records the link, it could ask: "You require verification in Book club. Require it here too?"
@@ -134,7 +134,7 @@ Delivery needs a running key holder. Applications layer three mechanisms:
 | --- | --- | --- | --- |
 | UX-1 | **Locked until another member is online.** No server can hand out keys; a new member or device waits for an eligible holder. | Flows 2, 4 | Mitigated: [background issuing](core.md#distribution-scheduling) on push, visible member prompts as fallback, and always-on devices made viable in verified-only spaces by [own-device trust sync](device-enrollment.md#own-device-trust-sync). A space whose holders are all offline and unreachable by push still waits. |
 | UX-2 | **Verified-only verification is mutual and heavy.** Each direction needed its own check, both with the same member, and remote checks meant comparing 64 characters. | Flow 2 | Addressed: single-use mutual [verification sessions](device-enrollment.md#independent-verification) over QR, link, or 6-digit PIN; the static code is removed. |
-| UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flow 4 | Open |
+| UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flows 2, 4 | Addressed: per-device [enrollment preferences](device-enrollment.md#enrollment-preferences) reduce joining to one Join tap with no device questions. Joining itself stays explicit; auto-join rules are [deferred](TODOs.md#deferred-extensions). |
 | UX-4 | **Losing every device forces re-verification**, and content where the user held the only key copies is lost. | Flow 3 | Addressed: in TOFU spaces, members accept the new device as a surfaced [TOFU key change](device-enrollment.md#local-trust). Where verification matters, an optional [recovery kit](#recovery-kits) restores trust decisions and keys and approves the new device; without one, re-verification starts from a single screen. |
 | UX-5 | **Joining always includes full history.** "From now on" requires a new space. | Flow 2 | Open |
 | UX-6 | **Other members aren't told about device additions.** Whether to show them is an open product choice. | Flow 3 | Partly addressed: unapproved changes accepted as TOFU key changes must be shown. Approved additions remain a product choice. |
