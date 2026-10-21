@@ -100,7 +100,7 @@ type Revocation = {
 };
 ```
 
-Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-cycles) to validate and apply ordinary revocations and the cycle exception using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
+Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
 
 A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals/declarations relying on its authority. Deletion, stale selections, and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext; affected current keys require [rotation](core.md#triggers).
 
@@ -112,41 +112,41 @@ Clients MUST preserve bindings accepted locally before learning their approver's
 
 Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST require another accepted, unwithdrawn approver or independent verification and MUST NOT fall back to TOFU. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
-### Revocation cycles
+### Revocation processing
 
-`ObserveRevocation(value, state)` MUST process ordinary revocations in durable local observation order, then evaluate the cycle exception. Graph vertices are exact bindings and edges are signed `signer -> target` revocations. A qualifying cycle has at least two distinct bindings; self-revocation uses the ordinary rule.
+`ObserveRevocation(value, state)` MUST evaluate each candidate independently against retained local state, with R2–R4 serialized as one atomic local transition. Revocation authority does not depend on finding a cycle.
 
-1. **R1 — Candidate.** Validate encoding, account scope, both bindings, CID, and signature. Invalid candidates return `INVALID` and gain no authority. Retain valid bytes and the observation position. An unknown signer cannot establish its own trust through a revocation.
-2. **R2 — Ordinary rule.** If the signer is locally accepted and not yet revoked, accept the edge and durably withdraw its target. Preserve that accepted edge even if the signer is later withdrawn. Otherwise retain the candidate as inactive; a withdrawn signer can gain effect only through R3–R4.
-3. **R3 — Cycle eligibility.** Freeze local acceptance/withdrawal history before applying newly found cycle edges. For each complete directed cycle of valid same-account candidates, evaluate `qualifies` below. Re-evaluate retained candidates when a late edge closes a cycle. An outgoing edge is not covered merely because its signer belongs to a qualifying cycle.
-4. **R4 — Commit.** Union the edges of qualifying cycles, including overlaps, and atomically accept those edges and withdraw their members. Preserve all earlier withdrawals. Accepted candidates return `OK`. Unknown comparisons or exhausted work budgets return `INCOMPLETE` for unresolved candidates; fully validated cycles and ordinary revocations remain effective. Incomplete cycles MUST NOT authorize edges through the cycle exception; independently valid ordinary revocations still apply. Other candidates remain inactive (`BLOCKED`).
+Let `A(v)` be the retained position at which exact binding `v` was first accepted locally, and `W(v)` the position when the client first accepted a valid account-wide revocation of it. A known unwithdrawn binding has no `W(v)`; missing withdrawal history is unknown, not proof that it is unwithdrawn. Earlier receipt of an inactive candidate MUST NOT backdate withdrawal; replay MUST NOT move either position. Comparisons MUST use [private history](#private-state), including imported histories' comparability, never claimed signing times or another issuer's observations.
 
-Let `A(v)` be the retained position at which binding `v` was locally accepted. Let `W(v)` be the retained position when the client first accepted a valid account-wide revocation of `v`, or the current observation position if none is yet accepted. Earlier receipt of an inactive candidate MUST NOT backdate that withdrawal; replay MUST NOT move either position forward. Missing history makes these positions unknown; it MUST NOT create a new ordering. Comparisons use [private history](#private-state), including imported histories' comparability, never claimed signing times.
+1. **R1 — Candidate.** Validate encoding, account scope, both bindings, CID, and signature. Invalid candidates return `INVALID` and gain no authority. Retain valid bytes and their receipt position. If this exact statement was already accepted, return `OK` without changing acceptance/withdrawal positions or reauthorizing the signer.
+2. **R2 — Signer.** Require retained evidence that the signer was previously accepted locally. A signer known never to have been accepted returns `BLOCKED`; unavailable required acceptance evidence or unknown local withdrawal status returns `INCOMPLETE`. The candidate cannot establish trust in its signer or target.
+3. **R3 — Authority.** Run `eligible` below. An accepted, unwithdrawn signer may revoke any exact same-account target, including one not yet accepted. A withdrawn signer may revoke only targets accepted strictly before its own first withdrawal. A non-`OK` result leaves this candidate inactive and MUST NOT erase other accepted revocations.
+4. **R4 — Commit.** Accept the statement and withdraw its target. Set `W(target)` to this acceptance position only when the target was known unwithdrawn; otherwise preserve its prior cutoff, including an unknown position, without inventing or advancing it. Preserve every earlier accepted statement and withdrawal, even if its signer is later withdrawn; return `OK`. Re-evaluate inactive candidates when relevant trust or ordering evidence becomes available. Missing evidence or exhausted work budgets return `INCOMPLETE` for affected candidates and MUST NOT delay independently validated withdrawals.
+
+After R1–R2 succeed:
 
 ```text
-qualifies(cycle, frozen_history):
-    incomplete = false
-    for each binding u in cycle:
-        if u is known never to have been accepted: return false
-        for each binding v in cycle:
-            if A(u) or W(v) is unavailable or they cannot be compared:
-                incomplete = true
-            else if A(u) is not strictly before W(v): return false
-    if incomplete: return unknown
-    return true
+eligible(signer, target, state):
+    if signer is not withdrawn: return OK
+    if target is known never to have been accepted: return BLOCKED
+    if A(target) or W(signer) is unavailable or they cannot be compared:
+        return INCOMPLETE
+    return OK if A(target) < W(signer) else BLOCKED
 ```
 
-Clients MUST apply every qualifying cycle regardless of delivery order or members already being withdrawn. Missing acceptance history returns `INCOMPLETE` when prior acceptance is unknown, rather than establishing eligibility. Later-accepted replacements, open chains, and unrelated outgoing edges receive no exception. A late closing edge may withdraw all devices and require recovery; signatures do not establish simultaneous issuance.
+This rule includes self-revocation, mutual revocations, and open chains. A withdrawn signer retains revocation authority over targets before its cutoff indefinitely, including for statements created after withdrawal. It can therefore withdraw the entire older device set and force [recovery](#replacement). It gains no approval, declaration, grant, or other authority. Fresh bindings accepted after its withdrawal are protected from this signer on that client.
+
+For a fixed set of devices all accepted before any withdrawal, revocation delivery order does not change which valid statements take effect. This is not global convergence: clients that accept a new binding on opposite sides of a signer's locally observed withdrawal can disagree permanently about its revocation. No trusted issuance time or freshness bound is implied.
 
 ### Bounded validation
 
-Validators MUST use visited references, resumable progress, and finite byte/node/depth/work budgets; they MAY cache validated signatures. Validators MUST authenticate ancestry edges before using them and reject cross-account/space ancestry and declaration-ancestry cycles, while allowing shared ancestors. The revocation cycles above are a separate authority rule.
+Validators MUST use visited references, resumable progress, and finite byte/node/depth/work budgets; they MAY cache validated signatures. Validators MUST authenticate ancestry edges before using them and reject cross-account/space ancestry and declaration-ancestry cycles, while allowing shared ancestors.
 
-Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip edges, accept partial cycles, truncate selections/contexts, choose branches, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
+Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip required checks, truncate selections/contexts, choose branches, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
 
 ### Freshness
 
-For client decisions, "current" means the latest authenticated state known locally under the relevant ancestry and monotonic-revision rules. Clients MUST include every learned withdrawal and unresolved conflict. Arrival order is not authority; missing required evidence still blocks the affected operation.
+For client decisions, "current" means the latest authenticated state known locally under the relevant ancestry and monotonic-revision rules. Clients MUST include every learned withdrawal and unresolved conflict. Receipt alone does not establish authority; missing required evidence still blocks the affected operation.
 
 Clients MUST enforce each authenticated change as soon as learned:
 
@@ -162,25 +162,25 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; TOFU/direct/approval-derived verification and disputes; private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; per-space verification floors and recorded effective-policy decisions; TOFU/direct/approval-derived verification and disputes; private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
-Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
+Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust). Known missing floor state MUST NOT silently default to TOFU: recover the setting or obtain an explicit local user choice before permitting TOFU.
 
 ### Backup and transfer
 
 Use the application's protected backup or pairing container for keys and state together. Transfers MUST be authenticated and encrypted between the user's own trusted installations. Bind format/version, owner account, source installation/history, and the full payload; authenticate before import. Protect encryption with independent high-entropy key material that PDS login/reset cannot reveal or replace. Document key wrapping/KDF, integrity, rollback-detection limits, and atomic restore. [Platform support](#platform-notes) must be validated; a new interoperable backup or separate trust-sync protocol is not required.
 
-Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
+Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST merge per-space floors using the stricter value; imports cannot disable an enabled floor. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
 
-An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or ordering for withdrawal exceptions. A key-only restore recovers no trust/declaration/audit history; report the loss and require explicit recovery.
+An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or withdrawal cutoffs. A key-only restore recovers no verification floors or trust/declaration/audit history; report the loss and require explicit recovery.
 
 ### Replacement
 
 A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys while preserving TOFU/verified provenance. Otherwise an issuer with an existing account pin MUST independently re-verify the replacement. PDS recovery cannot reset trust, permit fresh TOFU, revive revoked bindings, or authorize signed withdrawals. Use [the same verification policy](core.md#device-verification-policy) for subsequent grants and acceptance.
 
-One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. This also handles revocation cycles that disable every device.
+One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
+Removal/re-invitation follows host administration but cannot reset local verification floors, pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Dedicated recovery-key authority and cross-application backup portability are outside the baseline.
 
 ## Platform notes
 

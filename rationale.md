@@ -10,6 +10,8 @@ Independent device verification prevents PDS key substitution under the endpoint
 
 A fresh key per epoch and immutable backward wraps make retained history available through a small number of device grants. Fresh epochs can bridge earlier history gaps; possession of older keys alone gives no access to the new bridges. Missing wraps retain direct-grant fallback; unavailable active keys have fresh-epoch recovery. These choices trade stronger secrecy and freshness guarantees for history access and asynchronous operation. Current-key compromise exposes connected history, revocation takes effect only when learned, and availability is conditional. Trust in the host and application software remains essential.
 
+Per-target local revocation cutoffs replace cycle detection, trading simpler validation for the possibility that a withdrawn device forces replacement of the entire older device set.
+
 ## Comparison
 
 The comparison concerns key mechanisms and their integration, rather than every feature of the products using them.

@@ -2,13 +2,13 @@
 
 ## Scope
 
-Each space uses a symmetric content key per epoch. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, declarations, evidence, and encrypted grants. PEEP provides no forward secrecy, post-compromise security, or general metadata-hiding guarantee. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes, repo hosts, and storage providers may be malicious.
+Each space uses a symmetric content key per epoch. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, declarations, key requests, evidence, and encrypted grants. PEEP provides no forward secrecy, post-compromise security, or general metadata-hiding guarantee. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes, repo hosts, and storage providers may be malicious.
 
 The [space host](#trusted-host-state) determines account eligibility, configuration, administration, and epoch order. Credentials and writer discovery do not establish membership or device trust. [Signed declarations](device-enrollment.md#declarations) select devices; no enrollment registry, global enrollment chain, creator-device approval, or issuer appointment is required.
 
 Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. A grant also unlocks connected [historical keys](#backward-history-wrapping). Reading an existing epoch requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
 
-PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or relax the verification policy. Admission alone cannot bypass the policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
+PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or relax the host verification policy. Admission alone cannot bypass the effective policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
 
 ## Protocol conventions
 
@@ -27,7 +27,7 @@ Procedures use these results, with a reason and affected references:
 | `INCOMPLETE` | Required bytes, authentication basis, local ordering evidence, keys, or validation work are unavailable. |
 | `BLOCKED` | Known authorization state or local policy forbids the operation, including withdrawal, conflict, or insufficient verification. |
 
-Only `OK` permits the requested operation. Clients MUST NOT treat missing evidence as an empty state or a successful check. They MUST preserve independently authenticated withdrawals, conflicts, and observations even if another check fails; unvalidated input MUST NOT acquire authority through partial processing. Before releasing a grant or committing a new key acceptance, clients MUST repeat checks affected by newly learned state. These results do not assert global freshness or replace the [archive audit assessments](audit.md#archived-grants).
+Only `OK` permits the requested operation. Clients MUST NOT treat missing evidence as an empty state or a successful check. They MUST preserve independently authenticated withdrawals, conflicts, and observations even if another check fails; unvalidated input MUST NOT acquire authority through partial processing. Before releasing a grant or committing a new key acceptance, clients MUST repeat checks affected by newly learned state or local policy changes. These results do not assert global freshness or replace the [archive audit assessments](audit.md#archived-grants).
 
 ### Encoding and identifiers
 
@@ -44,6 +44,7 @@ Except for [public device records](device-enrollment.md#bindings-and-publication
 | `declaration` | Declaring account's space repo. |
 | `revocation` | Signer's public repo; unchanged copies may be relayed in space repos. |
 | `grant`, `evidence` | Issuer's space repo. |
+| `keyRequest` | Requesting account's space repo. |
 | `compromise` | Reporting account's space repo. |
 
 All use the [retention/access rules](audit.md#retention-and-access).
@@ -58,7 +59,7 @@ Retain these authenticated values by content reference:
 | --- | --- |
 | Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "peep-hpke-v1"`, `deviceVerification: "tofu-permitted" \| "verified-only"`, positive `maxEncryptedBlobBytes` (default 16,777,216). |
 | Membership decision | `version: 1`, `kind: "membership"`, `space`, `account`, positive per-account monotonic `revision`, `eligible: boolean`. Eligibility is the host's explicit PEEP participation decision under its management rules. |
-| Epoch metadata | `version: 1`, `space`, positive `epoch`, `keyId: RandomId`, `commitment: Digest`, `previous: CID \| null`, `context: CID`, `history: HistoryWrap \| null` ([backward wrapping](#backward-history-wrapping)). |
+| Epoch metadata | `version: 1`, `space`, positive `epoch`, `keyId: RandomId`, `commitment: Digest`, `previous: CID \| null`, `context: CID`, `history: HistoryWrap[]` ([backward wrapping](#backward-history-wrapping)). |
 | Activation outcome | `version: 1`, `space`, `requestId: RandomId`, `request: CID`, `status: "accepted" \| "stale" \| "rejected"`, `active: CID \| null`. An accepted outcome identifies the exact epoch accepted for that request. |
 
 The host MUST expose authenticated reads of current configuration, per-account membership, active epoch, historical values by CID, and each epoch's accepted activation request/outcome. The host MUST preserve exact history and monotonic revisions through restart/migration. Unknown history is unavailable, not reconstructed as current state. Defaults apply only to authenticated creation. Clients MUST retain their highest known revisions: lower revisions cannot replace them, and equal revisions with different bytes are errors. A later eligible membership decision may re-admit an account without resetting device trust/history.
@@ -71,14 +72,20 @@ When learned, clients MUST visibly surface authenticated member additions, remov
 
 ## Device verification policy
 
-Authenticated configuration selects a policy for both granting and accepting keys:
+Authenticated configuration selects the host policy:
 
 - **TOFU permitted (default):** clients MAY use TOFU or independently verified bindings.
 - **Verified-only:** a client MUST independently verify the other device's exact binding, or validate same-account approval rooted in its own verified binding, before granting that device a key or accepting a key from it.
 
+Clients MUST support an optional local `verified-only` floor per exact space URI, disabled by default. The effective policy MUST be `verified-only` when either the authenticated host policy or the local floor requires it; otherwise it is `tofu-permitted`. Each client applies its own effective policy to both granting and accepting keys. Policy UI MUST distinguish the host policy from the local effective policy.
+
+The floor is [private client state](device-enrollment.md#private-state), with no new public record or automatic cross-device synchronization. Clients MUST persist it across restart, leaving/rejoining, and host migration. Disabling an enabled floor MUST require explicit local user action; host changes and restored/imported state MUST NOT disable it. Clients MUST privately retain the floor and effective policy used for each issuance or key acceptance.
+
 The issuer checks the recipient; the recipient checks the issuer. One issuer suffices when both clients pass their local checks. [Binding trust](device-enrollment.md#local-trust) is reusable across spaces; reported trust in a grant is not transferable verification. Missing verification blocks the operation, and clients MUST NOT fall back to TOFU when configuration is missing or unauthenticated.
 
-The policy covers current and historical keys, publication retries, direct delivery, and first acceptance from archived grants. Tightening it does not undo disclosure, rewrite earlier decisions, or retroactively invalidate accepted keys or historically valid grants.
+The effective policy covers current and historical keys, publication retries, direct delivery, and first acceptance from archived grants or history wraps. Tightening it does not undo disclosure, rewrite earlier decisions, or retroactively invalidate accepted keys or historically valid grants.
+
+A local floor constrains only that client's exchanges. Another key holder following a weaker policy can disclose the shared content key, exposing the same content despite this client's floor. The floor provides no space-wide guarantee against host compromise or other authorized holders.
 
 ## Key grants
 
@@ -87,11 +94,11 @@ The policy covers current and historical keys, publication retries, direct deliv
 `AuthorizeExchange(space, epochRef, issuer, recipient, role, state)` checks a current exchange. `role` identifies the local installation as issuer or recipient; the other binding is the device it verifies. Implementations MUST perform G1–G6, returning the [specified failure result](#conformance-and-validation-results) at a failed check:
 
 1. **G1 — Host evidence.** Resolve and authenticate configuration, the accepted epoch/request/outcome, and both accounts' membership decisions under [host rules](#trusted-host-state). Check exact space, references, profile, and epoch identity. A proposal without authenticated acceptance cannot authorize an exchange.
-2. **G2 — Local state.** Incorporate authenticated observations using [declaration ancestry](device-enrollment.md#declaration-ancestry), [revocation processing](device-enrollment.md#revocation-cycles), and [freshness](device-enrollment.md#freshness). Use the latest locally known configuration, membership, and selections. Missing required paths return `INCOMPLETE`; a known declaration conflict returns `BLOCKED` for either role involving that account.
+2. **G2 — Local state.** Incorporate authenticated observations using [declaration ancestry](device-enrollment.md#declaration-ancestry), [revocation processing](device-enrollment.md#revocation-processing), and [freshness](device-enrollment.md#freshness). Use the latest locally known configuration, membership, and selections. Missing required paths return `INCOMPLETE`; a known declaration conflict returns `BLOCKED` for either role involving that account.
 3. **G3 — Eligibility and selection.** Require both accounts to be eligible and both exact bindings to be selected. Require the local installation to match its stated role. A currently effective account removal or selection omission returns `BLOCKED`, even if the device holds a key; later valid readmission/reselection may restore eligibility. An account-wide exact-binding revocation remains permanent.
-4. **G4 — Verification.** Apply the [device verification policy](#device-verification-policy) to the other binding using the local client's trust and approval provenance. Missing independent verification in verified-only mode returns `BLOCKED`; missing required approval evidence returns `INCOMPLETE`. Another client's reported trust is insufficient.
+4. **G4 — Verification.** Apply the local [effective verification policy](#device-verification-policy), including the per-space floor, to the other binding using the client's trust and approval provenance. Missing independent verification in verified-only mode returns `BLOCKED`; missing required approval evidence returns `INCOMPLETE`. Another client's reported trust is insufficient.
 5. **G5 — Context.** Run [context validation](#context-validation) for both parties. Propagate any failure; host ordering and an event label cannot substitute for this check.
-6. **G6 — Decision.** Return `OK` with the exact declarations, host decisions, context evidence, and local trust decision used. Persist that decision with any issuance or key acceptance; it MUST NOT reset pins, withdrawals, or conflicts.
+6. **G6 — Decision.** Return `OK` with the exact declarations, host decisions, context evidence, local trust decision, floor, and effective policy used. Persist that decision with any issuance or key acceptance; it MUST NOT reset pins, withdrawals, or conflicts.
 
 An issuer MUST additionally hold exactly 32 key bytes matching the epoch commitment before constructing a grant. It MUST publish the signed grant and its [evidence](audit.md#evidence) in its own space repo through the [publication state machine](audit.md#publication). Each release attempt repeats authorization; credentials never authorize raw-key responses or arbitrary recipient keys. New grants of old keys use this same procedure. Reading an existing grant uses [grant acceptance](#grant-acceptance), including its archive mode.
 
@@ -99,7 +106,17 @@ An issuer MUST additionally hold exactly 32 key bytes matching the epoch commitm
 
 After activation, the generator MUST make the first grant pass for selected devices it can authorize. Other eligible holders SHOULD fill gaps after randomized backoff or a recipient request when online and able to authorize delivery; newly selected devices use the same path. For a given epoch and recipient binding, reuse prepared grants under the [publication rules](audit.md#publication); observed grants may defer duplicate work but never establish recipient acceptance or complete coverage. The generator has no exclusive authority or mandatory delivery deadline.
 
-Recipients MAY request another eligible issuer even when a grant exists: its issuer may fail their local verification policy, or its evidence/ciphertext may be unusable. Applications MUST provide a request path usable without the missing content key. Requests identify the space, epoch reference, and exact recipient binding; they are scheduling hints, never authorization. Issuers MUST resolve selections and apply normal grant checks independently. Implementations MUST bound request processing/retries; delays and partial views can still cause duplicates or gaps.
+Recipients MAY [request](#key-requests) another eligible issuer even when a grant exists: its issuer may fail their local verification policy, or its evidence/ciphertext may be unusable. Delays and partial views can still cause duplicates or gaps.
+
+### Key requests
+
+Applications MUST support unencrypted `com.example.peep.keyRequest` records in the requesting account's space repo, under normal Spaces access controls. Publish and discover them through ordinary repo writes and [direct sync](audit.md#direct-sync), including notification catch-up and periodic reconciliation, without requiring any content key. Issuers answer through normal [grant publication](audit.md#publication) in their own space repos; no separate delivery service is required.
+
+A request is `{ version: 1, space, epoch: CID, recipient: Binding, issuer: DeviceIdentity | null, proof: bytes }`. The epoch reference identifies accepted metadata; `recipient` is the requester's [exact binding](device-enrollment.md#bindings-and-publication). `issuer` names a preferred issuer device or is `null` for any eligible holder. The recipient device signs `CBOR(["peep/key-request", 1, requestWithoutProof])` using [Ed25519](#mandatory-grant-profile). Apply the [immutable record rules](#records); retries MUST reuse exact signed bytes and record identity. A different preferred issuer requires a new request.
+
+Before acting, issuers MUST validate encoding and signature, match `space` and `recipient.account` to the authenticated repo location, and independently resolve the accepted epoch, declarations, and all [grant authorization](#grant-authorization) checks. The signature proves possession of the stated signing key, not identity verification or authorization. Requests MUST NOT establish device trust, bypass verification policy, authorize raw-key responses, or appear in evidence manifests. A preferred issuer is only a scheduling hint and grants no exclusive authority.
+
+Clients MUST bound pending requests, retries, and per-account processing, deduplicate by `(space, epoch, exact recipient binding, issuer)`, and use randomized retry backoff. Pending requests SHOULD be reconsidered when relevant authorization or key availability changes. Requesters SHOULD delete requests after accepting the needed key or abandoning the request; they MAY remove obsolete requests to bound storage. Requests have no indefinite retention requirement. Deletion or a published response proves neither key receipt nor non-disclosure and MUST NOT delete grants or their evidence. Withholding, denied access, or offline holders can still prevent delivery; [availability recovery](#availability-recovery) remains available under its normal rules.
 
 ### Grant format
 
@@ -162,9 +179,9 @@ HPKE Base mode does not authenticate the sender; the issuer signature is REQUIRE
 2. **A2 — Evidence and signature.** Resolve the [required evidence](audit.md#evidence), authenticate host values, and validate both declarations, their binding/approval evidence, and the issuer signature as issuance evidence. Match both identities and key fingerprints to the selected bindings in the referenced declarations; the recipient binding MUST equal `localBinding` in account, device ID, and both public keys. Missing required evidence returns `INCOMPLETE`; invalid evidence or a binding mismatch returns `INVALID`. Authorization is checked separately in A4.
 3. **A3 — Epoch.** Match space, epoch, and key ID to authenticated accepted metadata and validate its structure, context references, and activation evidence. Later history traversal is not required to accept the starting key.
 4. **A4 — Authorization.** In both modes, check the [recorded authorization basis](audit.md#archived-grants). Current mode MUST additionally run `AuthorizeExchange` with role `recipient`; retain that decision separately from the issuer's recorded basis. Archive mode does not require current enrollment; later membership/selection removal or revocation alone MUST NOT invalidate historical reading. A client MUST NOT relabel a failed current operation as an authorized current exchange by switching modes.
-5. **A5 — Identity policy.** Before first key acceptance in either mode, require the issuer binding to satisfy the locally current verification policy. Archive reading MAY use retained verification of a formerly authorized binding; this grants it no current authority. New approval paths still obey withdrawn-approver rules. Valid signatures, decryption, and reported recipient trust cannot bypass verification.
+5. **A5 — Identity policy.** Before first key acceptance in either mode, require the issuer binding to satisfy the local effective verification policy, including the per-space floor. Archive reading MAY use retained verification of a formerly authorized binding; this grants it no current authority. New approval paths still obey withdrawn-approver rules. Valid signatures, decryption, and reported recipient trust cannot bypass verification.
 6. **A6 — Open.** Use the mandatory HPKE profile and exact header-derived `info`/AAD. Require successful authentication and exactly 32 plaintext bytes matching the epoch commitment; otherwise return `INVALID` and discard the candidate key.
-7. **A7 — Commit.** Recheck any authorization/policy affected by newly learned state. Durably retain the key, exact grant/evidence, local trust decision, and audit assessments before exposing the key to content operations. Return `OK`; historical acceptance MUST NOT roll back the active write epoch or restore authority.
+7. **A7 — Commit.** Recheck any authorization/policy affected by newly learned state or local policy changes. Durably retain the key, exact grant/evidence, local trust decision, floor, effective policy, and audit assessments before exposing the key to content operations. Return `OK`; historical acceptance MUST NOT roll back the active write epoch or restore authority.
 
 ## Content encryption
 
@@ -195,7 +212,11 @@ Format 1 writers MUST encrypt `CBOR([payload, padding])`, exactly two byte strin
 
 After whole-ciphertext authentication, receivers MUST decode the frame with bounded lengths/work and reject non-normalized CBOR, wrong element counts/types, nonzero padding, or trailing bytes. Decoders MUST check declared lengths against available bytes and resource limits before allocation. Receivers MUST discard padding and process only `payload`; they MUST NOT fall back to unframed content.
 
-Applications choose padding amounts or size buckets, accounting for CBOR overhead. Readers MUST support empty and nonempty padding within their resource limits. Ciphertext limits include the frame, padding, and tag; blob limits cover the entire encrypted envelope. Padding can obscure exact content lengths; counts, timing, blob relationships, and padded record/blob sizes remain visible.
+Writers SHOULD use a shared default: choose the smallest attainable power-of-two ciphertext length of at least 256 bytes (256, 512, 1,024, ...), including the frame and 16-byte tag. For payload length `n` and zero-padding length `p`, that length is `L(n, p) = 1 + h(n) + n + h(p) + p + 16`, where the CBOR byte-string header length `h(x)` is 1 for `x < 24`, 2 for `x < 256`, 3 for `x < 65,536`, 5 for `x < 2^32`, and 9 otherwise. Choose nonnegative `p` satisfying the bucket exactly; skip buckets made unattainable by header-length changes.
+
+The chosen bucket MUST fit every applicable ciphertext, record, transport, and whole-blob limit, counting outer encoding overhead where applicable. If no bucket fits, the default uses empty padding; if that also exceeds a limit, the writer MUST reject the write. Compute lengths with bounded, overflow-safe arithmetic before allocating padding. Other padding choices remain permitted; readers MUST accept empty, nonempty, and non-default sizes within their resource limits.
+
+Shared buckets reduce padding-specific application fingerprints but can roughly double larger payloads; small payloads incur the 256-byte minimum. Padding does not hide visible collections, counts, timing, blob relationships, or padded sizes. No general metadata-hiding guarantee is added.
 
 ### Encrypted records
 
@@ -205,7 +226,7 @@ The outer `$type` MUST match the collection. Application semantics belong inside
 
 ```typescript
 const content = { $type: "app.example.message#content", text: "Hello!" };
-const plaintext = CBOR([CBOR(content), new Uint8Array(0)]);
+const plaintext = CBOR([CBOR(content), padding]); // Zero bytes chosen under the padding rules.
 // Encrypt plaintext with the record associated data below.
 {
   $type: "app.example.message",
@@ -264,24 +285,32 @@ The [trusted host](#trusted-host-state) orders accepted epoch metadata; a local 
 
 ### Backward history wrapping
 
-Epoch metadata has a required `history` field: `null` at creation, otherwise either `null` or:
+Epoch metadata has a required `history` array with at most 64 entries. Creation MUST use `[]`. Entries MUST be sorted by unsigned lexicographic order of `CBOR(target)`, with duplicate targets and repeated nonces rejected. `null` is invalid.
 
 ```typescript
 type HistoryWrap = {
+  target: CID;        // Exact metadata of an accepted earlier epoch in this space.
   nonce: bytes;       // Fresh random 24-byte nonce.
-  ciphertext: bytes;  // Raw 32-byte predecessor key plus 16-byte authentication tag.
+  ciphertext: bytes;  // Raw 32-byte target key plus 16-byte authentication tag.
 };
 ```
 
-When the generator holds an accepted key for `previous`, the generator MUST include its wrap before activation. Otherwise it MUST use `null`; missing history never blocks availability recovery. Encrypt that predecessor key with the new epoch key using [XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction). Associated data is `CBOR(["peep/history", 1, H])`, where `H` is the proposed epoch metadata without `history`. This binds the space, both epoch identities through `previous`, new key commitment, and rotation context without a reference cycle. Nonces MUST NOT repeat under the same key, including content encryption.
+Each target MUST belong to the host's accepted history for this space and have a strictly lower epoch number than the wrapping epoch. `previous` still names the immediate predecessor; wrap targets need not. Before wrapping, generators MUST authenticate target metadata and check each held key against its commitment. When the generator holds an accepted key for `previous`, it MUST include that wrap. Within the remaining limit, it SHOULD wrap held older keys that bridge known gaps, avoiding keys already reachable through included wraps. Missing historical keys or incomplete history traversal MUST NOT block availability recovery; omit unavailable targets. Required activation/context evidence remains mandatory.
 
-The activation signature and authenticated epoch reference commit to the exact wrap. Once accepted, the host MUST NOT change its bytes or replace a `null` value. Clients MUST NOT later publish supplementary wraps under an existing epoch key: removed devices may still hold it. Backfill missing keys through ordinary device grants using current authorization; each such grant can unlock its own connected history.
+Encrypt each target key with the fresh new epoch key using [XChaCha20-Poly1305](https://doc.libsodium.org/secret-key_cryptography/aead/chacha20-poly1305/xchacha20-poly1305_construction). Associated data is `CBOR(["peep/history", 1, H, target])`, where `H` is the proposed epoch metadata without `history`. This binds the space, new epoch identity/commitment, predecessor, rotation context, and exact target metadata without a reference cycle. Nonces MUST NOT repeat under the same key, including content encryption.
 
-A signed grant supplies its starting key and all keys reachable through these committed wraps. First acceptance of each derived key MUST apply the [device verification policy](#device-verification-policy) to that grant's issuer, including after policy tightening. Historical traversal needs no separate grant from each earlier generator and transfers no device-verification status. Readers MUST resolve predecessor metadata by CID and authenticate it under the host rules. Readers MUST require the same space, the immediately preceding epoch number, exact fields/lengths, successful AEAD authentication, exactly 32 decrypted bytes, and a matching predecessor commitment before using each key. Readers MUST preserve the starting grant and traversal evidence.
+The activation signature and authenticated epoch reference commit to the complete list. Once accepted, the host MUST NOT change it. Clients MUST NOT publish supplementary wraps under an existing epoch key: removed devices may still hold it. A later fresh epoch MAY bridge gaps using its own key and normal activation/grant authorization. For example, if epoch 2 has no wrap for epoch 1, epoch 3 can wrap both keys; a grant of key 3 then unlocks both histories. Possession of key 2 alone cannot use the new bridge. Direct historical grants remain available under current authorization, each unlocking its own reachable history.
 
-Readers MUST use finite resumable byte/node/work limits and MAY traverse lazily with cached results. Creation ends traversal normally. A later null wrap, unavailable/invalid predecessor metadata, failed wrap authentication/commitment, or exhausted budget stops that path and is reported explicitly. Structural errors in the starting metadata fail the starting grant; traversal failures do not invalidate an otherwise accepted starting key. Request a normal grant for a missing historical epoch and continue from there. Older-key reads MUST NOT roll back the active write epoch. The host MUST retain exact wraps indefinitely as part of immutable epoch history; initial key acceptance need not replay it all.
+A signed grant supplies its starting key and all keys reachable through committed wraps. Traversal needs no separate grant from earlier generators and transfers no device-verification status. For each traversed edge, readers MUST:
 
-One starting grant replaces per-device grants along a connected chain, while reading its full history still costs one small wrap per epoch. A leaked key exposes all history reachable from it. Older keys cannot derive fresh successors, and deleting a wrap cannot undo exposure. A key is lost only when no direct copy, decryptable backup, or decryptable path from a surviving later key remains.
+1. Validate the source metadata's array bound, ordering, uniqueness, exact fields, and lengths; resolve the target by CID, validate its metadata, and authenticate its acceptance under the host rules.
+2. Require the same space and a strictly lower target epoch number; reject self/forward references, unaccepted targets, and cycles.
+3. Before first acceptance of a derived key, apply the local [effective verification policy](#device-verification-policy) to the starting grant's issuer, including the per-space floor and any policy tightening. Authenticate/decrypt with the source key and specified associated data; require exactly 32 bytes matching the target commitment before using the key.
+4. Retain the starting grant and the source/target references for this derivation. Continue through the target's wraps as needed, reusing validated results without dropping provenance or bypassing first-acceptance policy checks.
+
+Readers MUST use finite resumable byte/node/work limits and MAY traverse lazily with cached results. Creation ends a path normally. Readers MUST report failed or unavailable edges, exhausted budgets, and history still unreached; a bridge can skip epochs and does not prove complete coverage. A failed edge stops only that path. Structural errors in starting metadata fail the starting grant; traversal failures MUST NOT invalidate an accepted starting key or other valid paths. Request normal grants for missing historical keys or use a later epoch's bridges. Older-key reads MUST NOT roll back the active write epoch. The host MUST retain exact wrap lists indefinitely; initial key acceptance need not replay history.
+
+One starting grant replaces per-device grants for reachable history; reading it still requires traversing wraps. A leaked key exposes all history reachable from it. Older keys cannot derive fresh successors, and deleting wraps cannot undo exposure. A key is lost only when no direct copy, decryptable backup, or decryptable path from a surviving later key remains.
 
 ### Rotation context
 
@@ -293,7 +322,7 @@ Each event is an exact map with `version: 1`, `space`, and:
 | --- | --- | --- |
 | `membership` | `decision: CID` | A host-authenticated ineligible membership decision. Grants involving that account require a later authenticated eligible decision. |
 | `selection` | `before: CID`, `after: CID` | Same-account signed declarations with validated replacement ancestry. The omitted exact bindings are removed. Grants involving that account require `after` or a valid descendant/resolution, not an older selection. |
-| `revocation` | `revocation: CID` | An account-wide signed revocation, validated under local trust. Permanently excludes that exact binding as recipient or issuer and applies the normal approval-authority rules. |
+| `revocation` | `revocation: CID` | An account-wide signed revocation, validated under the [local revocation rules](device-enrollment.md#revocation-processing). Permanently excludes that exact binding as recipient or issuer and applies the normal approval-authority rules. |
 | `compromise` | `report: CID` | A device-signed report identifying the compromised epoch/key; requires a fresh replacement for that key. It creates no account/device ban by itself. |
 
 Selection evidence MUST establish replacement ancestry and removals. Later valid membership/selection authorization may re-admit an account or per-space removed device; account-wide exact-binding revocation is permanent. The context retains the earlier event while enforcing this distinction.
@@ -322,11 +351,11 @@ The host MUST authenticate the caller, scope request IDs by `(space, proposer ac
 | Step | Condition | Required effect/result |
 | --- | --- | --- |
 | H1 | ID already bound | Different bytes are an integrity error and MUST NOT replace the binding. If the same request has a terminal outcome, return it unchanged before applying current eligibility, uniqueness, or throttling checks. |
-| H2 | No terminal outcome | Verify signature, presented declaration/binding/selection, caller/proposer account match, eligibility, required evidence, commitment/history structure, unique key ID, predecessor-based epoch number, and full context inheritance. Non-null creation history and overflow are invalid. A definitive validation failure yields durable `rejected`. If required validation is unavailable or admission is throttled, return a nonterminal error without activation; the exact request remains retryable. |
+| H2 | No terminal outcome | Verify signature, presented declaration/binding/selection, caller/proposer account match, eligibility, required evidence, commitment/history structure, each wrap target's acceptance in this space and strictly earlier epoch number, unique key ID, predecessor-based epoch number, and full context inheritance. Nonempty creation history and overflow are invalid. A definitive validation failure yields durable `rejected`. If required validation is unavailable or admission is throttled, return a nonterminal error without activation; the exact request remains retryable. |
 | H3 | Valid request, expected predecessor no longer active | Atomically store `stale` and the active reference; MUST NOT queue automatic activation. |
 | H4 | Valid request, expected predecessor still active | Atomically recheck eligibility and state-dependent H2 checks, accept the exact proposal, advance the active pointer, and store `accepted` referencing that epoch. |
 
-The host MUST serialize these decisions against membership and epoch changes. History ciphertext decryption and the proposer's claimed key durability are not host-verifiable. Host checks do not supply the recipients' local device verification.
+The host MUST serialize these decisions against membership and epoch changes. Wrap correctness, possession of omitted historical keys, and the proposer's claimed key durability are not host-verifiable. Host checks do not supply the recipients' local device verification.
 
 #### Client activation states
 
@@ -334,19 +363,27 @@ Clients MUST use the following durable states for each immutable request, or equ
 
 | Step | State/event | Required action and next state |
 | --- | --- | --- |
-| T1 | New proposal | Process inherited/new events, generate a fresh key/ID, and durably store key bytes, proposal, context, exact request/ID, status, and transmission enabled. Enter `prepared`; MUST NOT send before persistence. |
+| T1 | New proposal | Process inherited/new events, generate a fresh key/ID, construct the history list, and durably store key bytes, proposal, context, exact request/ID, status, and transmission enabled. Enter `prepared`; MUST NOT send before persistence. |
 | T2 | `prepared`, transmission enabled | Persist `outcome-unknown` before submitting the exact request. |
 | T3 | `outcome-unknown`, timeout/restart/no terminal result | Query authenticated request status, or resend identical bytes/ID only while transmission remains enabled. Remain `outcome-unknown` until an authenticated terminal result arrives. |
 | T4 | Authenticated terminal result | Match space, account-scoped ID, and request CID; persist `accepted`, `stale`, or `rejected`. An accepted result MUST identify the exact proposed epoch. |
 | T5 | `accepted` | Grants MAY proceed under current exchange/publication checks. Fetch current active metadata separately; replayed outcomes for this request MUST NOT roll back a later epoch. |
-| T6 | `stale` or `rejected` | MUST NOT write or grant using the losing proposal. Follow the accepted active epoch; if rotation or availability recovery is still needed, start T1 with a new key/ID and proposal. |
+| T6 | `stale` or `rejected` | MUST NOT write or grant using the losing proposal. Follow the accepted active epoch and reapply [recovery guidance](#availability-recovery) before another automatic availability recovery. If rotation or availability recovery is still needed, start T1 with a new key/ID and proposal. |
 | T7 | Cancellation or abandonment | Durably disable further request transmission; restart and late results MUST NOT re-enable it. Retain the request and its known outcome or uncertainty. Read-only reconciliation MAY continue through T4. Cancellation MUST NOT be recorded as host rejection or nonacceptance. |
 
 Exact retries MUST return the original host outcome even after later rotations. Generator authority is evaluated at activation; later withdrawal does not invalidate the historical commitment. Activation requires no grants, self-grants, recipient acknowledgment, or complete recipient evidence. Offline recipients do not prevent activation; later grants still require current authorization. Acceptance proves neither delivery nor key availability: devices without the key cannot read the epoch, and loss of every copy, backup, and usable later wrap loses its content. It also proves no independent device verification, randomness, issuance time, or absence of hidden events/leakage.
 
 ### Availability recovery
 
-Any eligible enrolled device MAY propose a fresh successor when it cannot obtain the active key, without holding that key or presenting a new security trigger. No proof of zero grants, recipient acknowledgment, or protocol-wide timeout is required. Applications MAY use local retrieval retries/backoff or offer a user-initiated recovery action.
+Any eligible enrolled device MAY propose a fresh successor when it cannot obtain the active key, without holding that key or presenting a new security trigger. No proof of zero grants, recipient acknowledgment, or protocol-wide timeout is required.
+
+To avoid unnecessary grant fan-out, writer interruption, and history gaps, clients SHOULD follow this sequence before automatic availability recovery:
+
+1. Fetch available grants for the latest authenticated active epoch and [request a grant](#key-requests) from its generator or other eligible holders. A reachable holder SHOULD supply an authorized grant when that suffices to restore access, avoiding rotation.
+2. Allow a bounded, application-defined retrieval window with randomized retry backoff. Recheck the active epoch, available grants, and continued need before submitting a recovery proposal. After a competing activation or a stale proposal, try to obtain the current key before starting another automatic recovery.
+3. If rotation is still needed, prefer a willing, eligible holder of the active key to generate the successor and wrap that predecessor key. If none is available, recovery without the old key remains permitted.
+
+Applications MAY offer explicit user-initiated recovery without waiting for this window. This waiting guidance applies only to automatic availability recovery and MUST NOT delay a required security rotation. It adds no host admission condition or protocol-wide timeout. Clients SHOULD stop unnecessary recovery attempts through [T7](#client-activation-states); cancellation does not undo an activation that may already have occurred.
 
 Recovery clients MUST use normal activation and grant procedures, inheriting the full rotation context and incorporating newly known events; no availability event type is needed. Recovery cannot bypass required authorization/context evidence or the verification policy for granting and accepting keys. After acceptance, distribute the successor key and resume content writes as clients obtain it. Content under the unavailable key remains unreadable unless that key is recovered.
 
