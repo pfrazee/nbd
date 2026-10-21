@@ -230,7 +230,7 @@ Blob references MUST appear in the envelope for PDS retention, even when also in
 
 This binding prevents relocation by someone without the key. It neither establishes authorship against another key holder nor prevents replay at the same location. Applications MUST verify Spaces repository/sync authentication for the expected author, space, revision, and contents; enforce write permissions; and retain sync checkpoints to reject known rollback. Successful decryption or an inner `author` field is not proof of authorship.
 
-A malicious author PDS colluding with a key holder can forge attribution. Applications requiring independent device authorship need a separate profile selected at space creation; Format 1 and enrollment approvals do not provide it. Content/location/revision binding, replay handling, and deniable rebroadcast remain [TODO-11](TODOs.md#todo-11).
+PEEP introduces no independent message-authorship proofs. A content-key holder colluding with the claimed author's PDS can forge messages, but can also export the content key directly to that PDS. Such collusion is outside PEEP's confidentiality guarantees because authorized key holders are trusted. Enrollment and grant signatures authenticate protocol statements, not message authorship.
 
 ### Encrypted blobs
 

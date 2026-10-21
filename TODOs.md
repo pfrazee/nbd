@@ -46,11 +46,6 @@ Validate Ed25519/X25519 operations, installation identity, storage, pairing, res
 - **06:** Expiring approval needs reliable clocks and renewal by approvers that stop renewing withdrawn selections. Per-grant approval needs an online trusted approver, issuer nonce, exact selection/epoch, deadline, and replay protection. A fresh response alone proves neither current authority nor consent; any delay bound must state its assumptions.
 - **08:** Dedicated recovery-key authority and cross-application backup portability.
 
-<a id="todo-11"></a>
-### 11: Independent content authentication
-
-Define a separate profile binding devices to content/location/revision, handling replay and the effect of transferable signatures on deniable rebroadcast. Enrollment signatures do not upgrade [Format 1 authorship](core.md#encrypted-records).
-
 <a id="todo-13"></a>
 ### 13: Authenticated streaming
 
