@@ -8,7 +8,7 @@ The [space host](#trusted-host-state) determines account eligibility, configurat
 
 Any eligible participant's enrolled device may grant keys it holds. Current members' selected devices are eligible for all retained epochs, including pre-join content. Key possession grants no administrative or device-approval authority. A grant also unlocks connected [historical keys](#backward-history-wrapping). Reading an existing epoch requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
 
-PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or relax the host verification policy. Admission alone cannot bypass the effective policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
+PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive current keys and retained history, or misreport the [verification policy](#device-verification-policy) to clients that have not yet observed it. The policy is fixed at creation, and clients reject later changes. Admission alone cannot bypass the effective policy in force; device verification authenticates bindings without establishing users' consent to membership. Independently verified bindings prevent substituted-key grants under the [local trust assumptions](device-enrollment.md#local-trust); TOFU provides only [conditional subsequent detection](audit.md#direct-sync).
 
 ## Protocol conventions
 
@@ -57,7 +57,7 @@ Retain these authenticated values by content reference:
 
 | Value | Required fields |
 | --- | --- |
-| Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "peep-hpke-v1"`, `deviceVerification: "tofu-permitted" \| "verified-only"`, positive `maxEncryptedBlobBytes` (default 16,777,216). |
+| Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "peep-hpke-v1"`, `deviceVerification: "tofu-permitted" \| "verified-only"` (fixed at creation), positive `maxEncryptedBlobBytes` (default 16,777,216). |
 | Membership decision | `version: 1`, `kind: "membership"`, `space`, `account`, positive per-account monotonic `revision`, `eligible: boolean`. Eligibility is the host's explicit PEEP participation decision under its management rules. |
 | Epoch metadata | `version: 1`, `space`, positive `epoch`, `keyId: RandomId`, `commitment: Digest`, `previous: CID \| null`, `context: CID`, `history: HistoryWrap[]` ([backward wrapping](#backward-history-wrapping)). |
 | Activation outcome | `version: 1`, `space`, `requestId: RandomId`, `request: CID`, `status: "accepted" \| "stale" \| "rejected"`, `active: CID \| null`. An accepted outcome identifies the exact epoch accepted for that request. |
@@ -68,22 +68,24 @@ Clients MUST authenticate values by direct host retrieval or a retained local ob
 
 The host MUST expose change notifications and resumable reconciliation for membership, configuration, and epochs. Notifications are fetch hints; cached validated state follows [freshness rules](device-enrollment.md#freshness). Unsupported deployments MUST report the missing capabilities. [Rotation](#rotation) defines epoch/activation semantics.
 
-When learned, clients MUST visibly surface authenticated member additions, removals, readmissions, and verification-policy changes, identifying the affected account or old/new policy. Membership UI MUST explain that admission permits access to retained history. Notices add no approval gate and need not precede grants; learning about a change has no deadline.
+When learned, clients MUST visibly surface authenticated member additions, removals, and readmissions, identifying the affected account. Membership UI MUST explain that admission permits access to retained history. Notices add no approval gate and need not precede grants; learning about a change has no deadline.
 
 ## Device verification policy
 
-Authenticated configuration selects the host policy:
+The creating configuration selects the host policy, and it is immutable for the life of the space:
 
 - **TOFU permitted (default):** clients MAY use TOFU or independently verified bindings.
 - **Verified-only:** a client MUST independently verify the other device's exact binding, or validate same-account approval rooted in its own verified binding, before granting that device a key or accepting a key from it.
 
-Clients MUST support an optional local `verified-only` floor per exact space URI, disabled by default. The effective policy MUST be `verified-only` when either the authenticated host policy or the local floor requires it; otherwise it is `tofu-permitted`. Each client applies its own effective policy to both granting and accepting keys. Policy UI MUST distinguish the host policy from the local effective policy.
+The host MUST reject configuration updates that change `deviceVerification`. Clients MUST retain the first authenticated policy observed for each exact space URI and reject a configuration with a different value as `INVALID`, retaining the last valid configuration. Clients MUST surface such a configuration as a host integrity alarm, not as a policy change. Changing policy requires a new space. This removes policy relaxation as a way for a malicious PDS, including an administrator's, to enable TOFU substitution in a verified-only space.
+
+Clients MUST support an optional local `verified-only` floor per exact space URI, disabled by default. The effective policy MUST be `verified-only` when either the authenticated host policy or the local floor requires it; otherwise it is `tofu-permitted`. Each client applies its own effective policy to both granting and accepting keys. The floor matters only in TOFU-permitted spaces. Policy UI MUST distinguish the host policy from the local effective policy.
 
 The floor is [private client state](device-enrollment.md#private-state), with no new public record. [Own-device trust sync](device-enrollment.md#own-device-trust-sync) MAY enable it on the user's other installations but MUST NOT disable it. Clients MUST persist it across restart, leaving/rejoining, and host migration. Disabling an enabled floor MUST require explicit local user action; host changes and restored/imported state MUST NOT disable it. Clients MUST privately retain the floor and effective policy used for each issuance or key acceptance.
 
 The issuer checks the recipient; the recipient checks the issuer. One issuer suffices when both clients pass their local checks. [Binding trust](device-enrollment.md#local-trust) is reusable across spaces and may reach the user's own installations through [trust sync](device-enrollment.md#own-device-trust-sync); reported trust in a grant is not transferable verification. Missing verification blocks the operation, and clients MUST NOT fall back to TOFU when configuration is missing or unauthenticated.
 
-The effective policy covers current and historical keys, publication retries, direct delivery, and first acceptance from archived grants or history wraps. Tightening it does not undo disclosure, rewrite earlier decisions, or retroactively invalidate accepted keys or historically valid grants.
+The effective policy covers current and historical keys, publication retries, direct delivery, and first acceptance from archived grants or history wraps. Enabling a local floor does not undo disclosure, rewrite earlier decisions, or retroactively invalidate accepted keys or historically valid grants.
 
 A local floor constrains only that client's exchanges. Another key holder following a weaker policy can disclose the shared content key, exposing the same content despite this client's floor. The floor provides no space-wide guarantee against host compromise or other authorized holders.
 
@@ -307,7 +309,7 @@ A signed grant supplies its starting key and all keys reachable through committe
 
 1. Validate the source metadata's array bound, ordering, uniqueness, exact fields, and lengths; resolve the target by CID, validate its metadata, and authenticate its acceptance under the host rules.
 2. Require the same space and a strictly lower target epoch number; reject self/forward references, unaccepted targets, and cycles.
-3. Before first acceptance of a derived key, apply the local [effective verification policy](#device-verification-policy) to the starting grant's issuer, including the per-space floor and any policy tightening. Authenticate/decrypt with the source key and specified associated data; require exactly 32 bytes matching the target commitment before using the key.
+3. Before first acceptance of a derived key, apply the local [effective verification policy](#device-verification-policy) to the starting grant's issuer, including the per-space floor and any floor enabled since the starting key's acceptance. Authenticate/decrypt with the source key and specified associated data; require exactly 32 bytes matching the target commitment before using the key.
 4. Retain the starting grant and the source/target references for this derivation. Continue through the target's wraps as needed, reusing validated results without dropping provenance or bypassing first-acceptance policy checks.
 
 Readers MUST use finite resumable byte/node/work limits and MAY traverse lazily with cached results. Creation ends a path normally. Readers MUST report failed or unavailable edges, exhausted budgets, and history still unreached; a bridge can skip epochs and does not prove complete coverage. A failed edge stops only that path. Structural errors in starting metadata fail the starting grant; traversal failures MUST NOT invalidate an accepted starting key or other valid paths. Request normal grants for missing historical keys or use a later epoch's bridges. Older-key reads MUST NOT roll back the active write epoch. The host MUST retain exact wrap lists indefinitely; initial key acceptance need not replay history.

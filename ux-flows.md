@@ -4,13 +4,13 @@ Informative. This document sketches user-facing flows implied by [Core](core.md)
 
 ## UI vocabulary
 
-- **Space policy** (host): *Allow unverified devices* (`tofu-permitted`, default) or *Require verified devices* (`verified-only`).
-- **My stricter setting**: the per-space [local floor](core.md#device-verification-policy). Private to one client; only explicit local action disables it. Policy UI MUST distinguish host policy from local effective policy.
+- **Space policy** (host): *Allow unverified devices* (`tofu-permitted`, default) or *Require verified devices* (`verified-only`). Chosen at creation and [fixed for the life of the space](core.md#device-verification-policy).
+- **My stricter setting**: the per-space [local floor](core.md#device-verification-policy), offered only in spaces that allow unverified devices. Private to one client; only explicit local action disables it. Policy UI MUST distinguish host policy from local effective policy.
 - **Trust badge** per device: *Unverified* (TOFU), *Verified*, or *Verified via \<their other device\>* (approval-derived).
 
 ## 1. Creating a new space
 
-1. **"New space" form**: name, optional members, and *Allow unverified devices* / *Require verified devices*. Under Advanced: "Always require verification on this device" (the floor). The floor stays meaningful under a verified-only host policy because it protects against the host later relaxing it.
+1. **"New space" form**: name, optional members, and *Allow unverified devices* / *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space." For spaces that allow unverified devices, Advanced offers "Always require verification on this device" (the floor).
 2. **"Which of your devices can read this space?"** This device is checked and locked; other paired devices are listed and checked by default. One confirmation.
    - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](device-enrollment.md#bindings-and-publication). It signs the initial [declaration](device-enrollment.md#declarations) with `previous: []`.
 3. **"Securing space…"**: the epoch 1 key is generated and the [activation request](core.md#client-activation-states) submitted. Posting waits for acceptance. On network loss, the draft persists and the exact request is retried; the UI should not report failure while the outcome is unknown.
@@ -97,7 +97,7 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 | [Device trust](device-enrollment.md#local-trust) (TOFU pins, verified status): no re-verification. | Membership: each admission is a separate host decision (the app can prefill it). |
 | Public device records. | Declarations: each member enables each device again, per space. |
 | | Keys and history: the new space starts at epoch 1 with empty history; parent content is not readable through it. |
-| | Policy and floors: the app can copy host policy; local floors are private and tied to the exact space URI. |
+| | Policy and floors: the app can copy host policy, and a derived space is how a group changes policy; local floors are private and tied to the exact space URI. |
 
 1. **"New space from Book club…"** prefills the parent's members and policy. Copy: "Members are copied; messages aren't."
 2. **Creator:** as in [flow 1](#1-creating-a-new-space). The device picker defaults to devices enabled in the parent.
