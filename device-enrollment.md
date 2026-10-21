@@ -19,7 +19,7 @@ Trust binds the account DID, device ID, and both keys, with no space identifier.
 
 TOFU permits initial PDS substitution; later continuity cannot repair it. Independent verification or approval rooted in it prevents substitution by the PDS when approving devices remain uncompromised. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not independently establish identity. Both modes require signatures, exact-key matching, and continuity; [Core's policy](core.md#device-verification-policy) determines which mode is allowed in each exchange.
 
-Each client MUST keep its own trust decisions, distinguishing direct verification, approval-derived verification, and TOFU provenance. One user's decision does not verify a device for another user. OOB records, earlier approval evidence, acceptance history, and revocations remain in [private state](#private-state); reusing trust in another space MUST NOT publish the original space's declarations.
+Each client MUST keep its own trust decisions, distinguishing direct verification, approval-derived verification, synced, and TOFU provenance. One user's decision does not verify a device for another user; [own-device trust sync](#own-device-trust-sync) carries it only to that user's own installations. OOB records, earlier approval evidence, acceptance history, and revocations remain in [private state](#private-state); reusing trust in another space MUST NOT publish the original space's declarations.
 
 ## Independent verification
 
@@ -95,6 +95,62 @@ A failed, expired, or consumed session MUST NOT change pins, trust, or disputes;
 ### Effects
 
 Verifying an exact TOFU pin upgrades future local decisions, including valid approval paths rooted in it. Clients MUST preserve prior grants' trust decisions; the upgrade proves neither past authorization nor absence of disclosure. A successful session verifying keys that differ from an existing pin for the same account and device ID records a dispute and blocks dependent grants/key acceptance until approval or independent recovery resolves it. Verification cannot revive revoked bindings or bypass [withdrawn-approver rules](#withdrawing-an-approver).
+
+## Own-device trust sync
+
+A user's installations MAY share trust decisions with each other so that verification performed on one device applies on the others, including always-on devices that cannot run verification sessions themselves. Sync carries one user's decisions to that user's own installations, never to another account.
+
+### Sync messages
+
+```typescript
+type TrustEntry = {
+  binding: Binding;                  // Another account's exact binding.
+  mode: "verified" | "tofu" | "disputed";
+  provenance: "direct" | "approval" | "sync";
+  channel: "qr" | "link" | "pin" | null; // For direct verification.
+};
+
+type TrustSyncPayload = {
+  version: 1;
+  account: string;                   // Sender and recipient account.
+  sequence: number;                  // Per-source monotonic.
+  trust: TrustEntry[];               // Set; at most one entry per binding ID.
+  floors: string[];                  // Set of exact space URIs with an enabled floor.
+};
+
+type TrustSync = {
+  version: 1;
+  source: Binding;
+  recipient: DeviceIdentity;
+  recipientKeyId: string;            // Fingerprint of the recipient X25519 key.
+  sequence: number;
+  encapsulation: bytes;
+  ciphertext: bytes;                 // HPKE-sealed CBOR(TrustSyncPayload).
+  proof: bytes;                      // Ed25519 signature by source.
+};
+```
+
+The sender seals `CBOR(TrustSyncPayload)` to the recipient's X25519 key under the [mandatory grant profile](core.md#mandatory-grant-profile) with `info = CBOR(["peep/trust-sync-info", 1, H])` and `aad = CBOR(["peep/trust-sync-aad", 1, H])`, where `H` is the message without `encapsulation`, `ciphertext`, and `proof`, then signs `CBOR(["peep/trust-sync", 1, messageWithoutProof])`. A payload is a complete snapshot of the source's shareable decisions, not a delta. Messages are ephemeral and confidential; they MUST NOT appear in evidence manifests or space repos. Transport remains [TODO-15](TODOs.md#todo-15).
+
+### Sending
+
+An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, or floor change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
+
+### Receiving
+
+1. **S1 — Validate.** Strictly decode the message, require the local binding as recipient, verify the signature, and open the payload. Require `source` and every payload `account` to equal the local account. Invalid input returns `INVALID`.
+2. **S2 — Authorize source.** Require `source` to be a locally accepted, unwithdrawn binding of the local account, established through pairing, approval, or independent verification. Reject messages first observed after the source's withdrawal under [withdrawn-approver ordering](#withdrawing-an-approver); retain decisions applied before it.
+3. **S3 — Order.** Ignore a `sequence` not greater than the highest applied from that source.
+4. **S4 — Apply.** For each entry, record a synced decision with provenance `sync`, naming the source:
+   - `verified` upgrades an exact TOFU pin or creates a verified pin. It satisfies [verified-only policy](core.md#device-verification-policy) for this installation.
+   - `tofu` creates a TOFU pin only where TOFU first use would be permitted. It never upgrades.
+   - `disputed` records a dispute for that binding.
+   - An entry whose binding differs from a local pin for the same account and device ID records a dispute; it MUST NOT replace the pin.
+   - Revoked bindings stay revoked.
+   For each listed space, enable the local floor. Absence from `floors` MUST NOT disable a floor.
+5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
+
+Synced decisions are retained if the source later withdraws or stops sending; a later snapshot omitting an entry does not remove it. Downgrading or clearing trust requires explicit local action, as for any pin. Sync cannot verify the local account's own new installations; those use [pairing or approval](#declarations).
 
 ## Declarations
 
@@ -229,13 +285,13 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; per-space verification floors and recorded effective-policy decisions; TOFU/direct/approval-derived verification, verification channels, and disputes; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; per-space verification floors and recorded effective-policy decisions; TOFU/direct/approval-derived/synced verification, verification channels, and disputes; per-source trust-sync sequences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust). Known missing floor state MUST NOT silently default to TOFU: recover the setting or obtain an explicit local user choice before permitting TOFU.
 
 ### Backup and transfer
 
-Use the application's protected backup or pairing container for keys and state together. Transfers MUST be authenticated and encrypted between the user's own trusted installations. Bind format/version, owner account, source installation/history, and the full payload; authenticate before import. Protect encryption with independent high-entropy key material that PDS login/reset cannot reveal or replace. Document key wrapping/KDF, integrity, rollback-detection limits, and atomic restore. [Platform support](#platform-notes) must be validated; a new interoperable backup or separate trust-sync protocol is not required.
+Use the application's protected backup or pairing container for keys and state together. Transfers MUST be authenticated and encrypted between the user's own trusted installations. Bind format/version, owner account, source installation/history, and the full payload; authenticate before import. Protect encryption with independent high-entropy key material that PDS login/reset cannot reveal or replace. Document key wrapping/KDF, integrity, rollback-detection limits, and atomic restore. [Platform support](#platform-notes) must be validated; a new interoperable backup protocol is not required; ongoing decisions use [own-device trust sync](#own-device-trust-sync).
 
 Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST merge per-space floors using the stricter value; imports cannot disable an enabled floor. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
 
@@ -261,6 +317,8 @@ Hardware backing and cross-app sharing are not assumed.
 | Windows | [CNG](https://learn.microsoft.com/en-us/windows/desktop/SecCNG/key-storage-and-retrieval) stores keys; [DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) does not by itself isolate same-user apps. |
 | Linux | [Secret Service](https://specifications.freedesktop.org/secret-service/latest-single/) leaves application access controls to implementations. |
 | Web | [WebCrypto](https://www.w3.org/TR/WebCryptoAPI/#concepts-key-storage) storage is normally origin-separated, without a common device keychain. |
+
+Background issuance and trust sync need installation keys while the app is not in the foreground, including from notification-handling extensions on iOS. Making keys available after first unlock rather than only while unlocked trades some at-rest protection for availability; applications MUST document the choice.
 
 Browser clients trust the application origin and its code-delivery infrastructure. Replacement code served on a subsequent load can use available installation keys to decrypt and exfiltrate content without enrolling another device. Non-extractable keys do not prevent this. Device verification and grant auditing neither prevent nor guarantee detection of this compromise.
 

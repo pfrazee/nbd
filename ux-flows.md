@@ -32,9 +32,11 @@ Admin Alice adds Bob.
 **Bob:**
 
 3. **Notification, then "Enable this space on this device?"**, listing his other devices too. This signs his declaration.
-4. **Locked state: "Waiting for a member to share access…"** The space name and member list (host data) are visible; content is not. His app sends a [grant request](core.md#distribution-scheduling).
-   - Any eligible member's device can fulfil it, not only Alice's.
-   - If no member device is online, Bob waits. Copy such as "This usually happens the next time another member opens the app" sets expectations.
+4. **Locked state: "Waiting for a member's device…"** The space name and member list (host data) are visible; content is not. His app publishes a [key request](core.md#key-requests). Bob can write drafts locally; they send when the space unlocks.
+   - **Background issuing:** members' devices are woken by a push notification and grant [in the background](core.md#distribution-scheduling). On iOS, the visible "Bob joined Book club" notification is the wake-up: its notification extension issues the grant. Usually Bob unlocks within seconds without anyone opening the app.
+   - **Visible prompt:** if nothing arrives within a short window, members get "Bob is waiting to join Book club. Open to share access." Opening the app grants immediately.
+   - **Always-on devices:** a member's desktop, home server, or hosted agent grants whenever it is running.
+   - Any eligible member's device can fulfil the request, not only Alice's. Bob is notified when the space unlocks.
 
 **TOFU path:**
 
@@ -53,7 +55,7 @@ Admin Alice adds Bob.
    - **Send a link:** the same session as a link, for sending through another app without a call.
 7. **Failure is neutral and final.** A wrong PIN, a used link, or expiry ends that session: "Verification failed. This can happen if the code was mistyped or someone is interfering. Start a new verification." After repeated failures, the app recommends meeting to scan.
 8. With the session complete, X's device issues the grant automatically.
-9. **Payoff:** verification belongs to a device pair, not a space, so it is reused everywhere. It extends through approvals: Bob's laptop, approved by his verified phone, shows as *Verified via Bob's phone*. In practice each pair of people verifies once.
+9. **Payoff:** verification belongs to a device pair, not a space, so it is reused everywhere. It extends through approvals: Bob's laptop, approved by his verified phone, shows as *Verified via Bob's phone*. It also reaches the verifier's own devices through [trust sync](device-enrollment.md#own-device-trust-sync): after Alice verifies Bob on her phone, her desktop and always-on devices can grant to him too. In practice each pair of people verifies once.
 
 **Copy rule:** PINs and links must not be sent through Bluesky DMs or posts. Whoever sees the secret first can complete the session in Bob's place, and DMs pass through the PDS this protects against.
 
@@ -69,7 +71,7 @@ Alice gets a new laptop.
 
 1. **Laptop:** install, log in, show "Link this device" with a QR code. Generating keys and publishing the device record grants nothing on its own.
 2. **Phone:** Devices → Link → scan. Then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☐ Family." Selection is per space, so this is a real choice; [batch enrollment](device-enrollment.md#declarations) MUST show exact spaces and changes. The phone signs one declaration per space.
-3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins, verification status, and floors move to the laptop so it does not TOFU everyone afresh. Provenance is preserved.
+3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins, verification status, and floors move to the laptop so it does not TOFU everyone afresh. Afterwards, [trust sync](device-enrollment.md#own-device-trust-sync) keeps the devices current as Alice verifies people on either one. Provenance is preserved.
 4. **The phone grants immediately** for each space's current epoch; the laptop reads full history. The laptop accepts because it paired directly with the phone.
 5. **Partial progress:** "3 of 4 spaces enabled. Retrying Work…"
 
@@ -106,11 +108,19 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 **Live mirroring** (true sub-spaces) would be host-side; PEEP consumes the resulting membership decisions. A parent removal would remove the account from every child, each of which must [rotate](core.md#triggers).
 
+## Keeping spaces available
+
+Delivery needs a running key holder. Applications layer three mechanisms:
+
+1. **Background issuing.** Key requests and new declarations trigger push notifications to members' devices, which run grant authorization and publish grants without the app being opened. iOS uses a notification service extension behind a visible notification; this requires installation keys to be readable after first unlock ([platform notes](device-enrollment.md#platform-notes)).
+2. **Visible prompts.** If no grant arrives within a short window, the requester's app asks members to open the space.
+3. **Always-on devices.** A desktop, home server, or hosted agent selected as an ordinary device. Communities can run one under an admin account. In verified-only spaces it relies on [own-device trust sync](device-enrollment.md#own-device-trust-sync) to learn its owner's verifications. Settings copy: "Keep your spaces available from this computer." Hosted agents should say who operates them, because they hold keys.
+
 ## Rough edges
 
 | # | Issue | Where | Status |
 | --- | --- | --- | --- |
-| UX-1 | **Locked until another member is online.** No server can hand out keys; a new member or device waits for an eligible holder. | Flows 2, 4 | Open |
+| UX-1 | **Locked until another member is online.** No server can hand out keys; a new member or device waits for an eligible holder. | Flows 2, 4 | Mitigated: [background issuing](core.md#distribution-scheduling) on push, visible member prompts as fallback, and always-on devices made viable in verified-only spaces by [own-device trust sync](device-enrollment.md#own-device-trust-sync). A space whose holders are all offline and unreachable by push still waits. |
 | UX-2 | **Verified-only verification is mutual and heavy.** Each direction needed its own check, both with the same member, and remote checks meant comparing 64 characters. | Flow 2 | Addressed: single-use mutual [verification sessions](device-enrollment.md#independent-verification) over QR, link, or 6-digit PIN; the static code is removed. |
 | UX-3 | **Every space needs a separate opt-in from each member**, including spaces derived from an existing one. | Flow 4 | Open |
 | UX-4 | **Losing every device forces re-verification even under TOFU**, and content where the user held the only key copies is lost. | Flow 3 | Open |
