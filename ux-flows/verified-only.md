@@ -31,7 +31,7 @@ Admin Alice adds Bob.
 
 **Alice:**
 
-1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [required](../core.md#trusted-host-state); [history wrapping](../core.md#backward-history-wrapping) makes past content part of membership.
+1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [recommended](../core.md#trusted-host-state), and space info also states it; [history wrapping](../core.md#backward-history-wrapping) makes past content part of membership.
 2. **Verified invite (optional):** the invitation can open a [verification session](../device-enrollment.md#independent-verification) addressed to Bob and offer its 6-digit code or link to share through another app. Bob enters it when he joins, so inviting and verifying are one step.
 3. **Every member sees "Alice added Bob"** in the timeline.
 

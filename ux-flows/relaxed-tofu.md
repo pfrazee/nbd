@@ -10,28 +10,28 @@ The same as [TOFU](tofu.md#what-protects-these-spaces): devices are trusted on f
 
 | Still required | Omitted or hidden |
 | --- | --- |
-| Admission explains that new members see retained history ([host state](../core.md#trusted-host-state)). | Policy choice at creation: every space is TOFU. |
-| Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | Trust badges and the Verify action. |
-| Joining shows the resulting device set and allows changes ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). | Recovery kit prompts: users without verified relationships are never prompted. |
-| Linking a device shows the exact device and spaces ([batch enrollment](../device-enrollment.md#declarations)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
-| Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The sole-holder indicator and device-list detail. |
-| A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | |
-| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | |
+| Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | Policy choice at creation: every space is TOFU. |
+| Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
+| Linking confirms adding a device, with an access warning ([declarations](../device-enrollment.md#declarations)). | The space list and keys when linking: new devices join every space. |
+| Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
+| A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
+| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | Recovery kit prompts: users without verified relationships are never prompted. |
+| | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
+| | The sole-holder indicator and device-list detail. |
 
 ## Creating a space
 
-1. **"New space" form:** name and optional members. No security choices.
-2. **"Creating on 2 devices · Change."** Creating the space is the confirmation.
-3. **"Securing space…"** until the host accepts epoch 1; drafts persist and retry quietly.
-4. **Space opens.**
+1. **"New space" form:** name and optional members. No security choices. Tapping **Create** selects all of the user's devices.
+2. **"Securing space…"** until the host accepts epoch 1; drafts persist and retry quietly.
+3. **Space opens.** Space info includes "Everyone in this space can read its full history."
 
 ## Adding a member
 
 Alice adds Bob.
 
-1. **Invite Bob:** "Bob will be able to read everything already posted here." One line in the invite sheet satisfies the history requirement.
+1. **Invite Bob.** No history explanation; space info carries it.
 2. **Timeline:** "Alice added Bob."
-3. **Bob taps "Join Book club" · "Joining on 2 devices · Change."**
+3. **Bob taps "Join Book club".** All his devices join; no device list is shown.
 4. **Bob waits briefly:** "Getting access…" while members' devices grant [in the background](tofu.md#keeping-spaces-available). If nothing arrives, members get "Bob is waiting to join Book club."
 5. **Unlock.** Devices pin each other on first sight. No badges, no verification prompts.
 6. **Key changes appear as a timeline line:** "Bob's devices changed." No modal, no action required. This is the one routine security notice other members see.
@@ -39,7 +39,7 @@ Alice adds Bob.
 ## Adding a device
 
 1. **Laptop:** "Link this device" with a QR code.
-2. **Phone:** scan, then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☑ Family", all checked by default. The phone grants immediately.
+2. **Phone:** scan, then one confirmation: "Link *Windows PC* to your account? It will be able to read all your spaces. Only link devices you own." The name is reported by the laptop and is not proof of anything; the warning is what counters tricks to scan an attacker's code. The laptop joins every space and the phone grants immediately.
 3. **Alice's other devices:** "New device: *Alice's Laptop*, added from *iPhone*. Not you? Remove it." This notice and its removal action are required; they are how Alice catches a compromised device adding an attacker's.
 4. **Other members:** nothing.
 

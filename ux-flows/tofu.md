@@ -30,7 +30,7 @@ Admin Alice adds Bob.
 
 **Alice:**
 
-1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [required](../core.md#trusted-host-state); [history wrapping](../core.md#backward-history-wrapping) makes past content part of membership.
+1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [recommended](../core.md#trusted-host-state), and space info also states it; [history wrapping](../core.md#backward-history-wrapping) makes past content part of membership.
 2. **Every member sees "Alice added Bob"** in the timeline.
 
 **Bob:**
