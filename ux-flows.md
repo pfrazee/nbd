@@ -5,12 +5,11 @@ Informative. This document sketches user-facing flows implied by [Core](core.md)
 ## UI vocabulary
 
 - **Space policy** (host): *Allow unverified devices* (`tofu-permitted`, default) or *Require verified devices* (`verified-only`). Chosen at creation and [fixed for the life of the space](core.md#device-verification-policy).
-- **My stricter setting**: the per-space [local floor](core.md#device-verification-policy), offered only in spaces that allow unverified devices. Private to one client; only explicit local action disables it. Policy UI MUST distinguish host policy from local effective policy.
 - **Trust badge** per device: *Unverified* (TOFU), *Verified*, or *Verified via \<their other device\>* (approval-derived).
 
 ## 1. Creating a new space
 
-1. **"New space" form**: name, optional members, and *Allow unverified devices* / *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space." For spaces that allow unverified devices, Advanced offers "Always require verification on this device" (the floor).
+1. **"New space" form**: name, optional members, and *Allow unverified devices* / *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space."
 2. **"Creating on 3 devices · Change."** The device set comes from each device's [enrollment preference](device-enrollment.md#enrollment-preferences): *Automatically* devices are included, *Ask* devices appear unchecked, *Never* devices are omitted. This device is always included. Creating the space is the confirmation.
    - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](device-enrollment.md#bindings-and-publication). It signs the initial [declaration](device-enrollment.md#declarations) with `previous: []`.
 3. **"Securing space…"**: the epoch 1 key is generated and the [activation request](core.md#client-activation-states) submitted. Posting waits for acceptance. On network loss, the draft persists and the exact request is retried; the UI should not report failure while the outcome is unknown.
@@ -72,7 +71,7 @@ Alice gets a new laptop.
 
 1. **Laptop:** install, log in, show "Link this device" with a QR code. Generating keys and publishing the device record grants nothing on its own.
 2. **Phone:** Devices → Link → scan. Then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☐ Family." Selection is per space, so this is a real choice; [batch enrollment](device-enrollment.md#declarations) MUST show exact spaces and changes. The phone signs one declaration per space. The same screen asks once about the future: "Include *Alice's Laptop* in spaces you join later?" (*Automatically* / *Ask each time* / *Never*). The answer becomes the laptop's [enrollment preference](device-enrollment.md#enrollment-preferences) and syncs to Alice's other devices.
-3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins, verification status, and floors move to the laptop so it does not TOFU everyone afresh. Afterwards, [trust sync](device-enrollment.md#own-device-trust-sync) keeps the devices current as Alice verifies people on either one. Provenance is preserved.
+3. **Pairing transfers [private state](device-enrollment.md#backup-and-transfer):** pins and verification status move to the laptop so it does not TOFU everyone afresh. Afterwards, [trust sync](device-enrollment.md#own-device-trust-sync) keeps the devices current as Alice verifies people on either one. Provenance is preserved.
 4. **The phone grants immediately** for each space's current epoch; the laptop reads full history. The laptop accepts because it paired directly with the phone.
 5. **Partial progress:** "3 of 4 spaces enabled. Retrying Work…"
 6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, not per space, and none on the approving phone. Removing it revokes the laptop and rotates affected spaces. This catches a compromised device approving an attacker's device, which only Alice can recognise ([own-account notices](audit.md#direct-sync)).
@@ -101,14 +100,13 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 | [Device trust](device-enrollment.md#local-trust) (TOFU pins, verified status): no re-verification. | Membership: each admission is a separate host decision (the app can prefill it). |
 | Public device records. | Declarations: each member enables each device again, per space. |
 | | Keys and history: the new space starts at epoch 1 with empty history; parent content is not readable through it. |
-| | Policy and floors: the app can copy host policy, and a derived space is how a group changes policy; local floors are private and tied to the exact space URI. |
+| | Policy: the app can copy the parent's policy, and a derived space is how a group changes policy. |
 
 1. **"New space from Book club…"** prefills the parent's members and policy. Copy: "Members are copied; messages aren't."
 2. **Creator:** as in [flow 1](#1-creating-a-new-space); enrollment preferences choose the devices.
 3. **Each member:** "Alice added you to *Book club – spoilers*." Each taps **Join** once; [enrollment preferences](device-enrollment.md#enrollment-preferences) choose their devices, and their other devices unlock through background issuing. Being added alone enrolls nothing, so members who never tap Join stay locked.
 4. **Key exchange is fast.** Pairs verified in the parent are already verified; even in a verified-only space, grants arrive as soon as a member's declaration lands.
 
-**Floors don't follow.** Bob's floor on the parent does not apply, and his client has no protocol-level way to know the spaces are related. If the app records the link, it could ask: "You require verification in Book club. Require it here too?"
 
 **Live mirroring** (true sub-spaces) would be host-side; PEEP consumes the resulting membership decisions. A parent removal would remove the account from every child, each of which must [rotate](core.md#triggers).
 
@@ -140,4 +138,4 @@ Delivery needs a running key holder. Applications layer three mechanisms:
 | UX-5 | **Joining always includes full history.** "From now on" requires a new space. | Flow 2 | Accepted by design: history cuts would need join-time rotations in only some spaces, a likely source of failed implementations. Spaces wanting joiners without history start a new space. |
 | UX-6 | **Other members aren't told about device additions.** | Flow 3 | Addressed: the account holder's own devices [notify them](audit.md#direct-sync) of every device change they didn't approve, with removal; unapproved TOFU key changes are shown to everyone; approved additions appear passively in device lists. Users with no honest device online get no notice. |
 | UX-7 | **Sole key copy at creation.** Until a second device or backup holds epoch 1, losing the creating device loses that content. | Flow 1 | Partly addressed: a selected [recovery kit](#recovery-kits) receives epoch 1 in the first grant pass. Users without a kit, a second device, or a backup keep the risk. |
-| UX-8 | **Floors don't follow derived spaces.** Clients cannot tell spaces are related without application metadata. | Flow 4 | Open |
+| UX-8 | **Floors don't follow derived spaces.** Clients cannot tell spaces are related without application metadata. | Flow 4 | Resolved by removing local floors: policy is fixed per space, verified relationships already bind in TOFU spaces, and a group wanting verification creates a verified-only space. |

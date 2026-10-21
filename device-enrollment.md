@@ -18,7 +18,7 @@ Publish `{ $type: "com.example.peep.device", value: binding }` in the account's 
 Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist TOFU pins and verified status independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires repeat verification of an unchanged binding. Verified pins are binding; TOFU pins are advisory:
 
 - **Verified accounts.** If a client holds an unwithdrawn verified binding (direct, approval-derived, or synced) for an account, any new or changed binding for that account requires same-account approval rooted in a verified binding or independent verification. A changed component of a verified binding without approval records a dispute.
-- **TOFU key change.** Otherwise, where the [effective policy](core.md#device-verification-policy) for the exchange is `tofu-permitted`, a client MAY accept a new or changed binding without an approval path as a TOFU key change. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
+- **TOFU key change.** Otherwise, in a space whose [verification policy](core.md#device-verification-policy) is `tofu-permitted`, a client MAY accept a new or changed binding without an approval path as a TOFU key change. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
 - **Approved changes.** Same-account approval rooted in a pinned binding carries its TOFU or verified provenance.
 
 Clients MUST NOT silently replace a pin or downgrade trust. A client that loses its own state MAY pin again under TOFU only where TOFU is permitted, and MUST report the loss.
@@ -121,7 +121,6 @@ type TrustSyncPayload = {
   account: string;                   // Sender and recipient account.
   sequence: number;                  // Per-source monotonic.
   trust: TrustEntry[];               // Set; at most one entry per binding ID.
-  floors: string[];                  // Set of exact space URIs with an enabled floor.
   enrollment: EnrollmentPreference[]; // Set; at most one entry per deviceId.
 };
 
@@ -146,7 +145,7 @@ The sender seals `CBOR(TrustSyncPayload)` to the recipient's X25519 key under th
 
 ### Sending
 
-An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, floor, or [enrollment preference](#enrollment-preferences) change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
+An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, or [enrollment preference](#enrollment-preferences) change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
 
 ### Receiving
 
@@ -159,7 +158,6 @@ An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of
    - `disputed` records a dispute for that binding.
    - An entry whose binding differs from a local verified pin for the same account and device ID records a dispute; it MUST NOT replace the pin. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry is handled as a [TOFU key change](#local-trust) where permitted, and otherwise records a dispute.
    - Revoked bindings stay revoked.
-   For each listed space, enable the local floor. Absence from `floors` MUST NOT disable a floor.
    Record each `enrollment` entry for the source itself or a recovery binding anchored by the source, replacing that device's earlier synced preference; ignore entries for other devices.
 5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
 
@@ -206,7 +204,7 @@ Each declaration's `previous` set names same-account, same-space predecessors: n
 `ObserveDeclaration(candidate, account, space, state)` MUST perform D1–D4 before changing the current selection:
 
 1. **D1 — Validate.** Check schema, CID, exact account/space, and signature. Authenticate the signer through [retained trust, permitted first-use TOFU, or a permitted TOFU key change](#local-trust), [approval](#declarations), or [independent verification](#independent-verification), applying [withdrawn-approver rules](#withdrawing-an-approver). Invalid data returns `INVALID`; missing required evidence returns `INCOMPLETE`; prohibited new authority returns `BLOCKED`. Previously accepted snapshots and historical ancestors MAY be checked as retained evidence without restoring authority or accepting new approvals; a withdrawn signer cannot authorize a newly accepted selection.
-2. **D2 — Bootstrap.** On genuine first observation with no saved declaration state or known conflict, a client MAY persist the complete authenticated candidate as starting point/current selection and return `OK` without fetching predecessors. Otherwise continue to D3. Existing account pins and withdrawals still apply. Known state loss MUST use [recovery](#recovery), not this shortcut, except that a client MAY bootstrap again where its effective policy is `tofu-permitted`, recording the loss.
+2. **D2 — Bootstrap.** On genuine first observation with no saved declaration state or known conflict, a client MAY persist the complete authenticated candidate as starting point/current selection and return `OK` without fetching predecessors. Otherwise continue to D3. Existing account pins and withdrawals still apply. Known state loss MUST use [recovery](#recovery), not this shortcut, except that a client MAY bootstrap again in TOFU-permitted spaces, recording the loss.
 3. **D3 — Compare.** Otherwise fetch and authenticate enough ancestry to compare the candidate, retained tips, and newly discovered branches, including history preceding bootstrap when needed. Check every traversed edge's scope and reject cycles. Persist unresolved authenticated candidates and return `INCOMPLETE` if a required comparison is unknown or exceeds the work budget; affected grants remain blocked. Missing paths MUST NOT create a conflict or erase saved tips.
 4. **D4 — Commit.** Apply the following cases to the validated graph and persist snapshots, tips, and the result atomically. A complete signed resolution must cover all known competing tips, directly or through validated resolution ancestry.
 
@@ -252,7 +250,7 @@ Publish under [record conventions](core.md#records). Enumerate public revocation
 
 Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new declarations by the withdrawn signer.
 
-Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. Where the effective policy is `tofu-permitted` and no verified binding for the account exists, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; otherwise clients MUST require another accepted, unwithdrawn approver or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
+Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. In a TOFU-permitted space where no verified binding for the account exists, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; otherwise clients MUST require another accepted, unwithdrawn approver or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
 ### Revocation processing
 
@@ -304,17 +302,17 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; per-space verification floors, first-observed host policies, and recorded effective-policy decisions; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
-Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust). Known missing floor state MUST NOT silently default to TOFU: recover the setting or obtain an explicit local user choice before permitting TOFU.
+Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
 
 ### Backup and transfer
 
 Use the application's protected backup or pairing container for keys and state together. Transfers MUST be authenticated and encrypted between the user's own trusted installations. Bind format/version, owner account, source installation/history, and the full payload; authenticate before import. Protect encryption with independent high-entropy key material that PDS login/reset cannot reveal or replace. Document key wrapping/KDF, integrity, rollback-detection limits, and atomic restore. [Platform support](#platform-notes) must be validated; a new interoperable backup protocol is not required; ongoing decisions use [own-device trust sync](#own-device-trust-sync).
 
-Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST merge per-space floors using the stricter value; imports cannot disable an enabled floor. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
+Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
 
-An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or withdrawal cutoffs. A key-only restore recovers no verification floors or trust/declaration/audit history; report the loss and require explicit recovery.
+An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or withdrawal cutoffs. A key-only restore recovers no trust/declaration/audit history; report the loss and require explicit recovery.
 
 ### Replacement
 
@@ -322,7 +320,7 @@ A surviving, locally accepted, unwithdrawn device may approve fresh same-account
 
 One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
-Removal/re-invitation follows host administration but cannot reset local verification floors, pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Cross-application backup portability is outside the baseline; [recovery bindings](#recovery-bindings) need no dedicated recovery authority.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Cross-application backup portability is outside the baseline; [recovery bindings](#recovery-bindings) need no dedicated recovery authority.
 
 ### Recovery bindings
 
