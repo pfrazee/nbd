@@ -8,7 +8,7 @@ PEEP targets retained shared data in atproto Spaces. Current members may read pr
 
 Independent device verification prevents PDS key substitution under the endpoint trust assumptions. TOFU instead accepts initial-substitution risk and relies on conditional later discovery through published grants and direct repo sync. Local verification avoids transferable-attestation infrastructure. Grant evidence records the actual recipient selection and decision, while normal Spaces access governs who can audit it.
 
-A fresh key per epoch and immutable backward wraps make retained history available through a small number of device grants. Missing wraps have direct-grant fallback; unavailable active keys have fresh-epoch recovery. These choices trade stronger secrecy and freshness guarantees for history access and asynchronous operation. Current-key compromise exposes connected history, revocation takes effect only when learned, and availability is conditional. Trust in the host and application software remains essential.
+A fresh key per epoch and immutable backward wraps make retained history available through a small number of device grants. Fresh epochs can bridge earlier history gaps; possession of older keys alone gives no access to the new bridges. Missing wraps retain direct-grant fallback; unavailable active keys have fresh-epoch recovery. These choices trade stronger secrecy and freshness guarantees for history access and asynchronous operation. Current-key compromise exposes connected history, revocation takes effect only when learned, and availability is conditional. Trust in the host and application software remains essential.
 
 ## Comparison
 
@@ -23,6 +23,31 @@ The comparison concerns key mechanisms and their integration, rather than every 
 
 ## Why not MLS now?
 
-History access does not rule out MLS. The RFC defines [exporters](https://www.rfc-editor.org/rfc/rfc9420.html#section-8.5) for application secrets. An application could use separately retained archive keys and share them with new members over MLS; that is an architectural option inferred from these facilities, not an archive feature promised by the RFC. The archive would have its own retention and compromise semantics.
+### The requirements diverge where MLS is strongest
 
-PEEP's present choice is a narrow fit to Spaces' trusted membership host, retained data, reusable local device trust, and repo-published audit evidence. Simplicity is an objective, not a demonstrated advantage: PEEP avoids group-ratchet state but introduces enrollment, revocation, recovery, and audit machinery that requires independent review. MLS brings standardized security analysis and stronger guarantees that PEEP explicitly does not provide. A comparison implementation or a requirement for forward secrecy/post-compromise security would justify revisiting this choice.
+MLS is designed so that compromise of a member's state exposes as little past and future traffic as possible. PEEP's central requirement runs the other way: current members, including newly joined devices, read the space's retained history. Any device able to read that history exposes it if compromised, whatever key-agreement protocol delivered its keys. For retained Spaces content, MLS's forward secrecy therefore protects little beyond the key-agreement state itself.
+
+History access does not rule out MLS. The RFC defines [exporters](https://www.rfc-editor.org/rfc/rfc9420.html#section-8.5) for application secrets. An application could keep separately retained archive keys and send them to new members over MLS; that is an architectural option inferred from these facilities, not an archive feature promised by the RFC. Doing so means rebuilding most of PEEP on top of MLS:
+
+| PEEP component | Still required with MLS? |
+| --- | --- |
+| Retained per-epoch content keys and [backward history wrapping](core.md#backward-history-wrapping) | Yes. MLS epoch secrets are deleted as the group advances, and a Welcome bootstraps only the current epoch. Pre-join history needs a separate retained key chain with its own compromise semantics. |
+| Host [membership and epoch order](core.md#trusted-host-state) | Yes. Spaces already gives the host membership authority, and MLS needs a delivery service to order commits. Clients could refuse additions no member committed, but that would contradict Spaces administration rather than reduce host trust in practice. |
+| [Declarations](device-enrollment.md#declarations), [local trust](device-enrollment.md#local-trust), and [revocation](device-enrollment.md#device-revocations) | Yes. MLS authenticates leaves through credentials whose validation the application defines. Mapping atproto accounts to app installations, verifying bindings, and making revocation permanent across spaces stay application work. |
+| [Grant evidence](audit.md#evidence) and [auditing](audit.md) | Yes, or a replacement. The MLS transcript authenticates group operations to members, but it is not repo-published evidence of who released which keys under which authorization. |
+| [Content encryption](core.md#content-encryption) | Mostly. Retained records and blobs need keys that outlive MLS epochs, so content would be encrypted under the archive keys rather than MLS application messages. |
+
+What MLS would replace is the narrowest part of PEEP: [delivering each epoch key to selected devices](core.md#key-grants). PEEP does that with one HPKE grant per device.
+
+### Costs MLS adds for Spaces
+
+- **Per-space group state.** Applications create spaces frequently. Each would be an MLS group whose ratchet tree every device stores and updates. A PEEP device needs only its keys and the grants addressed to it.
+- **Ordered processing.** MLS members process commits in epoch order. An offline device must replay every missed commit, or rejoin, before it can follow the group, and lost state is hard to recover. PEEP grants can be read independently and in any order; one grant to the current epoch, plus backward wraps, recovers connected history.
+- **Epoch churn from device changes.** Adding or removing a device in MLS requires a commit that advances the epoch for every member, in every space the device joins. In PEEP, additions require no rotation; the new device simply receives grants.
+- **Key package supply.** Joining via Welcome consumes a key package that is generally single-use. Devices would publish and replenish key packages in their repos, adding availability and exhaustion cases that PEEP's long-lived published device keys avoid.
+
+### What PEEP gives up
+
+MLS brings standardized security analysis and stronger guarantees that PEEP explicitly does not provide. The most relevant loss is post-compromise security for device keys. In PEEP, an attacker who silently copies a device's encryption key can decrypt every later grant to that device until the binding is revoked, because rotating the epoch key does not replace the device key. MLS heals this once the device sends an update. For large spaces, MLS commits also cost roughly logarithmic rather than linear work in the number of devices, while PEEP rotation issues one grant per device.
+
+Simplicity is an objective, not a demonstrated advantage: PEEP avoids group-ratchet state but introduces enrollment, revocation, recovery, and audit machinery that requires independent review. A comparison implementation, very large spaces, or a requirement for post-compromise security would justify revisiting this choice. A middle option would use MLS only to deliver PEEP's epoch keys while keeping history wrapping and host authority. Periodic device encryption-key rotation could narrow the post-compromise gap without MLS.
