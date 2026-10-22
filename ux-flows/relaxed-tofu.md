@@ -56,7 +56,7 @@ Alice adds Bob.
 
 ### Removing a member or device
 
-Removal and **I lost a device** take effect at once, with nothing held back. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The removal notice offers **Move to a new space** for groups that want her locked out of new messages.
+Removal and **I lost a device** take effect at once, with nothing held back. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The notice does not suggest moving to a new space.
 
 ### Alarms
 
@@ -71,7 +71,7 @@ Relaxed presentation does not soften these. They are integrity alarms, not routi
 
 Surfaces the specification requires to exist but allows to be buried:
 
-- **Devices & security:** the user's devices, **Link a new device**, and **New devices join spaces** (*Automatically* by default), which replaces the future-spaces question skipped during linking. **I lost a device** removes a lost device: it revokes the binding, so the device gets no new keys, and offers to move affected spaces.
+- **Devices & security:** the user's devices, **Link a new device**, and **New devices join spaces** (*Automatically* by default), which replaces the future-spaces question skipped during linking. **I lost a device** removes a lost device: it revokes the binding, so the device gets no new keys.
 - **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, including accepted key changes ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
@@ -87,6 +87,6 @@ Surfaces the specification requires to exist but allows to be buried:
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
 | Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
-| Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | Moving to a new space as the default response to a removal. |
+| Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | |
 | | The sole-holder indicator and device-list detail. |
 

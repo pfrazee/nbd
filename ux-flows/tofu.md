@@ -61,7 +61,7 @@ Alice gets a new laptop.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** pins and verifications move to the laptop so it does not pin everyone afresh, and [trust sync](../device-enrollment.md#own-device-trust-sync) keeps them current afterwards.
 4. **The phone grants immediately**; the laptop reads full history. "3 of 4 spaces enabled. Retrying Work…" covers partial progress.
 5. **Other members:** the laptop is approved by Alice's phone, so it inherits whatever trust they had in the phone: *Verified via Alice's iPhone* or unverified. No timeline notice; device lists show "Alice · 3 devices".
-6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received, so the notice also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
+6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received. A device Alice never approved means her account or PDS may be compromised, so this notice, unlike an ordinary device removal, also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
 
 ![Adding a device in TOFU: the laptop code, batch enrollment with the future-spaces question, pins and verifications transferring, the device list other members see, and the new-device notice on Alice's iPad](images/tofu-adding-a-device.png)
 
@@ -75,7 +75,7 @@ Alice gets a new laptop.
 
 ## Creating a space from an existing space
 
-PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group locks out a [removed member](#removing-a-member-or-device).
+PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group leaves a space it credibly believes is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)); it is not a response to [removing a member](#removing-a-member-or-device).
 
 | Carries over | Doesn't carry over |
 | --- | --- |
@@ -94,7 +94,7 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 1. **Removal is immediate.** Removing Carol from Book club or removing a lost device takes effect as soon as members' apps and the host learn of it: no new grants to her devices, and the host stops serving her the space. Nothing is held back; posting continues.
 2. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
-3. **"Move to a new space"** accompanies the removal notice, and the same offer appears for a suspected compromised key: "To make sure Carol can't read new messages, move to a new space." It runs [creating a space from an existing space](#creating-a-space-from-an-existing-space) prefilled with the remaining members. The old space stays readable to its members.
+3. **No move offered.** Removal is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
 
 ## Keeping spaces available
 

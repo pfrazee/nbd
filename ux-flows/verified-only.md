@@ -65,7 +65,7 @@ Alice gets a new laptop.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** Alice's verifications move to the laptop, and [trust sync](../device-enrollment.md#own-device-trust-sync) keeps them current afterwards. The laptop can grant to everyone Alice verified.
 4. **The phone grants immediately**; the laptop reads full history. "3 of 4 spaces enabled. Retrying Work…" covers partial progress.
 5. **Other members need no ceremony.** Anyone who verified Alice's phone sees the laptop as *Verified via Alice's iPhone*. Device lists show "Alice · 3 devices"; apps may add a subtle indicator for a recent addition, never a gate.
-6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received, so the notice also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
+6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received. A device Alice never approved means her account or PDS may be compromised, so this notice, unlike an ordinary device removal, also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
 
 ![Adding a device in verified-only: the laptop code, batch enrollment, other members seeing the laptop as Verified via Alice's iPhone with no ceremony, and the new-device notice on Alice's iPad](images/verified-only-adding-a-device.png)
 
@@ -78,7 +78,7 @@ Alice gets a new laptop.
 
 ## Creating a space from an existing space
 
-PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group locks out a [removed member](#removing-a-member-or-device).
+PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group leaves a space it credibly believes is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)); it is not a response to [removing a member](#removing-a-member-or-device).
 
 | Carries over | Doesn't carry over |
 | --- | --- |
@@ -94,9 +94,9 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 ## Removing a member or device
 
-1. **Moving is the default.** Removing Carol from Book club, removing a lost device, or reporting a suspected compromised key asks "Remove Carol and move to a new space?" with moving preselected ([replacing a space](../core.md#replacing-a-space)). Moving runs [creating a space from an existing space](#creating-a-space-from-an-existing-space) without Carol; verified pairs join immediately. The old space stays readable to its members.
-2. **Removal alone is immediate.** Either way, Carol's devices get no new grants and the host stops serving her the space; posting continues.
-3. **Copy is honest.** If the group stays, the timeline says "Carol was removed," never that new messages are protected from her, and space info explains that her devices still hold the key ([no rotation](../core.md#no-rotation)).
+1. **Removal is immediate.** Removing Carol from Book club or removing a lost device takes effect as soon as members' apps and the host learn of it: Carol's devices get no new grants and the host stops serving her the space; posting continues.
+2. **No move offered.** Removal is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
+3. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her, and space info explains that her devices still hold the key ([no rotation](../core.md#no-rotation)).
 
 ## Keeping spaces available
 
