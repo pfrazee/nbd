@@ -24,6 +24,8 @@ The policy is chosen at creation and [fixed for the life of the space](../core.m
 
 **Sole-holder indicator:** whenever this device is the only known holder of the active key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device". A recovery kit is linked only where [kits are suggested](#recovery-kits).
 
+![Creating a space in TOFU: the form with the permanent policy choice, the device set from enrollment preferences, "Securing space…", the sole-holder note, and space info with Unverified badges](images/tofu-creating-a-space.png)
+
 ## Adding a member
 
 Admin Alice adds Bob.
@@ -48,6 +50,8 @@ Admin Alice adds Bob.
    - Pins are never silently replaced; every accepted change is recorded.
 8. **Alarms:** Bob's client alarms if it finds a grant to a device he never selected, or records in his repo for devices he doesn't recognise ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to *Book club*." These are the main defense against substitution, so they are prominent.
 
+![Adding a member in TOFU: invite with the history warning, the timeline line, Bob joining on 3 devices, the brief locked state, badges with Verify, the three verification channels, a key change as seen by TOFU-only and verified members, and the own-account alarm](images/tofu-adding-a-member.png)
+
 ## Adding a device
 
 Alice gets a new laptop.
@@ -59,6 +63,8 @@ Alice gets a new laptop.
 5. **Other members:** the laptop is approved by Alice's phone, so it inherits whatever trust they had in the phone: *Verified via Alice's iPhone* or unverified. No timeline notice; device lists show "Alice · 3 devices".
 6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop and rotates affected spaces ([own-account notices](../audit.md#direct-sync)).
 
+![Adding a device in TOFU: the laptop code, batch enrollment with the future-spaces question, pins and verifications transferring, the device list other members see, and the new-device notice on Alice's iPad](images/tofu-adding-a-device.png)
+
 ## Losing every device
 
 1. **"Restore from backup"** (same keys and state) or **"Start fresh"**. **"Use a recovery kit"** appears if Alice has one.
@@ -66,6 +72,8 @@ Alice gets a new laptop.
 3. **Verified relationships still need re-verification.** Anyone who verified Alice sees "Alice has a new device that isn't linked to her old ones. Verify to share with her." Alice's new device lists them and opens one session per contact from a single screen. A [recovery kit](#recovery-kits) avoids this.
 4. **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
 5. Copy is honest: "Resetting your account password can't restore encrypted access."
+
+![Losing every device in TOFU: fresh install with recovery options, one line for TOFU contacts, verified contacts asked to verify again, re-verifying from one screen, and history restoring](images/tofu-losing-every-device.png)
 
 ## Creating a space from an existing space
 
@@ -82,6 +90,8 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 2. **Creator:** as in [creating a space](#creating-a-space).
 3. **Each member taps Join once;** existing pins carry over, so grants arrive as soon as declarations land.
 
+![Creating a space from an existing space in TOFU: the prefilled form with the policy choice as the upgrade path, and Bob joining with one tap](images/tofu-creating-from-existing.png)
+
 ## Recovery kits
 
 A [recovery binding](../device-enrollment.md#recovery-bindings) is optional. In TOFU spaces, starting fresh is already cheap, so kits matter only to users with verified relationships.
@@ -91,8 +101,12 @@ A [recovery binding](../device-enrollment.md#recovery-bindings) is optional. In 
 - **Other members** see one more device for the user, approved by an existing one, and need do nothing.
 - **If the code may be exposed:** "Replace recovery kit" revokes the old one and creates a new one, which rotates the affected spaces.
 
+![Recovery kits in TOFU: the one-time suggestion after a first verification, the code shown once with protected spaces, and the settings to replace or delete the kit](images/tofu-recovery-kits.png)
+
 ## Keeping spaces available
 
 1. **Background issuing.** Key requests and new declarations trigger push notifications to members' devices, which grant without the app being opened ([distribution](../core.md#distribution-scheduling)). On iOS, the visible "Bob joined Book club" notification's service extension does the work, which requires installation keys readable after first unlock ([platform notes](../device-enrollment.md#platform-notes)).
 2. **Visible prompts.** If no grant arrives within a short window, the requester's app asks members to open the space: "Bob is waiting to join Book club. Open to share access."
 3. **Always-on devices.** A desktop, home server, or hosted agent selected as an ordinary device grants whenever it is running. Settings copy: "Keep your spaces available from this computer." Hosted agents say who operates them, because they hold keys.
+
+![Keeping spaces available in TOFU: background issuing behind a lock-screen notification, the visible prompt to open the space, and always-on device settings](images/tofu-keeping-spaces-available.png)

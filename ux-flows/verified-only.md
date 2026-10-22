@@ -25,6 +25,8 @@ The policy is chosen at creation and [fixed for the life of the space](../core.m
 
 **Sole-holder indicator:** whenever this device is the only known holder of the active key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device" and "Save a recovery kit". A kit selected at creation receives epoch 1 in the first grant pass, so the note never appears.
 
+![Creating a space in verified-only: the form with Require verified devices selected, "Securing space…", the sole-holder note with Add a device and Save a recovery kit, the kit suggestion, and space info with Verified and Waiting for verification states](images/verified-only-creating-a-space.png)
+
 ## Adding a member
 
 Admin Alice adds Bob.
@@ -55,6 +57,8 @@ Admin Alice adds Bob.
 
 **Key changes:** if Bob's keys change without approval from a verified Bob device, every member's client blocks: "Bob's device changed. Verify to continue." Grants to and from that device stop until Bob is re-verified or an approval resolves the [dispute](../device-enrollment.md#independent-verification).
 
+![Adding a member in verified-only: invite with the history warning and a verification code, the timeline line, Bob locked until he verifies with any member, the three channels, the 6-digit code on both sides, a neutral failure, unlocking, and a key change that blocks everyone](images/verified-only-adding-a-member.png)
+
 ## Adding a device
 
 Alice gets a new laptop.
@@ -66,6 +70,8 @@ Alice gets a new laptop.
 5. **Other members need no ceremony.** Anyone who verified Alice's phone sees the laptop as *Verified via Alice's iPhone*. Device lists show "Alice · 3 devices"; apps may add a subtle indicator for a recent addition, never a gate.
 6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop and rotates affected spaces ([own-account notices](../audit.md#direct-sync)).
 
+![Adding a device in verified-only: the laptop code, batch enrollment, other members seeing the laptop as Verified via Alice's iPhone with no ceremony, and the new-device notice on Alice's iPad](images/verified-only-adding-a-device.png)
+
 ## Losing every device
 
 1. **"Restore from backup"** (same keys and state), **"Use a recovery kit"**, or **"Start fresh"**.
@@ -73,6 +79,8 @@ Alice gets a new laptop.
 3. **Starting fresh** means [re-verification](../device-enrollment.md#replacement): Alice and each member she exchanges keys with must verify again; one session per contact covers both directions. The new device lists those contacts and opens the sessions from a single screen. Contacts see "Alice has a new device that isn't linked to her old ones. Verify to share with her."
 4. **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
 5. Copy is honest: "Resetting your account password can't restore encrypted access."
+
+![Losing every device in verified-only: recovery options, entering the recovery code, old devices removed after recovery, re-verifying with each contact from one screen when there is no kit, and history restoring](images/verified-only-losing-every-device.png)
 
 ## Creating a space from an existing space
 
@@ -88,6 +96,8 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 2. **Creator:** as in [creating a space](#creating-a-space).
 3. **Each member taps Join once.** Pairs verified in the parent or any other space unlock immediately. Members who were only TOFU-pinned in a TOFU parent must verify with one member, as for a new member.
 
+![Creating a space from an existing space in verified-only: creating a verified-only space from a TOFU one, verified pairs joining immediately, and TOFU-only members asked to verify with any member](images/verified-only-creating-from-existing.png)
+
 ## Recovery kits
 
 A [recovery binding](../device-enrollment.md#recovery-bindings) is optional. In verified-only spaces it is the difference between recovering in one step and re-verifying with everyone.
@@ -97,6 +107,8 @@ A [recovery binding](../device-enrollment.md#recovery-bindings) is optional. In 
 - **Other members** see one more device for the user, approved by an existing one, and need do nothing.
 - **If the code may be exposed:** "Replace recovery kit" revokes the old one and creates a new one, which rotates the affected spaces.
 
+![Recovery kits in verified-only: the code shown once with verified-only spaces selected by default, confirming a word, and the settings to replace or delete the kit](images/verified-only-recovery-kits.png)
+
 ## Keeping spaces available
 
 Delivery needs a running key holder that has verified the recipient.
@@ -104,3 +116,5 @@ Delivery needs a running key holder that has verified the recipient.
 1. **Background issuing.** Key requests and new declarations trigger push notifications to members' devices, which grant without the app being opened ([distribution](../core.md#distribution-scheduling)). On iOS, a visible notification's service extension does the work, which requires installation keys readable after first unlock ([platform notes](../device-enrollment.md#platform-notes)).
 2. **Visible prompts.** If no grant arrives within a short window, the requester's app asks members to open the space: "Bob is waiting to join Book club. Open to share access."
 3. **Always-on devices.** A desktop, home server, or hosted agent selected as an ordinary device. It learns its owner's verifications through [trust sync](../device-enrollment.md#own-device-trust-sync), so it can grant to anyone its owner verified. Settings copy: "Keep your spaces available from this computer." Hosted agents say who operates them, because they hold keys.
+
+![Keeping spaces available in verified-only: background issuing by a device that already verified the recipient, the visible prompt, and always-on device settings](images/verified-only-keeping-spaces-available.png)
