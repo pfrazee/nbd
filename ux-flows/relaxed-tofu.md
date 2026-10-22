@@ -10,7 +10,7 @@ The same as [TOFU](tofu.md#what-protects-these-spaces): devices are trusted on f
 
 ### Creating a space
 
-1. **"New space" form:** name and optional members. No security choices. Tapping **Create** selects all of the user's devices.
+1. **"New space" form:** name and optional members. No security choices.
 2. **Space opens** as soon as it is created; the key is generated on this device first. Space info includes "Everyone in this space can read its full history."
 
 ![Creating a space: the new space form, "Securing space…" with a queued draft, the opened space with membership timeline lines, and space info stating that everyone can read the full history](images/relaxed-tofu-creating-a-space.webp)
@@ -21,7 +21,7 @@ Alice adds Bob.
 
 1. **Invite Bob.** No history explanation; space info carries it.
 2. **Timeline:** "Alice added Bob."
-3. **Bob taps "Join Book club".** All his devices join; no device list is shown.
+3. **Bob taps "Join Book club".** No device list is shown.
 4. **Bob waits briefly:** "Getting access…" while members' devices grant [in the background](tofu.md#keeping-spaces-available). If nothing arrives, members get "Bob is waiting to join Book club."
 5. **Unlock.** Devices pin each other on first sight. No badges, no verification prompts.
 6. **Key changes appear as a timeline line:** "Bob's devices changed." No modal, no action required. This is the one routine security notice other members see.
@@ -33,7 +33,7 @@ Alice adds Bob.
 ### Adding a device
 
 1. **Laptop:** "Link this device" with a QR code.
-2. **Phone:** scan, then one confirmation: "Link *Windows PC* to your account? It will be able to read all your spaces. Only link devices you own." The name is reported by the laptop and is not proof of anything; the warning is what counters tricks to scan an attacker's code. The laptop joins every space and the phone grants immediately.
+2. **Phone:** scan, then one confirmation: "Link *Windows PC* to your account? It will be able to read all your spaces. Only link devices you own." The name is reported by the laptop and is not proof of anything; the warning is what counters tricks to scan an attacker's code. The laptop can read every space; it requests keys as Alice opens them, and the phone grants in the background.
 3. **Alice's other devices:** "New device: *Windows PC*. Added from iPhone. Not you?" with **Remove it** and **It was me**. This notice and its removal action are required; they are how Alice catches a compromised device adding an attacker's.
 4. **Other members:** nothing.
 
@@ -70,11 +70,11 @@ Relaxed presentation does not soften these. They are integrity alarms, not routi
 
 Surfaces the specification requires to exist but allows to be buried:
 
-- **Devices & security:** the user's devices, **Link a new device**, and **New devices join spaces** (*Automatically* by default), which replaces the future-spaces question skipped during linking. **I lost a device** removes a lost device: it revokes the binding, so the device gets no new keys.
+- **Devices & security:** the user's devices, **Link a new device**, and **I lost a device**, which removes a lost device: it revokes the binding, so the device gets no new keys.
 - **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, including accepted key changes ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
-![Settings: Devices & security with the device list, Link a new device, New devices join spaces set to Automatically, and I lost a device; and a member-access screen listing the devices Bob has been granted keys to, including an accepted key change](images/relaxed-tofu-settings.png)
+![Settings: Devices & security with the device list, Link a new device, and I lost a device; and a member-access screen listing the devices Bob has been granted keys to, including an accepted key change](images/relaxed-tofu-settings.png)
 
 ## What stays and what goes
 
@@ -82,9 +82,9 @@ Surfaces the specification requires to exist but allows to be buried:
 | --- | --- |
 | Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | Policy choice at creation: every space is TOFU. |
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
-| Linking confirms adding a device, with an access warning ([declarations](../device-enrollment.md#declarations)). | The space list and keys when linking: new devices join every space. |
-| Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
+| Linking confirms adding a device, with an access warning ([approvals](../device-enrollment.md#approvals)). | |
+| Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | The sole-holder indicator and device-list detail. |
-| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
+| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | |
 | Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | |
 

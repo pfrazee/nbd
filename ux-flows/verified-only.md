@@ -17,10 +17,10 @@ The policy is chosen at creation and [fixed for the life of the space](../core.m
 ## Creating a space
 
 1. **"New space" form:** name, optional members, and *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space."
-2. **"Creating on 3 devices · Change."** The device set comes from each device's [enrollment preference](../device-enrollment.md#enrollment-preferences): *Automatically* devices are included, *Ask* devices appear unchecked, *Never* devices are omitted. This device is always included. Creating the space is the confirmation.
-   - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication). It signs the initial [declaration](../device-enrollment.md#declarations) with `previous: []`.
+2. **No device choice.** Every device on the account can read every space the account belongs to ([approvals](../device-enrollment.md#approvals)), so creating asks nothing about devices.
+   - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication).
 3. **No extra wait.** The space key is generated on this device before the space is created, and its [commitment](../core.md#key-generation) is part of the creating configuration, so posting can start as soon as creation succeeds.
-4. **Space opens.** The creator's other devices receive grants in the background; they are verified through pairing.
+4. **Space opens.** The creator's other devices get the key when they open it, or right away for installations of the same app; they are verified through pairing.
 
 **Sole-holder indicator:** whenever this device is the only known holder of the space key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
@@ -36,7 +36,7 @@ Admin Alice adds Bob.
 
 **Bob:**
 
-4. **Notification, then "Join Book club" with "Joining on 3 devices · Change."** One tap. His [enrollment preferences](../device-enrollment.md#enrollment-preferences) choose the devices, and this device signs one declaration for all of them.
+4. **Notification, then "Join Book club."** One tap, no device list. His other devices request the key when he opens the space on them.
 5. **Locked until verified: "Verify with any member to unlock,"** with the member list. The space name and members (host data) are visible; content is not. Bob can write drafts locally. If Bob already verified any member's device in another verified-only space, there is nothing to do: verification is reused.
 6. **Members see "Bob is waiting. Verify Bob."** Any one member suffices, because every session verifies both directions. The admin has no special role.
 
@@ -61,13 +61,13 @@ Admin Alice adds Bob.
 Alice gets a new laptop.
 
 1. **Laptop:** install, log in, show "Link this device" with a QR code. Generating keys and publishing the device record grants nothing on its own.
-2. **Phone:** Devices → Link → scan. Then "Enable *Alice's Laptop* in: ☑ Book club ☑ Work ☐ Family" ([batch enrollment](../device-enrollment.md#declarations) shows exact spaces and changes). The same screen asks once: "Include *Alice's Laptop* in spaces you join later?" (*Automatically* / *Ask each time* / *Never*).
+2. **Phone:** Devices → Link → scan, then one confirmation: "Link *Alice's Laptop*? It will be able to read all your spaces. Only link devices you own." The phone signs an [approval](../device-enrollment.md#approvals); there is no list of spaces.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** Alice's verifications move to the laptop, and [trust sync](../device-enrollment.md#own-device-trust-sync) keeps them current afterwards. The laptop can grant to everyone Alice verified.
-4. **The phone grants immediately**; the laptop reads full history. "3 of 4 spaces enabled. Retrying Work…" covers partial progress.
+4. **Spaces open on demand.** When Alice opens a space on the laptop, it requests the key and her phone grants it in the background; the laptop reads full history. Installations of the same app may get keys right away.
 5. **Other members need no ceremony.** Anyone who verified Alice's phone sees the laptop as *Verified via Alice's iPhone*. Device lists show "Alice · 3 devices"; apps may add a subtle indicator for a recent addition, never a gate.
 6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received. A device Alice never approved means her account or PDS may be compromised, so this notice, unlike an ordinary device removal, also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
 
-![Adding a device in verified-only: the laptop code, batch enrollment, other members seeing the laptop as Verified via Alice's iPhone with no ceremony, and the new-device notice on Alice's iPad](images/verified-only-adding-a-device.png)
+![Adding a device in verified-only: the laptop code, the link confirmation, other members seeing the laptop as Verified via Alice's iPhone with no ceremony, and the new-device notice on Alice's iPad](images/verified-only-adding-a-device.png)
 
 ## Losing every device
 
@@ -83,7 +83,7 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 | Carries over | Doesn't carry over |
 | --- | --- |
 | [Device trust](../device-enrollment.md#local-trust): pairs verified anywhere stay verified. | Membership: each admission is a separate host decision (the app can prefill it). |
-| Public device records. | Declarations: each member joins and selects devices again. |
+| Public device records and approvals. | |
 | | Keys and history: the new space has its own key; parent content is not readable through it. |
 
 1. **"New space from Book club…"** prefills the parent's members. Copy: "Members are copied; messages aren't." This is also how a TOFU group moves to verification: "Create a verified-only space from this one."
@@ -102,8 +102,8 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 Delivery needs a running key holder that has verified the recipient.
 
-1. **Background issuing.** Key requests and new declarations trigger push notifications to members' devices, which grant without the app being opened ([distribution](../core.md#distribution-scheduling)). On iOS, a visible notification's service extension does the work, which requires installation keys readable after first unlock ([platform notes](../device-enrollment.md#platform-notes)).
+1. **Background issuing.** Key requests trigger push notifications to members' devices, which grant without the app being opened ([distribution](../core.md#distribution-scheduling)). On iOS, a visible notification's service extension does the work, which requires installation keys readable after first unlock ([platform notes](../device-enrollment.md#platform-notes)).
 2. **Visible prompts.** If no grant arrives within a short window, the requester's app asks members to open the space: "Bob is waiting to join Book club. Open to share access."
-3. **Always-on devices.** A desktop, home server, or hosted agent selected as an ordinary device. It learns its owner's verifications through [trust sync](../device-enrollment.md#own-device-trust-sync), so it can grant to anyone its owner verified. Settings copy: "Keep your spaces available from this computer." Hosted agents say who operates them, because they hold keys.
+3. **Always-on devices.** A desktop, home server, or hosted agent linked as an ordinary device. It learns its owner's verifications through [trust sync](../device-enrollment.md#own-device-trust-sync), so it can grant to anyone its owner verified. Settings copy: "Keep your spaces available from this computer." Hosted agents say who operates them, because they hold keys.
 
 ![Keeping spaces available in verified-only: background issuing by a device that already verified the recipient, the visible prompt, and always-on device settings](images/verified-only-keeping-spaces-available.png)

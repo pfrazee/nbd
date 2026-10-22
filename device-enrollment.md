@@ -11,7 +11,7 @@ type Binding = { account: string; device: Device };
 
 Both keys are 32 bytes: `authPubkey` uses Ed25519; `encryptPubkey` uses X25519. Fresh installations/replacement keys use a new `RandomId` device ID; importing the same private keys preserves the binding. The binding ID is lowercase hexadecimal `SHA-256(CBOR(["peep/device-binding", 1, binding]))`.
 
-Publish `{ $type: "com.example.peep.device", value: binding }` in the account's public repo with `rkey = deviceId`; the binding account MUST match the repo owner. Publication discovers keys but grants neither enrollment nor membership. Signed selections embed exact keys, so mutable discovery cannot redirect an approval.
+Publish `{ $type: "com.example.peep.device", value: binding }` in the account's public repo with `rkey = deviceId`; the binding account MUST match the repo owner. Publication discovers keys but grants neither enrollment nor membership. Signed approvals embed exact keys, so mutable discovery cannot redirect one.
 
 ## Local trust
 
@@ -26,7 +26,7 @@ Accepting a TOFU key change MUST NOT replace, downgrade, or clear a verified pin
 
 In TOFU spaces, a malicious PDS can substitute keys at first contact or later through a TOFU key change, whatever verification any member has done. [Auditing](audit.md#direct-sync) and change notices are the defense: they can detect substitution but do not prevent it. In verified-only spaces, independent verification or approval rooted in it prevents substitution by the PDS when approving devices remain uncompromised. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not independently establish identity. Both modes require signatures, exact-key matching, and continuity.
 
-Each client MUST keep its own trust decisions, distinguishing direct verification, approval-derived verification, synced, and TOFU provenance. One user's decision does not verify a device for another user; [own-device trust sync](#own-device-trust-sync) carries it only to that user's own installations. OOB records, earlier approval evidence, acceptance history, and revocations remain in [private state](#private-state); reusing trust in another space MUST NOT publish the original space's declarations.
+Each client MUST keep its own trust decisions, distinguishing direct verification, approval-derived verification, synced, and TOFU provenance. One user's decision does not verify a device for another user; [own-device trust sync](#own-device-trust-sync) carries it only to that user's own installations. OOB records, earlier approval evidence, acceptance history, and revocations remain in [private state](#private-state).
 
 ## Independent verification
 
@@ -122,12 +122,6 @@ type TrustSyncPayload = {
   account: string;                   // Sender and recipient account.
   sequence: number;                  // Per-source monotonic.
   trust: TrustEntry[];               // Set; at most one entry per binding ID.
-  enrollment: EnrollmentPreference[]; // Set; at most one entry per deviceId.
-};
-
-type EnrollmentPreference = {
-  deviceId: string;                  // The source itself.
-  preference: "automatic" | "ask" | "never";
 };
 
 type TrustSync = {
@@ -146,7 +140,7 @@ The sender seals `CBOR(TrustSyncPayload)` to the recipient's X25519 key under th
 
 ### Sending
 
-An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, dispute, or [enrollment preference](#enrollment-preferences) change, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
+An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of its account's locally accepted, unwithdrawn installations after recording a verification, pin, or dispute, and after accepting a new own installation. Entries MUST reflect the sender's recorded decision and provenance without promotion.
 
 ### Receiving
 
@@ -159,80 +153,40 @@ An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of
    - `disputed` records a dispute for that binding.
    - An entry whose binding differs from a local verified pin for the same account and device ID MUST NOT replace that pin: a `verified` entry records a dispute, and a `tofu` entry is handled as a [TOFU key change](#local-trust) for TOFU spaces while the verified pin stays in effect for verified-only spaces. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry for a TOFU pin is handled as a TOFU key change.
    - Revoked bindings stay revoked.
-   Record each `enrollment` entry for the source itself, replacing its earlier synced preference; ignore entries for other devices.
 5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
 
-Synced decisions are retained if the source later withdraws or stops sending; a later snapshot omitting an entry does not remove it. Downgrading or clearing trust requires explicit local action, as for any pin. Sync cannot verify the local account's own new installations; those use [pairing or approval](#declarations).
+Synced decisions are retained if the source later withdraws or stops sending; a later snapshot omitting an entry does not remove it. Downgrading or clearing trust requires explicit local action, as for any pin. Sync cannot verify the local account's own new installations; those use [pairing and approval](#approvals).
 
-## Declarations
+## Approvals
 
-Selection is explicit authorization of an app installation for a particular space. Adding an app/device does not select it account-wide. This preserves access boundaries between applications and spaces; reused account DIDs and device keys do not provide cross-space unlinkability.
-
-A declaration is the complete device selection for one account in one space. A valid replacement removes omitted devices; an authenticated empty selection selects none. Missing/deleted records are not empty selections. Per-space removal changes neither membership nor reusable device trust, and cannot override account-wide revocation.
+An account's devices are defined by signed approvals and [revocations](#device-revocations), not by per-space selection. Every accepted, unwithdrawn device of an account is eligible in every space the account is a member of. Per-space selection would not contain a compromised installation: an accepted installation can approve devices and join spaces, and remote validators cannot tell whether the user confirmed. Containment of an application depends on host membership and on the PDS's permissions for repo access, not on PEEP. Devices [request keys](core.md#distribution-scheduling) only for spaces they use, which keeps honest applications from holding keys they do not need but is not a boundary.
 
 ```typescript
-type Declaration = {
+type Approval = {
   version: 1;
-  space: string;
-  account: string;
-  devices: Device[];       // Set, at most one binding per deviceId; empty is valid.
-  previous: CID[];         // Set of predecessor declarations, all in this account/space.
-  signer: Binding;         // Same account; need not appear in devices.
+  signer: Binding;         // Accepted device of the same account.
+  target: Binding;         // Device being added.
   proof: bytes;
 };
 ```
 
-Sign with `Ed25519.Sign(signerKey, CBOR(["peep/declaration", 1, declarationWithoutProof]))`. Selected devices inherit `account`. The signature is the selection approval; no separate approval record is needed. Publish in the declaring account's space repo under [record conventions](core.md#records); [enrollment history](#enrollment-history) defines predecessors, bootstrap, and conflicts.
+Sign with `Ed25519.Sign(signerKey, CBOR(["peep/device-approval", 1, approvalWithoutProof]))`. Signer and target MUST name the same account. Publish in the signer's public repo under [record conventions](core.md#records). Approvals only add devices; removing a device is [revocation](#device-revocations), which is permanent.
 
-Before signing, the approving installation MUST authenticate added bindings through pairing or independent verification and obtain the user's confirmation:
+Before signing, the approving installation MUST authenticate the target binding through pairing or independent verification and obtain the user's confirmation of adding a device to the account. The UI MUST state that the device gains access to all of the account's spaces and SHOULD warn the user to link only devices they own, because tricking users into scanning an attacker's linking code yields full access. It MAY show a name reported by the new device, which that device supplies and is not otherwise authenticated. Keys need not be displayed. Possession alone or a PDS-supplied list is insufficient user intent. The approving installation MUST persist the signed approval locally before publication.
 
-- **Adding a new installation** (linking): the user MUST confirm adding a device to the account. The UI MUST state that the device gains access to the account's spaces and SHOULD warn the user to link only devices they own, because tricking users into scanning an attacker's linking code yields full access. It MAY show a name reported by the new device, which that device supplies and is not otherwise authenticated. Spaces MAY follow the device's [enrollment preference](#enrollment-preferences) without being listed, and keys need not be displayed.
-- **Other selection changes:** the user MUST confirm the account, space, and change, including removal of the last device, except where [enrollment preferences](#enrollment-preferences) satisfy this duty at join.
+An accepted, unwithdrawn device MAY approve devices for its own account. Clients MUST validate paths outward from a locally accepted binding, checking each signature, exact binding, and same-account scope. Clients MUST preserve the root's TOFU/verified provenance and exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Clients MUST apply [revocations](#device-revocations) before accepting new authority.
 
-Possession alone or a PDS-supplied list is insufficient user intent. The approving installation MUST persist the signed snapshot and authorization locally before publication.
+### Approval validation
 
-An accepted, unwithdrawn device MAY approve selections for its own account. Clients MUST validate paths outward from a locally accepted binding, checking each signature, exact selection, and same-account scope. Clients MUST preserve the root's TOFU/verified provenance and exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Clients MUST apply [revocations](#device-revocations) before accepting new authority.
+Enumerate approvals alongside device records and revocations during discovery and periodic public-repo catch-up. `ObserveApproval(value, state)` MUST perform D1–D3 before accepting the target:
 
-Applications MAY offer one enrollment action for a user-chosen set of spaces, reusing device verification but signing a separate declaration against each space's current history. A batch enrollment UI MUST confirm the added device as above; when it lists spaces, it MUST show them and the changes together. Batching clients MUST preserve other selections, durably track each publication, retry safely, and report incomplete updates. Reconcile concurrent changes under the normal ancestry/conflict rules; retries MUST NOT expand the authorized set of spaces or bypass withdrawals. This batches the interaction, while still requiring one declaration update per space.
+1. **D1 — Validate.** Check schema, CID, same-account scope, both bindings, and signature. Invalid input returns `INVALID` and gains no authority.
+2. **D2 — Signer.** Require the signer to be locally accepted and unwithdrawn under [local trust](#local-trust), applying [withdrawn-approver rules](#withdrawing-an-approver). An approval whose signer is not yet accepted is retained and returns `INCOMPLETE`; re-evaluate it when the signer becomes accepted. A withdrawn signer returns `BLOCKED`.
+3. **D3 — Commit.** Unless the target is withdrawn, accept it with the signer's provenance, and persist the approval, provenance, and acceptance position atomically. An approval of an already accepted binding adds evidence only.
 
-### Enrollment preferences
+Approvals do not conflict: each one adds a device, and validation order does not change the accepted set except through [revocation cutoffs](#revocation-processing). Withholding an approval delays a device's acceptance; it cannot remove an accepted device.
 
-Each own installation MAY carry a standing preference for spaces the user joins later: `automatic`, `ask`, or `never`. The user sets an installation's preference on that installation or while linking it; changes never alter existing selections. Preferences reach other installations through [trust sync](#own-device-trust-sync).
-
-When the user explicitly joins a space on an installation, that installation MAY satisfy the confirmation duty above for its own account's locally accepted, unwithdrawn bindings by applying their previously confirmed preferences: select `automatic` bindings, offer `ask` bindings unselected, and omit `never` bindings unless the user adds them. The join action and those previously confirmed preferences satisfy the duty; the join UI MAY show the resulting device set and allow changes before signing. Only the joining installation signs, producing one declaration; other installations MUST NOT sign declarations from preferences without a join action on themselves. Host admission alone is not a join action. Adding a binding not yet accepted still requires pairing or independent verification.
-
-## Enrollment history
-
-### Declaration ancestry
-
-Each declaration's `previous` set names same-account, same-space predecessors: none for an initial snapshot, one for replacement, or all known competing tips for resolution. A tip is an authenticated snapshot not superseded by another known snapshot. `descends(x, y)` means a validated path from `x` through `previous` reaches `y`; a missing path is unknown, not false.
-
-`ObserveDeclaration(candidate, account, space, state)` MUST perform D1–D4 before changing the current selection:
-
-1. **D1 — Validate.** Check schema, CID, exact account/space, and signature. Authenticate the signer through [retained trust, permitted first-use TOFU, or a permitted TOFU key change](#local-trust), [approval](#declarations), or [independent verification](#independent-verification), applying [withdrawn-approver rules](#withdrawing-an-approver). Invalid data returns `INVALID`; missing required evidence returns `INCOMPLETE`; prohibited new authority returns `BLOCKED`. Previously accepted snapshots and historical ancestors MAY be checked as retained evidence without restoring authority or accepting new approvals; a withdrawn signer cannot authorize a newly accepted selection.
-2. **D2 — Bootstrap.** On genuine first observation with no saved declaration state or known conflict, a client MAY persist the complete authenticated candidate as starting point/current selection and return `OK` without fetching predecessors. Otherwise continue to D3. Existing account pins and withdrawals still apply. Known state loss MUST use [recovery](#recovery), not this shortcut, except that a client MAY bootstrap again in TOFU spaces, recording the loss.
-3. **D3 — Compare.** Otherwise fetch and authenticate enough ancestry to compare the candidate, retained tips, and newly discovered branches, including history preceding bootstrap when needed. Check every traversed edge's scope and reject cycles. Persist unresolved authenticated candidates and return `INCOMPLETE` if a required comparison is unknown or exceeds the work budget; affected grants remain blocked. Missing paths MUST NOT create a conflict or erase saved tips.
-4. **D4 — Commit.** Apply the following cases to the validated graph and persist snapshots, tips, and the result atomically. A complete signed resolution must cover all known competing tips, directly or through validated resolution ancestry.
-
-```text
-tips = authenticated snapshots not superseded in the compared graph
-if tips contains multiple incomparable snapshots:
-    retain every tip; record conflict; return BLOCKED(conflict)
-head = the sole tip
-if head equals the saved head:
-    retain new historical evidence; return OK(unchanged)
-if head does not descend from all saved tips:
-    return INCOMPLETE(comparison)  # no replacement or automatic branch choice
-persist head's complete selection and resolved-tip history
-clear the conflict covered by that complete signed resolution
-return OK(head)
-```
-
-Clients MUST NOT use timestamps, delivery order, mutable head pointers, ancestor replay, or new roots to override this procedure. Bootstrap establishes neither freshness nor complete history. An unrelated root with fully proven incompatible ancestry is a conflict; one with unresolved ancestry remains incomplete.
-
-### Conflicts
-
-A recorded conflict MUST block new grants to and from that account in that space until D4 accepts a signed complete resolution. An accepted, unwithdrawn same-account device MAY sign it without being selected in the disputed snapshots. Clients MUST NOT merge selections or choose a winner automatically. Competing resolutions and later forks run D1–D4 again. Invalid evidence and ordinary replacements are not conflicts; hidden forks cannot be enforced before discovery.
+## Revocation and freshness
 
 ### Device revocations
 
@@ -248,13 +202,13 @@ type Revocation = {
 
 Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
 
-A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals/declarations relying on its authority. Deletion, stale selections, and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds.
+A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals relying on its authority. Deletion and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds.
 
 Publish under [record conventions](core.md#records). Enumerate public revocations alongside device records during discovery and periodic public-repo catch-up. Peers MAY forward unchanged signed values by CID or copy them into space repos. Clients MUST preserve valid statements, exact targets, and local acceptance/withdrawal ordering even if records disappear.
 
 ### Withdrawing an approver
 
-Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new declarations by the withdrawn signer.
+Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new approvals by the withdrawn signer.
 
 Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. In a TOFU space, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; in a verified-only space, clients MUST require another accepted, unwithdrawn approver rooted in a verified binding, or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
@@ -286,21 +240,20 @@ For a fixed set of devices all accepted before any withdrawal, revocation delive
 
 ### Bounded validation
 
-Validators MUST use visited references, resumable progress, and finite byte/node/depth/work budgets; they MAY cache validated signatures. Validators MUST authenticate ancestry edges before using them and reject cross-account/space ancestry and declaration-ancestry cycles, while allowing shared ancestors.
+Validators MUST use visited references, resumable progress, and finite byte/node/depth/work budgets; they MAY cache validated signatures. Validators MUST authenticate approval paths before using them and reject cross-account approvals; cycles among unaccepted keys establish nothing.
 
-Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip required checks, truncate selections, choose branches, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
+Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip required checks, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
 
 ### Freshness
 
-For client decisions, "current" means the latest authenticated state known locally under the relevant ancestry and monotonic-revision rules. Clients MUST include every learned withdrawal and unresolved conflict. Receipt alone does not establish authority; missing required evidence still blocks the affected operation.
+For client decisions, "current" means the latest authenticated state known locally under the relevant monotonic-revision rules. Clients MUST include every learned withdrawal. Receipt alone does not establish authority; missing required evidence still blocks the affected operation.
 
 Clients MUST enforce each authenticated change as soon as learned:
 
 | Change | Required effect |
 | --- | --- |
 | Account becomes ineligible | Block new grants to and from that account in the space until a later eligible host decision permits them. |
-| Declaration omits a device, including an empty selection | Block new grants to and from that binding in that space until a valid selection permits them again; account-wide trust is unchanged. |
-| Account-wide device revocation | Permanently block grants to/from the exact binding and new approvals/declarations relying on its authority in every space. Preserve already accepted bindings under [withdrawn-approver rules](#withdrawing-an-approver). |
+| Account-wide device revocation | Permanently block grants to/from the exact binding and new approvals relying on its authority in every space. Preserve already accepted bindings under [withdrawn-approver rules](#withdrawing-an-approver). |
 
 Cached approvals MUST NOT override these effects. Approvals MAY be reused without expiry or fresh per-grant approval, including while the approver is offline. Neither a host read, OOB verification, an audit record, nor an empty revocation update establishes freshness. Withholding may leave stale authorization usable indefinitely, including compromised approvers issuing new approvals. No bounded propagation delay is promised; stricter profiles are [deferred](TODOs.md#todo-06).
 
@@ -308,7 +261,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; approval and revocation statements/candidates; authenticated host observations; key acceptance decisions; pending operations; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
 
@@ -316,17 +269,17 @@ Clients MUST keep this state confidential and authenticated and use an append-on
 
 Use the application's protected backup or pairing container for keys and state together. Transfers MUST be authenticated and encrypted between the user's own trusted installations. Bind format/version, owner account, source installation/history, and the full payload; authenticate before import. Protect encryption with independent high-entropy key material that PDS login/reset cannot reveal or replace. Document key wrapping/KDF, integrity, rollback-detection limits, and atomic restore. [Platform support](#platform-notes) must be validated; a new interoperable backup protocol is not required; ongoing decisions use [own-device trust sync](#own-device-trust-sync).
 
-Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union revocations, preserve disputes/conflicts, and merge declaration tips by signed ancestry and host state by monotonic revisions. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
+Before atomic import, clients MUST validate ownership, key/public-binding consistency, references, provenance, and journal integrity. Importers MUST union approvals and revocations, preserve disputes, and merge host state by monotonic revisions. Importers MUST resolve conflicting pins explicitly. Importers MUST preserve verification provenance and MUST NOT promote TOFU, clear withdrawals, or roll back newer known state. Transfer may carry a user's decisions to their own installations, never to another user as verified trust.
 
-An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or withdrawal cutoffs. A key-only restore recovers no trust/declaration/audit history; report the loss and require explicit recovery.
+An old backup cannot detect wholly lost newer state without a surviving reference. Report missing coverage/freshness, reconcile available sources, and never invent prior acceptance or withdrawal cutoffs. A key-only restore recovers no trust/approval/audit history; report the loss and require explicit recovery.
 
 ### Replacement
 
 A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys while preserving TOFU/verified provenance. Otherwise, in TOFU spaces clients MAY accept the replacement as a [TOFU key change](#local-trust); in verified-only spaces they MUST independently re-verify it. PDS recovery cannot reset verified trust, revive revoked bindings, or authorize signed withdrawals. Each space's [verification policy](core.md#device-verification-policy) governs subsequent grants and acceptance.
 
-One eligible helper holding keys can restore access to those spaces; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
+One eligible helper holding keys can restore access to those spaces; other clients keep their own trust decisions. Where an accepted signer survives, it publishes an approval of the replacement binding and revocations of lost ones. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants; removal does not [rotate](core.md#no-rotation) space keys. Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups [loses the space](core.md#key-loss). Cross-application backup portability is outside the baseline.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or approval/audit history. Keep old grants; removal does not [rotate](core.md#no-rotation) space keys. Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups [loses the space](core.md#key-loss). Cross-application backup portability is outside the baseline.
 
 ### Total device loss
 

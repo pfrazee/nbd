@@ -4,11 +4,13 @@ This document is informative. Requirements are in [Core](core.md), [Device Enrol
 
 ## Why this design
 
-PEEP targets retained shared data in atproto Spaces. Current members may read pre-join history; applications create spaces frequently and reuse account/device verification across them. The host already controls account membership. Signed per-space selections authorize particular app installations, while any eligible holder can distribute keys through its own repo without an appointed issuer.
+PEEP targets retained shared data in atproto Spaces. Current members may read pre-join history; applications create spaces frequently and reuse account/device verification across them. The host already controls account membership. Signed approvals make an app installation one of an account's devices in all its spaces, while any eligible holder can distribute keys through its own repo without an appointed issuer.
 
 Independent device verification prevents PDS key substitution under the endpoint trust assumptions. TOFU instead accepts initial-substitution risk and relies on conditional later discovery through published grants and direct repo sync. Verification is a per-space policy rather than a per-relationship option: with one shared key, the weakest exchange sets the whole space's protection, so a verified pair inside a TOFU space would gain nothing. Local verification avoids transferable-attestation infrastructure. Grant evidence records the actual recipient selection and decision, while normal Spaces access governs who can audit it.
 
 One key for the life of a space makes all retained history available through one grant per device. PEEP does not [rotate](core.md#no-rotation) that key. Spaces already give the host access control over who can fetch ciphertext, so removal relies on it: a removed participant keeps the key, and keeping later content from them depends on the host. Rotation would add protection only against a host that misbehaves, at the cost of epochs, history wrapping, carried-forward exclusion state, host activation, and writer pauses. Removal therefore needs no new space. Spaces are cheap to create, so users who credibly believe the host or PDSes are compromised in a way access control cannot stop can [replace the space](core.md#replacing-a-space). These choices trade stronger secrecy and freshness guarantees for history access, asynchronous operation, and simplicity. Key compromise exposes the whole space, revocation takes effect only when learned, and a lost key loses the space. Trust in the host and application software remains essential.
+
+Devices are enrolled account-wide rather than per space. Per-space selection could not contain a compromised installation, which can approve devices and join spaces without remote validators seeing whether the user confirmed, and it cost per-space declaration histories and conflicts. Containing applications is left to host membership and the PDS's repo permissions; request-driven delivery keeps honest applications from holding keys they do not use.
 
 Per-target local revocation cutoffs replace cycle detection, trading simpler validation for the possibility that a withdrawn device forces replacement of the entire older device set.
 
@@ -35,11 +37,11 @@ History access does not rule out MLS. The RFC defines [exporters](https://www.rf
 | --- | --- |
 | A retained [space key](core.md#key-generation) | Yes. MLS epoch secrets are deleted as the group advances, and a Welcome bootstraps only the current epoch. Pre-join history needs a separate retained key with its own compromise semantics. |
 | Host [membership](core.md#trusted-host-state) | Yes. Spaces already gives the host membership authority, and MLS needs a delivery service to order commits. Clients could refuse additions no member committed, but that would contradict Spaces administration rather than reduce host trust in practice. |
-| [Declarations](device-enrollment.md#declarations), [local trust](device-enrollment.md#local-trust), and [revocation](device-enrollment.md#device-revocations) | Yes. MLS authenticates leaves through credentials whose validation the application defines. Mapping atproto accounts to app installations, verifying bindings, and making revocation permanent across spaces stay application work. |
+| [Approvals](device-enrollment.md#approvals), [local trust](device-enrollment.md#local-trust), and [revocation](device-enrollment.md#device-revocations) | Yes. MLS authenticates leaves through credentials whose validation the application defines. Mapping atproto accounts to app installations, verifying bindings, and making revocation permanent across spaces stay application work. |
 | [Grant evidence](audit.md#evidence) and [auditing](audit.md) | Yes, or a replacement. The MLS transcript authenticates group operations to members, but it is not repo-published evidence of who released which keys under which authorization. |
 | [Content encryption](core.md#content-encryption) | Mostly. Retained records and blobs need keys that outlive MLS epochs, so content would be encrypted under the archive keys rather than MLS application messages. |
 
-What MLS would replace is the narrowest part of PEEP: [delivering the space key to selected devices](core.md#key-grants). PEEP does that with one HPKE grant per device.
+What MLS would replace is the narrowest part of PEEP: [delivering the space key to members' devices](core.md#key-grants). PEEP does that with one HPKE grant per device.
 
 ### Costs MLS adds for Spaces
 
