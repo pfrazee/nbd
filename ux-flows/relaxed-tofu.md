@@ -83,7 +83,6 @@ Surfaces the specification requires to exist but allows to be buried:
 | Linking confirms adding a device, with an access warning ([declarations](../device-enrollment.md#declarations)). | The space list and keys when linking: new devices join every space. |
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
-| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | Recovery kit prompts: users without verified relationships are never prompted. |
-| | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
+| Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
 | | The sole-holder indicator and device-list detail. |
 

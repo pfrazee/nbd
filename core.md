@@ -46,7 +46,6 @@ Except for [public device records](device-enrollment.md#bindings-and-publication
 | `grant`, `evidence` | Issuer's space repo. |
 | `keyRequest` | Requesting account's space repo. |
 | `compromise` | Reporting account's space repo. |
-| `recoveryAnchor` | Account's public repo. |
 
 All use the [retention/access rules](audit.md#retention-and-access).
 

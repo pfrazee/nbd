@@ -2,7 +2,7 @@
 
 ## Bindings and publication
 
-A device is an app installation or an optional [recovery binding](#recovery-bindings). Independent apps enroll separately; browser identities belong to an origin within a browser profile. Installations MUST generate independent signing/encryption keys under [Core's profile](core.md#mandatory-grant-profile); they MUST keep private keys locally. [Platform storage constraints](#platform-notes) require implementation validation.
+A device is an app installation. Independent apps enroll separately; browser identities belong to an origin within a browser profile. Installations MUST generate independent signing/encryption keys under [Core's profile](core.md#mandatory-grant-profile); they MUST keep private keys locally. [Platform storage constraints](#platform-notes) require implementation validation.
 
 ```typescript
 type Device = { deviceId: string; authPubkey: bytes; encryptPubkey: bytes };
@@ -125,7 +125,7 @@ type TrustSyncPayload = {
 };
 
 type EnrollmentPreference = {
-  deviceId: string;                  // The source itself or a recovery binding it anchors.
+  deviceId: string;                  // The source itself.
   preference: "automatic" | "ask" | "never";
 };
 
@@ -158,7 +158,7 @@ An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of
    - `disputed` records a dispute for that binding.
    - An entry whose binding differs from a local verified pin for the same account and device ID records a dispute; it MUST NOT replace the pin. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry is handled as a [TOFU key change](#local-trust) where permitted, and otherwise records a dispute.
    - Revoked bindings stay revoked.
-   Record each `enrollment` entry for the source itself or a recovery binding anchored by the source, replacing that device's earlier synced preference; ignore entries for other devices.
+   Record each `enrollment` entry for the source itself, replacing its earlier synced preference; ignore entries for other devices.
 5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
 
 Synced decisions are retained if the source later withdraws or stops sending; a later snapshot omitting an entry does not remove it. Downgrading or clearing trust requires explicit local action, as for any pin. Sync cannot verify the local account's own new installations; those use [pairing or approval](#declarations).
@@ -196,7 +196,7 @@ Applications MAY offer one enrollment action for a user-chosen set of spaces, re
 
 ### Enrollment preferences
 
-Each own installation, and each [recovery binding](#recovery-bindings), MAY carry a standing preference for spaces the user joins later: `automatic`, `ask`, or `never`. The user sets an installation's preference on that installation or while linking it, and a recovery binding's on its anchor installation; changes never alter existing selections. Preferences reach other installations through [trust sync](#own-device-trust-sync).
+Each own installation MAY carry a standing preference for spaces the user joins later: `automatic`, `ask`, or `never`. The user sets an installation's preference on that installation or while linking it; changes never alter existing selections. Preferences reach other installations through [trust sync](#own-device-trust-sync).
 
 When the user explicitly joins a space on an installation, that installation MAY satisfy the confirmation duty above for its own account's locally accepted, unwithdrawn bindings by applying their previously confirmed preferences: select `automatic` bindings, offer `ask` bindings unselected, and omit `never` bindings unless the user adds them. The join action and those previously confirmed preferences satisfy the duty; the join UI MAY show the resulting device set and allow changes before signing. Only the joining installation signs, producing one declaration; other installations MUST NOT sign declarations from preferences without a join action on themselves. Host admission alone is not a join action. Adding a binding not yet accepted still requires pairing or independent verification.
 
@@ -325,47 +325,11 @@ A surviving, locally accepted, unwithdrawn device may approve fresh same-account
 
 One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Cross-application backup portability is outside the baseline; [recovery bindings](#recovery-bindings) need no dedicated recovery authority.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Cross-application backup portability is outside the baseline.
 
-### Recovery bindings
+### Total device loss
 
-A recovery binding is an optional offline device whose private keys are derived from a recovery code the user keeps outside any installation. It is selected, granted keys, and trusted like any device, so after losing every installation the code can approve a replacement, recover keys, and restore trust decisions without re-verification.
-
-Recovery bindings are OPTIONAL. Applications MUST NOT require one for any operation. They SHOULD suggest one only where losing every installation would cost more than a [TOFU key change](#local-trust): when the user holds verified bindings for other accounts, receives grants recording `verified` recipient trust, or participates in a verified-only space. They MAY offer one in settings at any time.
-
-**Derivation.** The recovery code encodes at least 16 bytes from a cryptographically secure source in an application-defined, transcribable form. Derive each component independently:
-
-```text
-deviceId    = hex(HKDF-SHA256(code, "peep/recovery-binding", "device-id", 16))
-authSeed    = HKDF-SHA256(code, "peep/recovery-binding", "auth", 32)     // Ed25519 seed
-encryptKey  = HKDF-SHA256(code, "peep/recovery-binding", "encrypt", 32)  // X25519 private key
-```
-
-Applications MUST NOT retain the code, seed, or private keys after setup or recovery completes, and MUST NOT store them with installation keys or backups.
-
-**Setup.** While it holds the code, the setting-up installation MUST publish the device record and a recovery anchor in the account's public repo, then select the binding through ordinary signed declarations in the spaces the user chooses, under [batch enrollment](#declarations) rules:
-
-```typescript
-type RecoveryAnchor = {
-  version: 1;
-  recovery: Binding;
-  anchor: Binding;        // The setting-up installation; same account.
-  proof: bytes;           // Ed25519 signature by the recovery key.
-};
-```
-
-The recovery key signs `CBOR(["peep/recovery-anchor", 1, anchorWithoutProof])`. Peers accept the binding through the declaration's approval, preserving its TOFU or verified provenance; the anchor gives them no authority. Eligible holders grant it keys under normal [distribution](core.md#distribution-scheduling), including the generator's first pass at creation. Own installations SHOULD send it [trust sync](#own-device-trust-sync) snapshots.
-
-**Recovery.** An installation that receives the code:
-
-1. Derives the binding and requires a matching published device record and a valid recovery anchor signed by it. The recovery binding is the local root of trust.
-2. Accepts the anchor binding, then other own bindings through approval paths outward from it under [declaration](#declarations) and [revocation](#device-revocations) rules.
-3. Applies trust sync snapshots addressed to the recovery binding from those accepted sources (S1–S5).
-4. Accepts grants addressed to the recovery binding under [grant acceptance](core.md#grant-acceptance), using the restored trust.
-5. Signs, as the recovery binding, declarations selecting its own fresh binding and, where appropriate, revocations of lost installations, then grants itself the recovered keys.
-6. Discards the code and SHOULD offer a new recovery binding, revoking the used one.
-
-Missing anchors, snapshots, or grants leave the corresponding recovery `INCOMPLETE`; they do not permit TOFU in verified-only spaces. A code holder can decrypt grants addressed to the binding and approve devices for the account; if the code may be exposed, the user SHOULD revoke the binding, which requires [rotation](core.md#triggers) where it held a current key.
+There is currently no process for recovering from the loss of every installation and decryptable backup. Such a user falls back to [replacement](#replacement) without a surviving approver: peers holding verified bindings re-verify, TOFU peers may accept a key change, members re-grant keys they hold, and the user cannot publish signed withdrawals of the lost bindings. Keys held only by the lost installations are gone. A dedicated mechanism is an open design question ([TODO-08](TODOs.md#todo-08)).
 
 ## Platform notes
 

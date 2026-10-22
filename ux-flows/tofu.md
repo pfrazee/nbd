@@ -22,7 +22,7 @@ The policy is chosen at creation and [fixed for the life of the space](../core.m
 3. **"Securing space…":** the epoch 1 key is generated and the [activation request](../core.md#client-activation-states) submitted. Posting waits for acceptance. On network loss, the draft persists and the exact request is retried; the UI does not report failure while the outcome is unknown.
 4. **Space opens.** The creator's other devices receive grants in the background.
 
-**Sole-holder indicator:** whenever this device is the only known holder of the active key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device". A recovery kit is linked only where [kits are suggested](#recovery-kits).
+**Sole-holder indicator:** whenever this device is the only known holder of the active key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
 ![Creating a space in TOFU: the form with the permanent policy choice, the device set from enrollment preferences, "Securing space…", the sole-holder note, and space info with Unverified badges](images/tofu-creating-a-space.png)
 
@@ -67,13 +67,11 @@ Alice gets a new laptop.
 
 ## Losing every device
 
-1. **"Restore from backup"** (same keys and state) or **"Start fresh"**. **"Use a recovery kit"** appears if Alice has one.
+1. **"Restore from backup"** (same keys and state) or **"Start fresh"**. There is currently no other [recovery process](../device-enrollment.md#total-device-loss).
 2. **Starting fresh is cheap.** Members who only pinned Alice by TOFU accept her new device as a [key change](../device-enrollment.md#local-trust) and see "Alice's devices changed." Alice's new device pins everyone again. She loses no protection she had at first contact.
-3. **Verified relationships still need re-verification.** Anyone who verified Alice sees "Alice has a new device that isn't linked to her old ones. Verify to share with her." Alice's new device lists them and opens one session per contact from a single screen. A [recovery kit](#recovery-kits) avoids this.
+3. **Verified relationships still need re-verification.** Anyone who verified Alice sees "Alice has a new device that isn't linked to her old ones. Verify to share with her." Alice's new device lists them and opens one session per contact from a single screen.
 4. **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
 5. Copy is honest: "Resetting your account password can't restore encrypted access."
-
-![Losing every device in TOFU: fresh install with recovery options, one line for TOFU contacts, verified contacts asked to verify again, re-verifying from one screen, and history restoring](images/tofu-losing-every-device.png)
 
 ## Creating a space from an existing space
 
@@ -91,17 +89,6 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 3. **Each member taps Join once;** existing pins carry over, so grants arrive as soon as declarations land.
 
 ![Creating a space from an existing space in TOFU: the prefilled form with the policy choice as the upgrade path, and Bob joining with one tap](images/tofu-creating-from-existing.png)
-
-## Recovery kits
-
-A [recovery binding](../device-enrollment.md#recovery-bindings) is optional. In TOFU spaces, starting fresh is already cheap, so kits matter only to users with verified relationships.
-
-- **When to suggest:** after the user's first successful verification, or on learning someone verified them. Copy: "You've verified people. Save a recovery kit so you won't need to verify them again if you lose all your devices." Users with no verified relationships never see a prompt. Dismissing it is permanent until the situation changes. Settings always offers it.
-- **Setup:** show the code once, ask the user to write it down or save it in a password manager, and confirm a few words, then choose spaces. The app keeps no copy of the code.
-- **Other members** see one more device for the user, approved by an existing one, and need do nothing.
-- **If the code may be exposed:** "Replace recovery kit" revokes the old one and creates a new one, which rotates the affected spaces.
-
-![Recovery kits in TOFU: the one-time suggestion after a first verification, the code shown once with protected spaces, and the settings to replace or delete the kit](images/tofu-recovery-kits.png)
 
 ## Keeping spaces available
 
