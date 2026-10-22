@@ -18,11 +18,12 @@ Publish `{ $type: "com.example.peep.device", value: binding }` in the account's 
 Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist TOFU acceptance and verified status independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires repeat verification of an unchanged binding. Each space's [verification policy](core.md#device-verification-policy) selects which kind of trust applies to every exchange in it, never a mix:
 
 - **TOFU spaces** use TOFU acceptance. A client accepts a binding it pinned on first use or through a TOFU key change, a binding it verified, or a binding approved by a same-account binding it accepts. Verified status adds no gate.
-- **TOFU key change.** In a TOFU space, a client MAY accept a new or changed binding without an approval path as a TOFU key change, including for an account it holds verified bindings for. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
+- **TOFU key change.** In a TOFU space, a client MAY accept a new or changed binding without an approval path as a TOFU key change, including for an account it holds verified bindings for. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Bindings revoked for TOFU spaces stay revoked.
 - **Verified-only spaces** use verified status: direct, approval-derived, or synced. Any new or changed binding for an account the client holds a verified binding for requires same-account approval rooted in a verified binding or independent verification. A changed component of a verified binding without such approval records a dispute, which blocks that binding in verified-only spaces until resolved.
 - **Approved changes.** Same-account approval rooted in an accepted binding carries its provenance: a TOFU-rooted approval counts only in TOFU spaces; a verified-rooted approval counts in both.
+- **Revocations.** Revocation authority follows the same provenance. A revocation withdraws its target in verified-only spaces only when its signer is verified; one whose signer is accepted only through TOFU withdraws the target in TOFU spaces only. [Revocation processing](#revocation-processing) runs separately for each trust mode.
 
-Accepting a TOFU key change MUST NOT replace, downgrade, or clear a verified pin: the verified pin remains in effect for verified-only spaces, and the newly accepted binding applies only in TOFU spaces. Clients MUST NOT silently replace a pin. A client that loses its own state MAY pin again under TOFU for TOFU spaces, and MUST report the loss.
+Accepting a TOFU key change, or a revocation signed by a binding accepted only through TOFU, MUST NOT replace, downgrade, clear, or withdraw a verified pin: the verified pin remains in effect for verified-only spaces, and the newly accepted binding or withdrawal applies only in TOFU spaces. Otherwise a malicious PDS could use a TOFU key change in one space to disable a verified device everywhere. Clients MUST NOT silently replace a pin. A client that loses its own state MAY pin again under TOFU for TOFU spaces, and MUST report the loss.
 
 In TOFU spaces, a malicious PDS can substitute keys at first contact or later through a TOFU key change, whatever verification any member has done. [Auditing](audit.md#direct-sync) and change notices are the defense: they can detect substitution but do not prevent it. In verified-only spaces, independent verification or approval rooted in it prevents substitution by the PDS when approving devices remain uncompromised. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not independently establish identity. Both modes require signatures, exact-key matching, and continuity.
 
@@ -181,7 +182,7 @@ An accepted, unwithdrawn device MAY approve devices for its own account. Clients
 Enumerate approvals alongside device records and revocations during discovery and periodic public-repo catch-up. `ObserveApproval(value, state)` MUST perform D1–D3 before accepting the target:
 
 1. **D1 — Validate.** Check schema, CID, same-account scope, both bindings, and signature. Invalid input returns `INVALID` and gains no authority.
-2. **D2 — Signer.** Require the signer to be locally accepted and unwithdrawn under [local trust](#local-trust), applying [withdrawn-approver rules](#withdrawing-an-approver). An approval whose signer is not yet accepted is retained and returns `INCOMPLETE`; re-evaluate it when the signer becomes accepted. A withdrawn signer returns `BLOCKED`.
+2. **D2 — Signer.** Evaluate each trust mode separately: the approval counts in a mode only if its signer is locally accepted and unwithdrawn in that mode under [local trust](#local-trust), applying [withdrawn-approver rules](#withdrawing-an-approver). An approval whose signer is not yet accepted in a mode is retained and returns `INCOMPLETE` there; re-evaluate it when the signer becomes accepted. A signer withdrawn in a mode returns `BLOCKED` there.
 3. **D3 — Commit.** Unless the target is withdrawn, accept it with the signer's provenance, and persist the approval, provenance, and acceptance position atomically. An approval of an already accepted binding adds evidence only.
 
 Approvals do not conflict: each one adds a device, and validation order does not change the accepted set except through [revocation cutoffs](#revocation-processing). Withholding an approval delays a device's acceptance; it cannot remove an accepted device.
@@ -200,15 +201,15 @@ type Revocation = {
 };
 ```
 
-Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
+Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers in each trust mode where it is accepted; no creator/admin approval is required.
 
-A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals relying on its authority. Deletion and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds. Revocation also does not end the device's Spaces access; the user must remove its access at their PDS ([ending access](core.md#ending-access)).
+A revocation that takes effect in a trust mode permanently excludes that exact binding in every current and future space using that mode: no new grants to it, issuance by it, or approvals relying on its authority there. A revocation by a verified signer takes effect in both modes; one by a signer accepted only through TOFU takes effect in TOFU spaces only. Deletion and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds. Revocation also does not end the device's Spaces access; the user must remove its access at their PDS ([ending access](core.md#ending-access)).
 
 Publish under [record conventions](core.md#records). Enumerate public revocations alongside device records during discovery and periodic public-repo catch-up. Peers MAY forward unchanged signed values by CID or copy them into space repos. Clients MUST preserve valid statements, exact targets, and local acceptance/withdrawal ordering even if records disappear.
 
 ### Withdrawing an approver
 
-Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new approvals by the withdrawn signer.
+These rules apply separately in each trust mode, using that mode's withdrawals. Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new approvals by the withdrawn signer.
 
 Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. In a TOFU space, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; in a verified-only space, clients MUST require another accepted, unwithdrawn approver rooted in a verified binding, or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
@@ -216,22 +217,24 @@ Clients MUST reject new bindings relying solely on that signer, including paths 
 
 `ObserveRevocation(value, state)` MUST evaluate each candidate independently against retained local state, with R2–R4 serialized as one atomic local transition. Revocation authority does not depend on finding a cycle.
 
-Let `A(v)` be the retained position at which exact binding `v` was first accepted locally, and `W(v)` the position when the client first accepted a valid account-wide revocation of it. A known unwithdrawn binding has no `W(v)`; missing withdrawal history is unknown, not proof that it is unwithdrawn. Earlier receipt of an inactive candidate MUST NOT backdate withdrawal; replay MUST NOT move either position. Comparisons MUST use [private history](#private-state), including imported histories' comparability, never claimed signing times or another issuer's observations.
+Clients evaluate each candidate separately in each trust mode `m`: `tofu`, used by TOFU spaces, and `verified`, used by verified-only spaces. A binding is accepted in `verified` mode when the client holds verified status for it (direct, approval-derived, or synced), and in `tofu` mode when it is accepted under TOFU acceptance, which includes every verified binding. A revocation by a signer accepted only in `tofu` mode can never withdraw a binding in `verified` mode.
+
+Let `Aₘ(v)` be the retained position at which exact binding `v` was first accepted locally in mode `m`, and `Wₘ(v)` the position when the client first accepted a revocation of it in mode `m`. A known unwithdrawn binding has no `Wₘ(v)`; missing withdrawal history is unknown, not proof that it is unwithdrawn. Earlier receipt of an inactive candidate MUST NOT backdate withdrawal; replay MUST NOT move either position. Comparisons MUST use [private history](#private-state), including imported histories' comparability, never claimed signing times or another issuer's observations.
 
 1. **R1 — Candidate.** Validate encoding, account scope, both bindings, CID, and signature. Invalid candidates return `INVALID` and gain no authority. Retain valid bytes and their receipt position. If this exact statement was already accepted, return `OK` without changing acceptance/withdrawal positions or reauthorizing the signer.
-2. **R2 — Signer.** Require retained evidence that the signer was previously accepted locally. A signer known never to have been accepted returns `BLOCKED`; unavailable required acceptance evidence or unknown local withdrawal status returns `INCOMPLETE`. The candidate cannot establish trust in its signer or target.
-3. **R3 — Authority.** Run `eligible` below. An accepted, unwithdrawn signer may revoke any exact same-account target, including one not yet accepted. A withdrawn signer may revoke only targets accepted strictly before its own first withdrawal. A non-`OK` result leaves this candidate inactive and MUST NOT erase other accepted revocations.
-4. **R4 — Commit.** Accept the statement and withdraw its target. Set `W(target)` to this acceptance position only when the target was known unwithdrawn; otherwise preserve its prior cutoff, including an unknown position, without inventing or advancing it. Preserve every earlier accepted statement and withdrawal, even if its signer is later withdrawn; return `OK`. Re-evaluate inactive candidates when relevant trust or ordering evidence becomes available. Missing evidence or exhausted work budgets return `INCOMPLETE` for affected candidates and MUST NOT delay independently validated withdrawals.
+2. **R2 — Signer.** Require retained evidence that the signer was previously accepted locally in mode `m`. A signer known never to have been accepted returns `BLOCKED`; unavailable required acceptance evidence or unknown local withdrawal status returns `INCOMPLETE`. The candidate cannot establish trust in its signer or target.
+3. **R3 — Authority.** Run `eligible` below for mode `m`. A signer accepted and unwithdrawn in mode `m` may revoke any exact same-account target in that mode, including one not yet accepted. A signer withdrawn in mode `m` may revoke only targets accepted in that mode strictly before its own first withdrawal there. A non-`OK` result leaves this candidate inactive and MUST NOT erase other accepted revocations.
+4. **R4 — Commit.** Accept the statement in mode `m` and withdraw its target in that mode. Set `Wₘ(target)` to this acceptance position only when the target was known unwithdrawn in that mode; otherwise preserve its prior cutoff, including an unknown position, without inventing or advancing it. Preserve every earlier accepted statement and withdrawal, even if its signer is later withdrawn; return `OK`. Re-evaluate inactive candidates when relevant trust or ordering evidence becomes available, including when a signer later becomes accepted in mode `m`; a revocation that becomes active this way takes effect at that position and is never backdated. Missing evidence or exhausted work budgets return `INCOMPLETE` for affected candidates and MUST NOT delay independently validated withdrawals.
 
 After R1–R2 succeed:
 
 ```text
-eligible(signer, target, state):
-    if signer is not withdrawn: return OK
-    if target is known never to have been accepted: return BLOCKED
-    if A(target) or W(signer) is unavailable or they cannot be compared:
+eligible(m, signer, target, state):
+    if signer is not withdrawn in mode m: return OK
+    if target is known never to have been accepted in mode m: return BLOCKED
+    if Aₘ(target) or Wₘ(signer) is unavailable or they cannot be compared:
         return INCOMPLETE
-    return OK if A(target) < W(signer) else BLOCKED
+    return OK if Aₘ(target) < Wₘ(signer) else BLOCKED
 ```
 
 This rule includes self-revocation, mutual revocations, and open chains. A withdrawn signer retains revocation authority over targets before its cutoff indefinitely, including for statements created after withdrawal. It can therefore withdraw the entire older device set and force [recovery](#replacement). It gains no approval, declaration, grant, or other authority. Fresh bindings accepted after its withdrawal are protected from this signer on that client.
@@ -253,7 +256,7 @@ Clients MUST enforce each authenticated change as soon as learned:
 | Change | Required effect |
 | --- | --- |
 | Account becomes ineligible | Block new grants to and from that account in the space until a later eligible host decision permits them. |
-| Account-wide device revocation | Permanently block grants to/from the exact binding and new approvals relying on its authority in every space. Preserve already accepted bindings under [withdrawn-approver rules](#withdrawing-an-approver). |
+| Device revocation in a trust mode | Permanently block grants to/from the exact binding and new approvals relying on its authority in every space using that mode. Preserve already accepted bindings under [withdrawn-approver rules](#withdrawing-an-approver). |
 
 Cached approvals MUST NOT override these effects. Approvals MAY be reused without expiry or fresh per-grant approval, including while the approver is offline. Neither a host read, OOB verification, an audit record, nor an empty revocation update establishes freshness. Withholding may leave stale authorization usable indefinitely, including compromised approvers issuing new approvals. No bounded propagation delay is promised; stricter profiles are [deferred](TODOs.md#todo-06).
 
@@ -261,7 +264,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; approval and revocation statements/candidates; authenticated host observations; key acceptance decisions; pending operations; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering for each trust mode; approval and revocation statements/candidates; authenticated host observations; key acceptance decisions; pending operations; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
 

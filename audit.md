@@ -42,7 +42,7 @@ Permissioned evidence follows normal Spaces access rules. Former members may kee
 
 ## Archived grants
 
-Historical reading MUST use [grant acceptance](core.md#grant-acceptance) in archive mode. Later membership removal or account-wide revocation alone does not invalidate a historical grant. The recipient MUST still authenticate its exact bindings, signatures, required evidence, and epoch commitment, and satisfy the space's [verification policy](core.md#device-verification-policy) before first key acceptance.
+Historical reading MUST use [grant acceptance](core.md#grant-acceptance) in archive mode. Later membership removal or device revocation alone does not invalidate a historical grant. The recipient MUST still authenticate its exact bindings, signatures, required evidence, and epoch commitment, and satisfy the space's [verification policy](core.md#device-verification-policy) before first key acceptance.
 
 For A4 in either mode, the referenced membership decisions MUST authorize the exact issuer and recipient accounts, and the referenced configuration and approval evidence MUST permit the grant on its recorded basis. A known failure of those authorization checks returns `BLOCKED`; invalid or missing required evidence returns `INVALID` or `INCOMPLETE`. A newer eligible decision MUST NOT repair an ineligible decision recorded in the grant.
 
