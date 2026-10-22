@@ -92,6 +92,14 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 ![Creating a space from an existing space in verified-only: creating a verified-only space from a TOFU one, verified pairs joining immediately, and TOFU-only members asked to verify with any member](images/verified-only-creating-from-existing.png)
 
+## Removing a member or device
+
+1. **Securing starts at once.** Removing Carol from Book club, removing a lost device, or reporting a compromised key submits a [replacement key](../core.md#triggers). The space shows **"Removing Carol: securing space…"**, a different state from a finished removal.
+2. **Posting waits for the new key.** Each member's app that has learned of the removal holds new posts, edits, and attachments ([writers](../core.md#writers)). The composer stays usable: drafts are saved and send automatically under the new key, usually within a second or two.
+3. **"Carol was removed. New messages are protected from her devices"** appears only once the replacement is accepted and this device holds its key. Until then the app does not claim she is excluded.
+4. **If securing stalls** (no connection, rate limit, a competing rotation), the banner stays: "Still securing Book club. Your messages will send once Carol's access is closed." There is no option to post under the old key after a removal.
+5. **Reported compromise only:** a held message offers **Send anyway**, one message at a time, warning "Anyone who obtained the old key may read this."
+
 ## Keeping spaces available
 
 Delivery needs a running key holder that has verified the recipient.

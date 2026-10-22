@@ -55,6 +55,10 @@ Alice adds Bob.
 
 ![Creating a space from an existing space: "New space from Book club…" in the space menu, a pre-filled form noting messages aren't copied, and Bob joining the new space with one tap](images/relaxed-tofu-creating-from-existing.webp)
 
+### Removing a member or device
+
+Removal, **I lost a device**, and reported compromise submit a [replacement key](../core.md#triggers) at once. Until it is active and this device holds it, the space shows a quiet "Securing Book club…" line and new messages wait as saved drafts, then send automatically ([writers](../core.md#writers)). Only then does the timeline say "Carol was removed." A stalled rotation keeps the line visible; relaxed presentation offers no *Send anyway*.
+
 ### Alarms
 
 Relaxed presentation does not soften these. They are integrity alarms, not routine notices:
@@ -84,5 +88,6 @@ Surfaces the specification requires to exist but allows to be buried:
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
 | Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
+| Holding new messages while a removal is secured, and not reporting it complete until the replacement key is active ([writers](../core.md#writers)). | *Send anyway* for a reported compromise. |
 | | The sole-holder indicator and device-list detail. |
 
