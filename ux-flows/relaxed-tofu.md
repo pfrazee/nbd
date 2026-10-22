@@ -1,6 +1,6 @@
 # PEEP UX Flows: Relaxed TOFU
 
-Informative. A presentation of [TOFU](tofu.md) spaces (`tofu-permitted` [policy](../core.md#device-verification-policy)) with the minimum user-facing security process the specification allows. The protocol is unchanged: relaxed and full TOFU clients interoperate in the same spaces. See also [Verified-only](verified-only.md). A "device" is an app installation.
+Informative. A presentation of [TOFU](tofu.md) spaces (`tofu` [policy](../core.md#device-verification-policy)) with the minimum user-facing security process the specification allows. The protocol is unchanged: relaxed and full TOFU clients interoperate in the same spaces. See also [Verified-only](verified-only.md). A "device" is an app installation.
 
 ## What protects these spaces
 
@@ -44,7 +44,6 @@ Alice adds Bob.
 1. **"Restore from backup"** or **"Start fresh"**. Starting fresh is the expected path.
 2. **Members see "Alice's devices changed"** and keep sharing with her. Alice's new device pins everyone again.
 3. **History mostly returns** as members re-grant keys. Copy: "Messages only you had may not come back."
-4. **If someone had verified Alice** in another app, their client blocks until she is re-verified. A relaxed app without verification shows nothing to Alice; other members still share with her.
 
 ![Losing every device: a fresh install offering Start fresh, members seeing "Alice's devices changed", and spaces restoring with a caveat about messages only Alice had](images/relaxed-tofu-losing-every-device.webp)
 
@@ -85,8 +84,7 @@ Surfaces the specification requires to exist but allows to be buried:
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
 | Linking confirms adding a device, with an access warning ([declarations](../device-enrollment.md#declarations)). | The space list and keys when linking: new devices join every space. |
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
-| A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
+| A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | The sole-holder indicator and device-list detail. |
 | Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
 | Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | |
-| | The sole-holder indicator and device-list detail. |
 

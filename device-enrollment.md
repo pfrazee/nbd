@@ -15,15 +15,16 @@ Publish `{ $type: "com.example.peep.device", value: binding }` in the account's 
 
 ## Local trust
 
-Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist TOFU pins and verified status independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires repeat verification of an unchanged binding. Verified pins are binding; TOFU pins are advisory:
+Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist TOFU acceptance and verified status independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires repeat verification of an unchanged binding. Each space's [verification policy](core.md#device-verification-policy) selects which kind of trust applies to every exchange in it, never a mix:
 
-- **Verified accounts.** If a client holds an unwithdrawn verified binding (direct, approval-derived, or synced) for an account, any new or changed binding for that account requires same-account approval rooted in a verified binding or independent verification. A changed component of a verified binding without approval records a dispute.
-- **TOFU key change.** Otherwise, in a space whose [verification policy](core.md#device-verification-policy) is `tofu-permitted`, a client MAY accept a new or changed binding without an approval path as a TOFU key change. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
-- **Approved changes.** Same-account approval rooted in a pinned binding carries its TOFU or verified provenance.
+- **TOFU spaces** use TOFU acceptance. A client accepts a binding it pinned on first use or through a TOFU key change, a binding it verified, or a binding approved by a same-account binding it accepts. Verified status adds no gate.
+- **TOFU key change.** In a TOFU space, a client MAY accept a new or changed binding without an approval path as a TOFU key change, including for an account it holds verified bindings for. It MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
+- **Verified-only spaces** use verified status: direct, approval-derived, or synced. Any new or changed binding for an account the client holds a verified binding for requires same-account approval rooted in a verified binding or independent verification. A changed component of a verified binding without such approval records a dispute, which blocks that binding in verified-only spaces until resolved.
+- **Approved changes.** Same-account approval rooted in an accepted binding carries its provenance: a TOFU-rooted approval counts only in TOFU spaces; a verified-rooted approval counts in both.
 
-Clients MUST NOT silently replace a pin or downgrade trust. A client that loses its own state MAY pin again under TOFU only where TOFU is permitted, and MUST report the loss.
+Accepting a TOFU key change MUST NOT replace, downgrade, or clear a verified pin: the verified pin remains in effect for verified-only spaces, and the newly accepted binding applies only in TOFU spaces. Clients MUST NOT silently replace a pin. A client that loses its own state MAY pin again under TOFU for TOFU spaces, and MUST report the loss.
 
-In TOFU-permitted exchanges, a malicious PDS can substitute keys at first contact or later through a TOFU key change. [Auditing](audit.md#direct-sync) and change notices are the defense: they can detect substitution but do not prevent it. Independent verification or approval rooted in it prevents substitution by the PDS when approving devices remain uncompromised. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not independently establish identity. Both modes require signatures, exact-key matching, and continuity; [Core's policy](core.md#device-verification-policy) determines which mode is allowed in each exchange.
+In TOFU spaces, a malicious PDS can substitute keys at first contact or later through a TOFU key change, whatever verification any member has done. [Auditing](audit.md#direct-sync) and change notices are the defense: they can detect substitution but do not prevent it. In verified-only spaces, independent verification or approval rooted in it prevents substitution by the PDS when approving devices remain uncompromised. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not independently establish identity. Both modes require signatures, exact-key matching, and continuity.
 
 Each client MUST keep its own trust decisions, distinguishing direct verification, approval-derived verification, synced, and TOFU provenance. One user's decision does not verify a device for another user; [own-device trust sync](#own-device-trust-sync) carries it only to that user's own installations. OOB records, earlier approval evidence, acceptance history, and revocations remain in [private state](#private-state); reusing trust in another space MUST NOT publish the original space's declarations.
 
@@ -100,7 +101,7 @@ A failed, expired, or consumed session MUST NOT change pins, trust, or disputes;
 
 ### Effects
 
-Verifying an exact TOFU pin upgrades future local decisions, including valid approval paths rooted in it. Clients MUST preserve prior grants' trust decisions; the upgrade proves neither past authorization nor absence of disclosure. A successful session verifying keys that differ from an existing verified pin for the same account and device ID records a dispute and blocks dependent grants/key acceptance until approval or independent recovery resolves it. If they differ from a TOFU pin, the verified binding replaces it; the client records the superseded binding and surfaces that earlier exchanges with it may have used substituted keys. Verification cannot revive revoked bindings or bypass [withdrawn-approver rules](#withdrawing-an-approver).
+Verifying an exact binding makes it, and valid approval paths rooted in it, eligible in verified-only spaces; it changes nothing in TOFU spaces. Clients MUST preserve prior grants' trust decisions; the upgrade proves neither past authorization nor absence of disclosure. A successful session verifying keys that differ from an existing verified pin for the same account and device ID records a dispute and blocks dependent grants/key acceptance in verified-only spaces until approval or independent recovery resolves it. If they differ from a TOFU pin, the verified binding replaces it; the client records the superseded binding and surfaces that earlier exchanges with it may have used substituted keys. Verification cannot revive revoked bindings or bypass [withdrawn-approver rules](#withdrawing-an-approver).
 
 ## Own-device trust sync
 
@@ -154,9 +155,9 @@ An accepted, unwithdrawn installation SHOULD send an updated snapshot to each of
 3. **S3 — Order.** Ignore a `sequence` not greater than the highest applied from that source.
 4. **S4 — Apply.** For each entry, record a synced decision with provenance `sync`, naming the source:
    - `verified` upgrades an exact TOFU pin or creates a verified pin. It satisfies [verified-only policy](core.md#device-verification-policy) for this installation.
-   - `tofu` creates a TOFU pin only where TOFU first use would be permitted. It never upgrades.
+   - `tofu` creates a TOFU pin, which applies only in TOFU spaces. It never upgrades.
    - `disputed` records a dispute for that binding.
-   - An entry whose binding differs from a local verified pin for the same account and device ID records a dispute; it MUST NOT replace the pin. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry is handled as a [TOFU key change](#local-trust) where permitted, and otherwise records a dispute.
+   - An entry whose binding differs from a local verified pin for the same account and device ID MUST NOT replace that pin: a `verified` entry records a dispute, and a `tofu` entry is handled as a [TOFU key change](#local-trust) for TOFU spaces while the verified pin stays in effect for verified-only spaces. A `verified` entry replaces a differing TOFU pin as a direct session would. A differing `tofu` entry for a TOFU pin is handled as a TOFU key change.
    - Revoked bindings stay revoked.
    Record each `enrollment` entry for the source itself, replacing its earlier synced preference; ignore entries for other devices.
 5. **S5 — Commit.** Persist applied decisions, the source, and its sequence atomically.
@@ -209,7 +210,7 @@ Each declaration's `previous` set names same-account, same-space predecessors: n
 `ObserveDeclaration(candidate, account, space, state)` MUST perform D1–D4 before changing the current selection:
 
 1. **D1 — Validate.** Check schema, CID, exact account/space, and signature. Authenticate the signer through [retained trust, permitted first-use TOFU, or a permitted TOFU key change](#local-trust), [approval](#declarations), or [independent verification](#independent-verification), applying [withdrawn-approver rules](#withdrawing-an-approver). Invalid data returns `INVALID`; missing required evidence returns `INCOMPLETE`; prohibited new authority returns `BLOCKED`. Previously accepted snapshots and historical ancestors MAY be checked as retained evidence without restoring authority or accepting new approvals; a withdrawn signer cannot authorize a newly accepted selection.
-2. **D2 — Bootstrap.** On genuine first observation with no saved declaration state or known conflict, a client MAY persist the complete authenticated candidate as starting point/current selection and return `OK` without fetching predecessors. Otherwise continue to D3. Existing account pins and withdrawals still apply. Known state loss MUST use [recovery](#recovery), not this shortcut, except that a client MAY bootstrap again in TOFU-permitted spaces, recording the loss.
+2. **D2 — Bootstrap.** On genuine first observation with no saved declaration state or known conflict, a client MAY persist the complete authenticated candidate as starting point/current selection and return `OK` without fetching predecessors. Otherwise continue to D3. Existing account pins and withdrawals still apply. Known state loss MUST use [recovery](#recovery), not this shortcut, except that a client MAY bootstrap again in TOFU spaces, recording the loss.
 3. **D3 — Compare.** Otherwise fetch and authenticate enough ancestry to compare the candidate, retained tips, and newly discovered branches, including history preceding bootstrap when needed. Check every traversed edge's scope and reject cycles. Persist unresolved authenticated candidates and return `INCOMPLETE` if a required comparison is unknown or exceeds the work budget; affected grants remain blocked. Missing paths MUST NOT create a conflict or erase saved tips.
 4. **D4 — Commit.** Apply the following cases to the validated graph and persist snapshots, tips, and the result atomically. A complete signed resolution must cover all known competing tips, directly or through validated resolution ancestry.
 
@@ -255,7 +256,7 @@ Publish under [record conventions](core.md#records). Enumerate public revocation
 
 Clients MUST preserve bindings accepted locally before learning their approver's withdrawal, including trust status/provenance. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new declarations by the withdrawn signer.
 
-Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. In a TOFU-permitted space where no verified binding for the account exists, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; otherwise clients MUST require another accepted, unwithdrawn approver or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
+Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. In a TOFU space, the binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit; in a verified-only space, clients MUST require another accepted, unwithdrawn approver rooted in a verified binding, or independent verification. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
 ### Revocation processing
 
@@ -321,7 +322,7 @@ An old backup cannot detect wholly lost newer state without a surviving referenc
 
 ### Replacement
 
-A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys while preserving TOFU/verified provenance. Otherwise, clients holding a verified binding for the account MUST independently re-verify the replacement; in TOFU-permitted exchanges, other clients MAY accept it as a [TOFU key change](#local-trust). PDS recovery cannot reset verified trust, revive revoked bindings, or authorize signed withdrawals. Use [the same verification policy](core.md#device-verification-policy) for subsequent grants and acceptance.
+A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys while preserving TOFU/verified provenance. Otherwise, in TOFU spaces clients MAY accept the replacement as a [TOFU key change](#local-trust); in verified-only spaces they MUST independently re-verify it. PDS recovery cannot reset verified trust, revive revoked bindings, or authorize signed withdrawals. Each space's [verification policy](core.md#device-verification-policy) governs subsequent grants and acceptance.
 
 One eligible helper holding keys can restore access to those spaces; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
@@ -329,7 +330,7 @@ Removal/re-invitation follows host administration but cannot reset pins, withdra
 
 ### Total device loss
 
-There is currently no process for recovering from the loss of every installation and decryptable backup. Such a user falls back to [replacement](#replacement) without a surviving approver: peers holding verified bindings re-verify, TOFU peers may accept a key change, members re-grant keys they hold, and the user cannot publish signed withdrawals of the lost bindings. Keys held only by the lost installations are gone. A dedicated mechanism is an open design question ([TODO-08](TODOs.md#todo-08)).
+There is currently no process for recovering from the loss of every installation and decryptable backup. Such a user falls back to [replacement](#replacement) without a surviving approver: peers accept a key change in TOFU spaces and re-verify for verified-only spaces, members re-grant keys they hold, and the user cannot publish signed withdrawals of the lost bindings. Keys held only by the lost installations are gone. A dedicated mechanism is an open design question ([TODO-08](TODOs.md#todo-08)).
 
 ## Platform notes
 

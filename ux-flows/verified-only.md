@@ -4,7 +4,7 @@ Informative. User-facing flows for spaces whose [verification policy](../core.md
 
 ## What protects these spaces
 
-Keys pass only between devices that have verified each other, directly or through same-account approval rooted in a verified device. A malicious PDS cannot substitute keys between verified devices. The cost is that every member verifies at least one other member once; verification is then reused across all spaces.
+Keys pass only between devices that have verified each other, directly or through same-account approval rooted in a verified device. A malicious PDS cannot substitute keys between verified devices. Because every exchange in the space requires verification, no member can hand the shared key to a substituted device through TOFU; that uniformity is what lets verification protect the whole space ([why](../core.md#device-verification-policy)). The cost is that every member verifies at least one other member once; verification is then reused across all verified-only spaces.
 
 The policy is chosen at creation and [fixed for the life of the space](../core.md#device-verification-policy). Space info says: "Only verified devices can read this space."
 
@@ -37,7 +37,7 @@ Admin Alice adds Bob.
 **Bob:**
 
 4. **Notification, then "Join Book club" with "Joining on 3 devices · Change."** One tap. His [enrollment preferences](../device-enrollment.md#enrollment-preferences) choose the devices, and this device signs one declaration for all of them.
-5. **Locked until verified: "Verify with any member to unlock,"** with the member list. The space name and members (host data) are visible; content is not. Bob can write drafts locally. If Bob already verified any member's device in another space, there is nothing to do: verification is reused.
+5. **Locked until verified: "Verify with any member to unlock,"** with the member list. The space name and members (host data) are visible; content is not. Bob can write drafts locally. If Bob already verified any member's device in another verified-only space, there is nothing to do: verification is reused.
 6. **Members see "Bob is waiting. Verify Bob."** Any one member suffices, because every session verifies both directions. The admin has no special role.
 
 **Verifying:**
@@ -52,7 +52,7 @@ Admin Alice adds Bob.
 
 **Reuse:** verification belongs to a device pair, not a space. It extends through approvals: Bob's laptop, approved by his verified phone, shows as *Verified via Bob's phone*. In practice each pair of people verifies once.
 
-**Key changes:** if Bob's keys change without approval from a verified Bob device, every member's client blocks: "Bob's device changed. Verify to continue." Grants to and from that device stop until Bob is re-verified or an approval resolves the [dispute](../device-enrollment.md#independent-verification).
+**Key changes:** if Bob's keys change without approval from a verified Bob device, every member's client blocks: "Bob's device changed. Verify to continue." Grants to and from that device stop until Bob is re-verified or an approval resolves the [dispute](../device-enrollment.md#independent-verification). In TOFU spaces the same members accept the change with a notice, and their verification of Bob stays in effect here.
 
 ![Adding a member in verified-only: invite with the history warning and a verification code, the timeline line, Bob locked until he verifies with any member, the three channels, the 6-digit code on both sides, a neutral failure, unlocking, and a key change that blocks everyone](images/verified-only-adding-a-member.png)
 
@@ -88,7 +88,7 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 1. **"New space from Book club…"** prefills the parent's members. Copy: "Members are copied; messages aren't." This is also how a TOFU group moves to verification: "Create a verified-only space from this one."
 2. **Creator:** as in [creating a space](#creating-a-space).
-3. **Each member taps Join once.** Pairs verified in the parent or any other space unlock immediately. Members who were only TOFU-pinned in a TOFU parent must verify with one member, as for a new member.
+3. **Each member taps Join once.** Pairs verified in the parent or any other verified-only space unlock immediately. Coming from a TOFU parent, TOFU pins don't count: each member verifies with one member, as for a new member.
 
 ![Creating a space from an existing space in verified-only: creating a verified-only space from a TOFU one, verified pairs joining immediately, and TOFU-only members asked to verify with any member](images/verified-only-creating-from-existing.png)
 
