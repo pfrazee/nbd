@@ -11,8 +11,7 @@ The same as [TOFU](tofu.md#what-protects-these-spaces): devices are trusted on f
 ### Creating a space
 
 1. **"New space" form:** name and optional members. No security choices. Tapping **Create** selects all of the user's devices.
-2. **"Securing space…"** until the host accepts epoch 1; drafts persist and retry quietly.
-3. **Space opens.** Space info includes "Everyone in this space can read its full history."
+2. **Space opens** as soon as it is created; the key is generated on this device first. Space info includes "Everyone in this space can read its full history."
 
 ![Creating a space: the new space form, "Securing space…" with a queued draft, the opened space with membership timeline lines, and space info stating that everyone can read the full history](images/relaxed-tofu-creating-a-space.webp)
 
@@ -57,7 +56,7 @@ Alice adds Bob.
 
 ### Removing a member or device
 
-Removal, **I lost a device**, and reported compromise submit a [replacement key](../core.md#triggers) at once. Until it is active and this device holds it, the space shows a quiet "Securing Book club…" line and new messages wait as saved drafts, then send automatically ([writers](../core.md#writers)). Only then does the timeline say "Carol was removed." A stalled rotation keeps the line visible; relaxed presentation offers no *Send anyway*.
+Removal and **I lost a device** take effect at once, with nothing held back. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The removal notice offers **Move to a new space** for groups that want her locked out of new messages.
 
 ### Alarms
 
@@ -72,7 +71,7 @@ Relaxed presentation does not soften these. They are integrity alarms, not routi
 
 Surfaces the specification requires to exist but allows to be buried:
 
-- **Devices & security:** the user's devices, **Link a new device**, and **New devices join spaces** (*Automatically* by default), which replaces the future-spaces question skipped during linking. **I lost a device** removes a lost device: it revokes the binding and rotates affected spaces.
+- **Devices & security:** the user's devices, **Link a new device**, and **New devices join spaces** (*Automatically* by default), which replaces the future-spaces question skipped during linking. **I lost a device** removes a lost device: it revokes the binding, so the device gets no new keys, and offers to move affected spaces.
 - **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, including accepted key changes ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
@@ -88,6 +87,6 @@ Surfaces the specification requires to exist but allows to be buried:
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | The device set when joining ([enrollment preferences](../device-enrollment.md#enrollment-preferences)). |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | Trust badges and the Verify action. |
 | Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | The future-spaces question while linking: new devices default to *Automatically*, changeable in settings. |
-| Holding new messages while a removal is secured, and not reporting it complete until the replacement key is active ([writers](../core.md#writers)). | *Send anyway* for a reported compromise. |
+| Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | Moving to a new space as the default response to a removal. |
 | | The sole-holder indicator and device-list detail. |
 

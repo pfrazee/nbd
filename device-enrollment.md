@@ -247,7 +247,7 @@ type Revocation = {
 
 Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
 
-A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals/declarations relying on its authority. Deletion, stale selections, and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext; affected current keys require [rotation](core.md#triggers).
+A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals/declarations relying on its authority. Deletion, stale selections, and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds.
 
 Publish under [record conventions](core.md#records). Enumerate public revocations alongside device records during discovery and periodic public-repo catch-up. Peers MAY forward unchanged signed values by CID or copy them into space repos. Clients MUST preserve valid statements, exact targets, and local acceptance/withdrawal ordering even if records disappear.
 
@@ -287,7 +287,7 @@ For a fixed set of devices all accepted before any withdrawal, revocation delive
 
 Validators MUST use visited references, resumable progress, and finite byte/node/depth/work budgets; they MAY cache validated signatures. Validators MUST authenticate ancestry edges before using them and reject cross-account/space ancestry and declaration-ancestry cycles, while allowing shared ancestors.
 
-Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip required checks, truncate selections/contexts, choose branches, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
+Implementations MUST publish supported limits and check each block before allocation. Resource exhaustion or unavailable required paths means incomplete validation, not permission to skip required checks, truncate selections, choose branches, discard revocations, or weaken verification. Large histories may require more work or a more capable client.
 
 ### Freshness
 
@@ -307,7 +307,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; epoch/key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; first-observed host policies and the policy recorded with each decision; TOFU/direct/approval-derived/synced verification, verification channels, disputes, and TOFU key changes with superseded pins; per-source trust-sync sequences; enrollment preferences; open, attempted, and consumed [verification sessions](#procedure); private OOB/approval evidence; acceptance and learned-withdrawal ordering; revocation statements/candidates; declaration starting points/tips/conflicts; authenticated host observations; key acceptance decisions; pending operations; authored selections; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
 
@@ -323,9 +323,9 @@ An old backup cannot detect wholly lost newer state without a surviving referenc
 
 A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys while preserving TOFU/verified provenance. Otherwise, clients holding a verified binding for the account MUST independently re-verify the replacement; in TOFU-permitted exchanges, other clients MAY accept it as a [TOFU key change](#local-trust). PDS recovery cannot reset verified trust, revive revoked bindings, or authorize signed withdrawals. Use [the same verification policy](core.md#device-verification-policy) for subsequent grants and acceptance.
 
-One eligible helper holding keys can restore access to those epochs; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
+One eligible helper holding keys can restore access to those spaces; other clients keep their own trust decisions. Recovery clients MUST recover declaration history and resolve known tips/conflicts before issuance; missing required comparison paths remain blocking. Publish the replacement declaration and, where an authorized signer survives, withdrawals. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
-Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants and [rotate affected spaces](core.md#triggers). Administration, device authority, and key recovery are separate: losing all key copies, decryptable backups, and usable [history-wrapping paths](core.md#backward-history-wrapping) loses historical plaintext. Future writes can resume through [a fresh epoch](core.md#availability-recovery). Cross-application backup portability is outside the baseline.
+Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or declaration/audit history. Keep old grants; removal does not [rotate](core.md#no-rotation) space keys. Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups [loses the space](core.md#key-loss). Cross-application backup portability is outside the baseline.
 
 ### Total device loss
 

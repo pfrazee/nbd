@@ -19,10 +19,10 @@ The policy is chosen at creation and [fixed for the life of the space](../core.m
 1. **"New space" form:** name, optional members, and *Allow unverified devices* / *Require verified devices*. The form says the choice is permanent: "You can't change this later. To change it, create a new space."
 2. **"Creating on 3 devices · Change."** The device set comes from each device's [enrollment preference](../device-enrollment.md#enrollment-preferences): *Automatically* devices are included, *Ask* devices appear unchecked, *Never* devices are omitted. This device is always included. Creating the space is the confirmation.
    - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication). It signs the initial [declaration](../device-enrollment.md#declarations) with `previous: []`.
-3. **"Securing space…":** the epoch 1 key is generated and the [activation request](../core.md#client-activation-states) submitted. Posting waits for acceptance. On network loss, the draft persists and the exact request is retried; the UI does not report failure while the outcome is unknown.
+3. **No extra wait.** The space key is generated on this device before the space is created, and its [commitment](../core.md#key-generation) is part of the creating configuration, so posting can start as soon as creation succeeds.
 4. **Space opens.** The creator's other devices receive grants in the background.
 
-**Sole-holder indicator:** whenever this device is the only known holder of the active key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
+**Sole-holder indicator:** whenever this device is the only known holder of the space key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
 ![Creating a space in TOFU: the form with the permanent policy choice, the device set from enrollment preferences, "Securing space…", the sole-holder note, and space info with Unverified badges](images/tofu-creating-a-space.png)
 
@@ -32,7 +32,7 @@ Admin Alice adds Bob.
 
 **Alice:**
 
-1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [recommended](../core.md#trusted-host-state), and space info also states it; [history wrapping](../core.md#backward-history-wrapping) makes past content part of membership.
+1. **Invite Bob.** The confirmation explains that admission includes retained history: "Bob will be able to read everything already posted here." This is [recommended](../core.md#trusted-host-state), and space info also states it; a space has [one key](../core.md#key-generation), so past content is part of membership.
 2. **Every member sees "Alice added Bob"** in the timeline.
 
 **Bob:**
@@ -61,7 +61,7 @@ Alice gets a new laptop.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** pins and verifications move to the laptop so it does not pin everyone afresh, and [trust sync](../device-enrollment.md#own-device-trust-sync) keeps them current afterwards.
 4. **The phone grants immediately**; the laptop reads full history. "3 of 4 spaces enabled. Retrying Work…" covers partial progress.
 5. **Other members:** the laptop is approved by Alice's phone, so it inherits whatever trust they had in the phone: *Verified via Alice's iPhone* or unverified. No timeline notice; device lists show "Alice · 3 devices".
-6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop and rotates affected spaces ([own-account notices](../audit.md#direct-sync)).
+6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received, so the notice also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
 
 ![Adding a device in TOFU: the laptop code, batch enrollment with the future-spaces question, pins and verifications transferring, the device list other members see, and the new-device notice on Alice's iPad](images/tofu-adding-a-device.png)
 
@@ -75,13 +75,13 @@ Alice gets a new laptop.
 
 ## Creating a space from an existing space
 
-PEEP has no parent/child relationship; each space is cryptographically independent.
+PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group locks out a [removed member](#removing-a-member-or-device).
 
 | Carries over | Doesn't carry over |
 | --- | --- |
 | [Device trust](../device-enrollment.md#local-trust): TOFU pins and verified status. | Membership: each admission is a separate host decision (the app can prefill it). |
 | Public device records. | Declarations: each member joins and selects devices again. |
-| | Keys and history: the new space starts at epoch 1; parent content is not readable through it. |
+| | Keys and history: the new space has its own key; parent content is not readable through it. |
 | | Policy: the app copies it by default, but a derived space is how a group changes policy. |
 
 1. **"New space from Book club…"** prefills the parent's members and policy. Copy: "Members are copied; messages aren't." Offering *Require verified devices* here is how a group upgrades: the new space is [verified-only](verified-only.md#creating-a-space-from-an-existing-space).
@@ -92,11 +92,9 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 ## Removing a member or device
 
-1. **Securing starts at once.** Removing Carol from Book club, removing a lost device, or reporting a compromised key submits a [replacement key](../core.md#triggers). The space shows **"Removing Carol: securing space…"**, a different state from a finished removal.
-2. **Posting waits for the new key.** Each member's app that has learned of the removal holds new posts, edits, and attachments ([writers](../core.md#writers)). The composer stays usable: drafts are saved and send automatically under the new key, usually within a second or two.
-3. **"Carol was removed. New messages are protected from her devices"** appears only once the replacement is accepted and this device holds its key. Until then the app does not claim she is excluded.
-4. **If securing stalls** (no connection, rate limit, a competing rotation), the banner stays: "Still securing Book club. Your messages will send once Carol's access is closed." There is no option to post under the old key after a removal.
-5. **Reported compromise only:** a held message offers **Send anyway**, one message at a time, warning "Anyone who obtained the old key may read this."
+1. **Removal is immediate.** Removing Carol from Book club or removing a lost device takes effect as soon as members' apps and the host learn of it: no new grants to her devices, and the host stops serving her the space. Nothing is held back; posting continues.
+2. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
+3. **"Move to a new space"** accompanies the removal notice, and the same offer appears for a suspected compromised key: "To make sure Carol can't read new messages, move to a new space." It runs [creating a space from an existing space](#creating-a-space-from-an-existing-space) prefilled with the remaining members. The old space stays readable to its members.
 
 ## Keeping spaces available
 

@@ -18,7 +18,7 @@ Read the specifications below:
 
 | Document | Defines |
 | --- | --- |
-| [Core](core.md) | Trust boundaries, [protocol conventions](core.md#protocol-conventions), [key grants](core.md#key-grants), [content encryption](core.md#content-encryption), and [rotation](core.md#rotation). |
+| [Core](core.md) | Trust boundaries, [protocol conventions](core.md#protocol-conventions), [key grants](core.md#key-grants), [content encryption](core.md#content-encryption), and the [space key lifecycle](core.md#space-key-lifecycle). |
 | [Device enrollment](device-enrollment.md) | Bindings, verification, declarations, [history and revocation](device-enrollment.md#enrollment-history), [recovery](device-enrollment.md#recovery), and [platform notes](device-enrollment.md#platform-notes). |
 | [Auditing](audit.md) | Evidence, publication, retention, historical validation, and sync. |
 | [Rationale](rationale.md) | Design choices and comparison with MLS, Megolm, Signal sender keys, and Keybase team keys (informative). |
