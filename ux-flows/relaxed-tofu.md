@@ -1,6 +1,6 @@
 # PEEP UX Flows: Relaxed TOFU
 
-Informative. A presentation of [TOFU](tofu.md) spaces (`tofu` [policy](../core.md#device-verification-policy)) with the minimum user-facing security process the specification allows. The protocol is unchanged: relaxed and full TOFU clients interoperate in the same spaces. See also [Verified-only](verified-only.md). A "device" is an app installation.
+Informative. A presentation of [TOFU](tofu.md) spaces with the minimum user-facing security process the specification allows. The protocol is unchanged: relaxed and full TOFU clients interoperate in the same spaces. A "device" is an app installation.
 
 ## What protects these spaces
 
@@ -62,7 +62,7 @@ Removal and **I lost a device** stop new keys at once, with nothing held back, a
 Relaxed presentation does not soften these. They are integrity alarms, not routine notices:
 
 - **A device you don't recognise:** a grant to, or a record for, a device of the user's account that no device of theirs approved ([auditing](../audit.md#direct-sync)). Copy: "A device you don't recognise may have access to your spaces. Review devices."
-- **Host integrity:** a space reporting a different verification policy than first observed ([policy](../core.md#device-verification-policy)).
+- **Host integrity:** a space reporting a different key commitment than first observed ([host state](../core.md#trusted-host-state)).
 
 ![Alarms: a full-screen "A device you don't recognise may have access to your spaces" alarm, the device list with the never-approved device and a Remove action, and a persistent red banner when a space's security rules change unexpectedly](images/relaxed-tofu-alarms.webp)
 
@@ -80,7 +80,7 @@ Surfaces the specification requires to exist but allows to be buried:
 
 | Still required | Omitted or hidden |
 | --- | --- |
-| Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | Policy choice at creation: every space is TOFU. |
+| Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | |
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
 | Linking confirms adding a device, with an access warning ([approvals](../device-enrollment.md#approvals)). | |
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | |
