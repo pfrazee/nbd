@@ -4,7 +4,7 @@ Informative. User-facing flows for PEEP spaces, which all use [trust on first us
 
 ## What protects these spaces
 
-Devices are trusted on first use, and later unapproved changes are accepted as visible [TOFU key changes](../device-enrollment.md#local-trust). A malicious PDS can substitute keys, and a substituted device that any member accepts can read the whole space; the defense is detection after the fact, through [auditing](../audit.md#direct-sync) of grants to your own account and notices of every unapproved change.
+A person's devices are trusted on first contact; after that, a new device is accepted only if one of that person's existing devices linked it ([local trust](../device-enrollment.md#local-trust)). A malicious PDS can substitute keys at first contact, and a substituted device that any member accepts can read the whole space; the defense there is detection after the fact, through [auditing](../audit.md#direct-sync) of grants to your own account. Later, a PDS cannot add a device on its own. The cost is that losing every device can't be recovered from.
 
 There is no device verification. Members share one key, so one member verifying another would not protect the space: anyone who accepted a substituted device could pass it the key ([why](../core.md#device-trust)). Verified-only spaces are a [deferred extension](../TODOs.md#deferred-extensions). Space info says: "Devices in this space aren't verified. Changes are shown, but not blocked."
 
@@ -42,7 +42,7 @@ Admin Alice adds Bob.
 **Afterwards:**
 
 6. **Device lists:** each sees the other's devices, with no badges or Verify action.
-7. **Key changes:** if Bob's keys change without approval from a Bob device already pinned, every member accepts the change and sees a timeline notice: "Bob's devices changed." Nothing blocks. Pins are never silently replaced; every accepted change is recorded.
+7. **Unlinked devices:** if a new Bob device appears without a link from a Bob device already pinned, members' apps don't share keys with it, and there is no override. Device lists show "Bob has a device that isn't linked to his others," which can mean Bob skipped linking or someone is impersonating him.
 8. **Alarms:** Bob's client alarms if it finds a grant to a device he never approved, or records in his repo for devices he doesn't recognise ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to *Book club*." These are the main defense against substitution, so they are prominent.
 
 ![Adding a member in TOFU: invite with the history warning, the timeline line, Bob joining, the brief locked state, a key change notice, and the own-account alarm](images/tofu-adding-a-member.png)
@@ -51,7 +51,7 @@ Admin Alice adds Bob.
 
 Alice gets a new laptop.
 
-1. **Laptop:** install, log in, show "Link this device" with a QR code. Generating keys and publishing the device record grants nothing on its own.
+1. **Laptop:** install, log in, show "Link this device" with a QR code. Until it is linked, members' apps that already know Alice won't share keys with it ([local trust](../device-enrollment.md#local-trust)); the screen says so.
 2. **Phone:** Devices → Link → scan, then one confirmation: "Link *Alice's Laptop*? It will be able to read all your spaces. Only link devices you own." The phone signs an [approval](../device-enrollment.md#approvals); there is no list of spaces.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** pins move to the laptop so it does not pin everyone afresh. Afterwards each device pins on its own.
 4. **Spaces open on demand.** When Alice opens a space on the laptop, it requests the key and her phone grants it in the background; the laptop reads full history. Installations of the same app may get keys right away.
@@ -62,10 +62,10 @@ Alice gets a new laptop.
 
 ## Losing every device
 
-1. **"Restore from backup"** (same keys and state) or **"Start fresh"**. There is currently no other [recovery process](../device-enrollment.md#total-device-loss).
-2. **Starting fresh is cheap.** Members accept her new device as a [key change](../device-enrollment.md#local-trust) and see "Alice's devices changed." Alice's new device pins everyone again. She loses no protection she had at first contact.
-3. **History mostly returns:** members re-grant keys they hold. Content is lost only where Alice's devices held the only copies.
-4. Copy is honest: "Resetting your account password can't restore encrypted access."
+1. **"Restore from backup"** (same keys and state) is the only way back. There is no [recovery process](../device-enrollment.md#total-device-loss) without a backup or a surviving device.
+2. **Without one, encrypted spaces are gone for this account.** A fresh install can't be linked, so members' apps that already know Alice won't share keys with it. Copy is honest: "Without a backup or one of your other devices, this account can't get back into its encrypted spaces. Resetting your password won't help."
+3. **Members see why Alice is stuck:** "Alice has a device that isn't linked to her others." The app offers no way to accept it.
+4. **Prevention is the product.** The app prompts users with one device to add a second device or turn on backup, and settings show how many devices and backups the account has.
 
 ## Creating a space from an existing space
 

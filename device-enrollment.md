@@ -15,15 +15,16 @@ Publish `{ $type: "com.example.peep.device", value: binding }` in the account's 
 
 ## Local trust
 
-PEEP uses trust on first use (TOFU). Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist pins independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires accepting an unchanged binding again. A client accepts a binding through:
+PEEP uses trust on first use (TOFU) only at first contact with an account; every later device of that account needs a signed [approval](#approvals). Trust binds the account DID, device ID, and both keys, with no space identifier. Clients MUST persist pins independently of spaces; creating, leaving, deleting, or rejoining a space neither resets trust nor requires accepting an unchanged binding again. A client accepts a binding through:
 
-- **First use.** A binding of an account for which it holds no accepted binding, pinned on first sight.
+- **First use.** When a client holds no accepted binding of an account, it pins the binding it first needs for an exchange, together with every binding of that account connected to it through valid same-account approvals, following each approval in either direction. A later device may be seen before the account's first one, and approvals point only from signer to target. The set is accepted at one position; the client then applies the account's revocations under [R1–R4](#revocation-processing).
 - **Approval.** A binding approved by a same-account binding it accepts ([approvals](#approvals)).
-- **TOFU key change.** A new or changed binding without an approval path, including one replacing a pinned binding. The client MUST durably record the change, including any superseded pin, and MUST visibly surface it identifying the account ("Bob's devices changed"). Notices add no approval gate. Revoked bindings stay revoked.
 
-Clients MUST NOT silently replace a pin. A client that loses its own state MAY pin again on first use, and MUST report the loss. Pairing copies pins to a new installation; afterwards each installation pins independently, so a user's installations may hold different pins.
+Once a client has accepted any binding of an account, it MUST NOT accept a binding of that account without an approval path, even if every accepted binding is withdrawn. Clients MUST NOT replace pins and MUST NOT offer users a way to accept an unapproved binding: with one shared key, a single member doing so would disclose the space to it. An unapproved binding stays unaccepted until an approval path arrives. Clients SHOULD surface unapproved bindings of other accounts that they decline ("Bob has a device that isn't linked to his others"), since one may indicate attempted substitution. Revoked bindings stay revoked.
 
-A malicious PDS can therefore substitute keys at first contact or later through a TOFU key change, and a substituted device that any member accepts receives the space key and all retained history. [Auditing](audit.md#direct-sync) and change notices are the defense: they can detect substitution after the disclosure, but cannot prevent or undo it. Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not establish identity. Independent device verification, which would prevent PDS substitution, is a [deferred extension](TODOs.md#deferred-extensions).
+A client that loses its own state MAY pin again on first use, and MUST report the loss. Pairing copies pins to a new installation; afterwards each installation pins independently, so a user's installations may hold different pins.
+
+A malicious PDS can therefore substitute keys at first contact, before a client holds any pin for the account, and a substituted device that any member accepts receives the space key and all retained history. [Auditing](audit.md#direct-sync) is the defense against first-contact substitution: it can detect substitution after the disclosure, but cannot prevent or undo it. After first contact, a PDS cannot add a device on its own; an accepted installation of the account must sign an approval, which [own-account notices](audit.md#direct-sync) surface to the account holder. The cost is that an account with no surviving installation cannot add devices ([total device loss](#total-device-loss)). Self-signatures, possession challenges, PDS login/publication, and account-only invitations do not establish identity. Independent device verification, which would prevent first-contact substitution, is a [deferred extension](TODOs.md#deferred-extensions).
 
 Each client MUST keep its own trust decisions; one user's decisions never establish trust for another user. Approval evidence, acceptance history, and revocations remain in [private state](#private-state).
 
@@ -44,7 +45,7 @@ Sign with `Ed25519.Sign(signerKey, CBOR(["peep/device-approval", 1, approvalWith
 
 Before signing, the approving installation MUST authenticate the target binding through pairing and obtain the user's confirmation of adding a device to the account. The UI MUST state that the device gains access to all of the account's spaces and SHOULD warn the user to link only devices they own, because tricking users into scanning an attacker's linking code yields full access. It MAY show a name reported by the new device, which that device supplies and is not otherwise authenticated. Keys need not be displayed. Possession alone or a PDS-supplied list is insufficient user intent. The approving installation MUST persist the signed approval locally before publication.
 
-An accepted, unwithdrawn device MAY approve devices for its own account. Clients MUST validate paths outward from a locally accepted binding, checking each signature, exact binding, and same-account scope. Clients MUST preserve exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Clients MUST apply [revocations](#device-revocations) before accepting new authority.
+After an account's first contact, approval is the only way it adds a device ([local trust](#local-trust)). An accepted, unwithdrawn device MAY approve devices for its own account. Outside the [first-use](#local-trust) set, clients MUST validate paths outward from a locally accepted binding, checking each signature, exact binding, and same-account scope. Clients MUST preserve exact approval records for offline validation. Self-signatures or cycles among unknown keys cannot establish a root. Approval grants neither membership, cross-account authority, nor administration. Clients MUST apply [revocations](#device-revocations) before accepting new authority.
 
 ### Approval validation
 
@@ -72,7 +73,7 @@ type Revocation = {
 
 Sign `CBOR(["peep/device-revocation", 1, revocationWithoutProof])`. Signer and target MUST name the same account. Clients MUST use [R1–R4](#revocation-processing) to validate and apply each revocation using their own trust, not a relay's judgment. A compromised accepted device can revoke its peers; no creator/admin approval is required.
 
-A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals relying on its authority. Deletion and new spaces cannot clear it. Replacement requires fresh keys under [approval or recovery](#replacement). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds. Revocation also does not end the device's Spaces access; the user must remove its access at their PDS ([ending access](core.md#ending-access)).
+A valid revocation permanently excludes that exact binding across current and future spaces: no new grants to it, issuance by it, or approvals relying on its authority. Deletion and new spaces cannot clear it. Replacement requires fresh keys approved by a surviving device ([replacement](#replacement)). Revocation cannot erase copied keys/plaintext, and PEEP does not [rotate](core.md#no-rotation) space keys: the revoked device keeps keys it already holds. Revocation also does not end the device's Spaces access; the user must remove its access at their PDS ([ending access](core.md#ending-access)).
 
 Publish under [record conventions](core.md#records). Enumerate public revocations alongside device records during discovery and periodic public-repo catch-up. Peers MAY forward unchanged signed values by CID or copy them into space repos. Clients MUST preserve valid statements, exact targets, and local acceptance/withdrawal ordering even if records disappear.
 
@@ -80,7 +81,7 @@ Publish under [record conventions](core.md#records). Enumerate public revocation
 
 Clients MUST preserve bindings accepted locally before learning their approver's withdrawal. They remain subject to their own withdrawals and space authorization; surviving devices can approve further additions. This does not authorize new approvals by the withdrawn signer.
 
-Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. The binding MAY still be accepted as a [TOFU key change](#local-trust), with its notice and audit. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
+Clients MUST reject new bindings relying solely on that signer, including paths through previously unaccepted intermediates. Clients MUST NOT treat such an approval as establishing trust. The binding stays unaccepted on that client unless a surviving device approves it. The required ordering comes from retained [private history](#private-state), not claimed signing dates or another issuer's acceptance.
 
 ### Revocation processing
 
@@ -104,7 +105,7 @@ eligible(signer, target, state):
     return OK if A(target) < W(signer) else BLOCKED
 ```
 
-This rule includes self-revocation, mutual revocations, and open chains. A withdrawn signer retains revocation authority over targets before its cutoff indefinitely, including for statements created after withdrawal. It can therefore withdraw the entire older device set and force [recovery](#replacement). It gains no approval, declaration, grant, or other authority. Fresh bindings accepted after its withdrawal are protected from this signer on that client.
+This rule includes self-revocation, mutual revocations, and open chains. A withdrawn signer retains revocation authority over targets before its cutoff indefinitely, including for statements created after withdrawal. It can therefore withdraw the entire older device set; if no device approved after its cutoff survives, the account is in [total device loss](#total-device-loss) on that client and cannot add devices there. It gains no approval, declaration, grant, or other authority. Fresh bindings accepted after its withdrawal are protected from this signer on that client.
 
 For a fixed set of devices all accepted before any withdrawal, revocation delivery order does not change which valid statements take effect. This is not global convergence: clients that accept a new binding on opposite sides of a signer's locally observed withdrawal can disagree permanently about its revocation. No trusted issuance time or freshness bound is implied.
 
@@ -131,7 +132,7 @@ Cached approvals MUST NOT override these effects. Approvals MAY be reused withou
 
 ### Private state
 
-Clients MUST durably retain keys and exact binding pins; first-observed host configuration values; TOFU key changes with superseded pins; approval evidence; acceptance and learned-withdrawal ordering; approval and revocation statements/candidates; authenticated host observations; key acceptance decisions; pending operations; and audit checkpoints/gaps.
+Clients MUST durably retain keys and exact binding pins; first-observed host configuration values; first-use acceptance sets; approval evidence; acceptance and learned-withdrawal ordering; approval and revocation statements/candidates; authenticated host observations; key acceptance decisions; pending operations; and audit checkpoints/gaps.
 
 Clients MUST keep this state confidential and authenticated and use an append-only local journal with unique installation/history identity and monotonic sequence. Clients MUST preserve imported histories' identities/order and record the import as a local event. Timestamps and unrelated histories cannot establish acceptance before withdrawal. Local trust survives space lifecycles under [binding rules](#local-trust).
 
@@ -145,15 +146,15 @@ An old backup cannot detect wholly lost newer state without a surviving referenc
 
 ### Replacement
 
-A surviving, locally accepted, unwithdrawn device may approve fresh same-account keys. Otherwise, clients MAY accept the replacement as a [TOFU key change](#local-trust). PDS recovery cannot revive revoked bindings or authorize signed withdrawals.
+Only a surviving, locally accepted, unwithdrawn device can approve fresh same-account keys; without one, see [total device loss](#total-device-loss). PDS recovery cannot revive revoked bindings, authorize signed withdrawals, or add devices.
 
-One eligible helper holding keys can restore access to those spaces; other clients keep their own trust decisions. Where an accepted signer survives, it publishes an approval of the replacement binding and revocations of lost ones. Each peer validates them locally. If every older device is withdrawn, another user can help establish fresh bindings under these recovery rules. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
+The surviving signer publishes an approval of the replacement binding and revocations of lost ones. Each peer validates them locally. One eligible helper holding keys can then restore access to those spaces; other clients keep their own trust decisions. The cutoff protects replacements from an old signer on clients that accepted its withdrawal before those replacement bindings.
 
 Removal/re-invitation follows host administration but cannot reset pins, withdrawals, or approval/audit history. Keep old grants; removal does not [rotate](core.md#no-rotation) space keys. Administration, device authority, and key recovery are separate: losing all key copies and decryptable backups [loses the space](core.md#key-loss). Cross-application backup portability is outside the baseline.
 
 ### Total device loss
 
-There is currently no process for recovering from the loss of every installation and decryptable backup. Such a user falls back to [replacement](#replacement) without a surviving approver: peers accept a key change, members re-grant keys they hold, and the user cannot publish signed withdrawals of the lost bindings. Keys held only by the lost installations are gone. A dedicated mechanism is an open design question ([TODO-08](TODOs.md#todo-08)).
+Losing every installation and decryptable backup is unrecoverable. With no surviving approver, the user cannot add a device that any client already holding pins for the account will accept, and cannot publish signed withdrawals of the lost bindings. On those clients the account can no longer receive or issue keys, though it may remain a host member; removal and re-invitation do not reset pins. The same holds when every device is withdrawn, including by a compromised device under [revocation cutoffs](#revocation-processing). Clients that never pinned the account accept a fresh binding on first use, so the user can share only with people whose clients have never seen the account. Applications MUST NOT present a fresh installation on such an account as restoring access, and SHOULD explain the loss when they detect it. A recovery mechanism is an open design question ([TODO-08](TODOs.md#todo-08)); it must not let a compromised PDS add devices to an account that clients have already pinned.
 
 ## Platform notes
 

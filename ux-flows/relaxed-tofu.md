@@ -4,7 +4,7 @@ Informative. A presentation of [TOFU](tofu.md) spaces with the minimum user-faci
 
 ## What protects these spaces
 
-The same as [TOFU](tofu.md#what-protects-these-spaces): devices are trusted on first use, unapproved changes are accepted as visible [TOFU key changes](../device-enrollment.md#local-trust), and the defense against a malicious PDS is detection through [auditing](../audit.md#direct-sync) and notices. Relaxed presentation keeps every required notice but makes routine ones quiet, so detection depends more on users noticing timeline lines and on the account holder's own alarms.
+The same as [TOFU](tofu.md#what-protects-these-spaces): devices are trusted on first contact, later devices must be [linked](../device-enrollment.md#local-trust), and the defense against first-contact substitution by a malicious PDS is detection through [auditing](../audit.md#direct-sync). Relaxed presentation keeps every required notice but makes routine ones quiet, so detection depends more on the account holder's own alarms.
 
 ## Flows
 
@@ -24,7 +24,7 @@ Alice adds Bob.
 3. **Bob taps "Join Book club".** No device list is shown.
 4. **Bob waits briefly:** "Getting access…" while members' devices grant [in the background](tofu.md#keeping-spaces-available). If nothing arrives, members get "Bob is waiting to join Book club."
 5. **Unlock.** Devices pin each other on first sight. No badges, no verification prompts.
-6. **Key changes appear as a timeline line:** "Bob's devices changed." No modal, no action required. This is the one routine security notice other members see.
+6. **Unlinked devices get nothing.** A new Bob device that no Bob device linked receives no keys, with no override; his device list quietly notes "1 device isn't linked."
 
 ![Adding a member, steps 1–3: Alice invites Bob with one tap, Carol sees the "Alice added Bob" timeline line, and Bob taps Join on the invited space](images/relaxed-tofu-adding-a-member-1.webp)
 
@@ -41,11 +41,9 @@ Alice adds Bob.
 
 ### Losing every device
 
-1. **"Restore from backup"** or **"Start fresh"**. Starting fresh is the expected path.
-2. **Members see "Alice's devices changed"** and keep sharing with her. Alice's new device pins everyone again.
-3. **History mostly returns** as members re-grant keys. Copy: "Messages only you had may not come back."
-
-![Losing every device: a fresh install offering Start fresh, members seeing "Alice's devices changed", and spaces restoring with a caveat about messages only Alice had](images/relaxed-tofu-losing-every-device.webp)
+1. **"Restore from backup"** is the only way back ([total device loss](../device-enrollment.md#total-device-loss)).
+2. **Without a backup, encrypted spaces are gone for this account.** Copy: "Without a backup or one of your other devices, this account can't get back into its encrypted spaces."
+3. **Prevention instead:** relaxed apps still nudge single-device users to turn on backup or add a device, since this is the one loss they can't smooth over.
 
 ### Creating a space from an existing space
 
@@ -71,7 +69,7 @@ Relaxed presentation does not soften these. They are integrity alarms, not routi
 Surfaces the specification requires to exist but allows to be buried:
 
 - **Devices & security:** the user's devices, **Link a new device**, and **I lost a device**, which removes a lost device: it revokes the binding, so the device gets no new keys, and tells the user to sign it out at their provider so it stops reading.
-- **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, including accepted key changes ([auditing](../audit.md#direct-sync)).
+- **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, and devices declined as unlinked ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
 ![Settings: Devices & security with the device list, Link a new device, and I lost a device; and a member-access screen listing the devices Bob has been granted keys to, including an accepted key change](images/relaxed-tofu-settings.png)
@@ -80,7 +78,7 @@ Surfaces the specification requires to exist but allows to be buried:
 
 | Still required | Omitted or hidden |
 | --- | --- |
-| Member additions, removals, readmissions, and accepted TOFU key changes are visibly surfaced ([host state](../core.md#trusted-host-state)). | |
+| Member additions, removals, and readmissions are visibly surfaced ([host state](../core.md#trusted-host-state)). | |
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
 | Linking confirms adding a device, with an access warning ([approvals](../device-enrollment.md#approvals)). | |
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | |
