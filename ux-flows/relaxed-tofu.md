@@ -34,7 +34,7 @@ Alice adds Bob.
 
 1. **Laptop:** "Link this device" with a QR code.
 2. **Phone:** scan, then one confirmation: "Link *Windows PC* to your account? It will be able to read all your spaces. Only link devices you own." The name is reported by the laptop and is not proof of anything; the warning is what counters tricks to scan an attacker's code. The laptop can read every space; it requests keys as Alice opens them, and the phone grants in the background.
-3. **Alice's other devices:** "New device: *Windows PC*. Added from iPhone. Not you?" with **Remove it** and **It was me**. This notice and its removal action are required; they are how Alice catches a compromised device adding an attacker's.
+3. **Alice's other devices:** "New device: *Windows PC*. Added from iPhone. Not you?" with **Remove it** and **It was me**. This notice and its removal action are required; they are how Alice catches a compromised device adding an attacker's. **Remove it** also tells her to sign the device out at her provider and change her password.
 4. **Other members:** nothing.
 
 ![Adding a device: the laptop shows a linking code, the phone scans it and confirms once with an ownership warning, Alice's iPad gets a new-device notice with Remove it, and other members see nothing](images/relaxed-tofu-adding-a-device.webp)
@@ -55,7 +55,7 @@ Alice adds Bob.
 
 ### Removing a member or device
 
-Removal and **I lost a device** take effect at once, with nothing held back. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The notice does not suggest moving to a new space.
+Removal and **I lost a device** stop new keys at once, with nothing held back, and existing access expires within minutes ([ending access](../core.md#ending-access)). **I lost a device** also tells the user to sign the device out at their provider, since the app can't, and suggests changing their password. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The notice does not suggest moving to a new space.
 
 ### Alarms
 
@@ -70,7 +70,7 @@ Relaxed presentation does not soften these. They are integrity alarms, not routi
 
 Surfaces the specification requires to exist but allows to be buried:
 
-- **Devices & security:** the user's devices, **Link a new device**, and **I lost a device**, which removes a lost device: it revokes the binding, so the device gets no new keys.
+- **Devices & security:** the user's devices, **Link a new device**, and **I lost a device**, which removes a lost device: it revokes the binding, so the device gets no new keys, and tells the user to sign it out at their provider so it stops reading.
 - **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, including accepted key changes ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
@@ -84,6 +84,7 @@ Surfaces the specification requires to exist but allows to be buried:
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
 | Linking confirms adding a device, with an access warning ([approvals](../device-enrollment.md#approvals)). | |
 | Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | |
+| Telling the user to sign a removed device out at their provider ([ending access](../core.md#ending-access)). | |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | The sole-holder indicator and device-list detail. |
 | Reporting known loss of local state ([recovery](../device-enrollment.md#recovery)). | |
 | Never claiming a removal locks the removed party out of new messages ([no rotation](../core.md#no-rotation)). | |

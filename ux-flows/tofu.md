@@ -59,7 +59,7 @@ Alice gets a new laptop.
 3. **Pairing transfers [private state](../device-enrollment.md#backup-and-transfer):** pins (and any verifications, which only verified-only spaces use) move to the laptop so it does not pin everyone afresh, and [trust sync](../device-enrollment.md#own-device-trust-sync) keeps them current afterwards.
 4. **Spaces open on demand.** When Alice opens a space on the laptop, it requests the key and her phone grants it in the background; the laptop reads full history. Installations of the same app may get keys right away.
 5. **Other members:** the laptop is approved by Alice's phone, so they accept it. No timeline notice; device lists show "Alice · 3 devices".
-6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received. A device Alice never approved means her account or PDS may be compromised, so this notice, unlike an ordinary device removal, also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
+6. **Alice's other devices notify her:** "New device: *Alice's Laptop*, added from *iPhone*, 2 minutes ago. Not you? Remove it." One notice per device, none on the approving phone. Removing it revokes the laptop, which then gets no new keys but keeps those it already received; the notice tells Alice to sign it out at her provider and change her password, which ends its access to spaces. A device Alice never approved means her account or PDS may be compromised, so this notice, unlike an ordinary device removal, also offers to move affected spaces ([own-account notices](../audit.md#direct-sync), [no rotation](../core.md#no-rotation)).
 
 ![Adding a device in TOFU: the laptop code, the link confirmation, pins transferring, the device list other members see, and the new-device notice on Alice's iPad](images/tofu-adding-a-device.png)
 
@@ -89,9 +89,10 @@ PEEP has no parent/child relationship; each space is cryptographically independe
 
 ## Removing a member or device
 
-1. **Removal is immediate.** Removing Carol from Book club or removing a lost device takes effect as soon as members' apps and the host learn of it: no new grants to her devices, and the host stops serving her the space. Nothing is held back; posting continues.
-2. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
-3. **No move offered.** Removal is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
+1. **Removal stops new keys at once.** Removing Carol from Book club takes effect as soon as members' apps and the host learn of it: no new grants to her devices, and the host stops issuing her access. Access she already has expires within minutes, an hour at most ([ending access](../core.md#ending-access)). Nothing is held back; posting continues.
+2. **Removing a device takes one more step.** Removing a lost device stops new keys, but the device can keep reading until its access is removed at the account's PDS, which the app can't do yet. The removal confirmation says: "To stop *Alice's Laptop* reading new messages, also sign it out in your account settings at your provider. If someone may know your password, change it." Once it is signed out, its access ends within minutes ([ending access](../core.md#ending-access)).
+3. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
+4. **No move offered.** Removing, plus signing a device out, is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
 
 ## Keeping spaces available
 
