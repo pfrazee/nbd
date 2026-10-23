@@ -1,11 +1,15 @@
 """Adversarial cases for the PEEP trust model (TODO-17).
 
+Most classes test SpecClient, the design the specification adopts.
+ScopedWitnessAlternative tests the rejected per-space design, kept so the
+comparison in COMPARISON.md stays honest.
+
 Run: python3 -I -m unittest discover -s model
 """
 
 import unittest
 
-from peep_trust import REENROLL_HOLD, Binding, Client, World
+from peep_trust import REENROLL_HOLD, Binding, ScopedWitnessClient, SpecClient, World
 
 COMMUNITY = "community"
 PRIVATE = "private"
@@ -16,10 +20,12 @@ def B(account: str, device: str) -> Binding:
 
 
 class Base(unittest.TestCase):
+    CLIENT = SpecClient
+
     def setUp(self):
         self.w = World()
         self.alice = self.w.add_device(B("alice", "a0"))
-        self.client = Client(self.w, self.alice)
+        self.client = self.CLIENT(self.w, self.alice)
 
     def account(self, name, *devices, root=None):
         """An honest account: first device is the root, which approves the rest."""
@@ -109,8 +115,8 @@ class Anchors(Base):
         self.assertTrue(self.meet(carol, COMMUNITY))
 
 
-class WitnessScope(Base):
-    """Astra's cross-space and chained-witness cases."""
+class WitnessScenes(Base):
+    """Shared setup for astra's cross-space and chained-witness cases."""
 
     def setUp(self):
         super().setUp()
@@ -131,6 +137,65 @@ class WitnessScope(Base):
         # Bob's malicious PDS publishes BM; Charlie (community only) colludes.
         self.bm = self.w.add_device(B("bob", "bm"))
         self.w.grant("g-charlie-bm", COMMUNITY, self.charlie, self.bm)
+
+
+class ColludingWitnessLimitation(WitnessScenes):
+    """The spec's documented limitation: a member the client accepted can
+    vouch for a device published by someone controlling another member's
+    repo, and the resulting pin is account-wide."""
+
+    def test_limitation_colluding_witness_reaches_other_spaces(self):
+        self.assertTrue(self.meet(self.bm, COMMUNITY))
+        self.assertTrue(self.meet(self.bm, PRIVATE))
+
+    def test_limitation_witness_chain(self):
+        self.meet(self.bm, COMMUNITY)
+        dm = self.w.add_device(B("dana", "dm"))
+        self.w.grant("g-bm-dm", PRIVATE, self.bm, dm)
+        self.assertTrue(self.meet(dm, PRIVATE))
+
+    def test_honest_witnesses_alone_admit_nothing_extra(self):
+        del self.w.grants["g-charlie-bm"]
+        self.assertTrue(self.meet(self.bob, PRIVATE))
+        self.assertFalse(self.meet(self.bm, COMMUNITY))
+        self.assertFalse(self.meet(self.bm, PRIVATE))
+
+    def test_first_use_pin_is_account_wide_and_persists(self):
+        self.assertTrue(self.meet(self.bob, COMMUNITY))
+        self.assertIn(self.bob, self.client.account_wide_set())
+        self.w.remove_member(COMMUNITY, "dave")
+        self.w.delete_device(self.charlie)
+        self.assertTrue(self.meet(self.bob, PRIVATE))
+
+    def test_pinned_account_ignores_witnesses(self):
+        fresh = self.CLIENT(self.w, self.alice)
+        fresh.pair(self.bob, self.charlie)
+        self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
+        self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
+
+    def test_pinned_reset_holds_despite_witness(self):
+        # Every pinned Bob device is revoked; Charlie's witness for BM must
+        # not let BM skip the re-enrollment hold.
+        fresh = self.CLIENT(self.w, self.alice)
+        fresh.pair(self.bob, self.charlie)
+        self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
+        self.w.delete_device(self.bob)
+        self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
+        self.assertTrue(fresh.hold_pending("bob", COMMUNITY))
+
+
+class ScopedWitnessAlternative(WitnessScenes):
+    """The rejected per-space design (ScopedWitnessClient)."""
+
+    CLIENT = ScopedWitnessClient
+
+    def test_reset_holds(self):
+        self.assertTrue(self.meet(self.bob, COMMUNITY))
+        self.w.delete_device(self.bob)
+        self.w.delete_device(self.bm)
+        n = self.w.add_device(B("bob", "n"))
+        self.assertFalse(self.meet(n, COMMUNITY))
+        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
 
     def test_cross_space_witness_is_scoped(self):
         self.assertTrue(self.meet(self.bm, COMMUNITY))
@@ -175,13 +240,13 @@ class WitnessScope(Base):
     def test_restore_does_not_widen_scope(self):
         self.assertTrue(self.meet(self.bm, COMMUNITY))
         saved = self.client.export_state()
-        other = Client(self.w, self.alice)
+        other = self.CLIENT(self.w, self.alice)
         other.import_state(saved)
         self.assertFalse(other.accepted(self.bm, PRIVATE))
         self.assertTrue(other.accepted(self.bob, PRIVATE))
 
     def test_pinned_account_ignores_witnesses(self):
-        fresh = Client(self.w, self.alice)
+        fresh = self.CLIENT(self.w, self.alice)
         fresh.pair(self.bob, self.charlie)  # both pinned account-wide
         self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
         self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
@@ -242,6 +307,18 @@ class RevocationAndReset(Base):
         self.w.add_device(bob)
         self.assertFalse(self.meet(bob, COMMUNITY))
         self.assertIn("resurrected bob/b0", self.client.state.alarms)
+
+    def test_restore_keeps_pins_and_revocations(self):
+        (bob,) = self.account("bob", "b0")
+        self.w.admit(COMMUNITY, "alice", "bob")
+        self.assertTrue(self.meet(bob, COMMUNITY))
+        self.w.delete_device(bob)
+        self.client.sync()
+        saved = self.client.export_state()
+        self.w.add_device(bob)
+        other = self.CLIENT(self.w, self.alice)
+        other.import_state(saved)
+        self.assertFalse(other.accepted(bob, COMMUNITY))
 
     def test_approval_survives_approver_revocation(self):
         a, b = self.account("bob", "a", "b")

@@ -1,7 +1,11 @@
-"""Executable model of PEEP device trust: accepted(binding, space).
+"""Executable model of PEEP device trust.
 
-Models the rules in device-enrollment.md (local trust, first-use anchors,
-acceptance in a space, revocation, re-enrollment) abstractly. There is no
+`SpecClient` (AccountWideAnchorClient) models the rules in
+device-enrollment.md: local trust, first-use anchors with account-wide
+acceptance, revocation, and re-enrollment. The other clients are variants
+kept for comparison (see COMPARISON.md): ScopedWitnessClient, the rejected
+per-space witness design, which also holds the shared machinery;
+WarnOnlyClient; and TofuClient. Everything is modelled abstractly. There is no
 cryptography: a record "signed by" a binding is valid exactly when whoever
 created it held that binding's key, and tests only create records the
 creating party could sign. Repos hold the current state the client would
@@ -126,8 +130,9 @@ class ClientState:
         )
 
 
-class Client:
-    """One installation's view and decisions."""
+class ScopedWitnessClient:
+    """One installation's view and decisions, with per-space witness scope
+    (the rejected alternative). Shared machinery for the other variants."""
 
     def __init__(self, world: World, own: Binding):
         self.world = world
@@ -348,3 +353,74 @@ class Client:
         else:
             st.scoped_pins.setdefault(space, set()).update(cand)
             st.history_space.setdefault(space, set()).update(cand)
+
+
+class WarnOnlyClient(ScopedWitnessClient):
+    """Simpler variant: anchors only trigger holds or decline devices; they
+    never accept one. All acceptance is account-wide; there is no witness
+    scope or per-space acceptance."""
+
+    def accepted_in(self, space: str) -> Set[Binding]:
+        acc = self.account_wide_set()
+        self.state.history_space.setdefault(space, set()).update(acc)
+        return acc
+
+    def collect_anchors(self, x: str) -> Set[Binding]:
+        acc = self.account_wide_set()
+        found: Set[Binding] = set()
+        for s in self.world.members:
+            found |= self.anchors(x, s, acc)
+        return found
+
+    def _first_use(self, x: str, space: str) -> None:
+        st = self.state
+        if x == self.own.account:
+            return
+        if any(b.account == x for b in self.account_wide_set()):
+            return
+        cand = self.single_root_set(x)
+        anchors = self.collect_anchors(x)
+        reach = {b for b in self._reach(x, anchors) if self.usable(b)}
+        pinned_before = any(b.account == x for b in st.history_all)
+        if pinned_before or (anchors and not reach):
+            if cand is None:
+                return
+            start = st.holds.setdefault((x, None), self.world.now)
+            if self.world.now - start >= REENROLL_HOLD:
+                self._pin(cand, None)
+                del st.holds[(x, None)]
+            return
+        if cand is None:
+            return
+        self._pin(cand & reach if anchors else cand, None)
+
+
+class TofuClient(WarnOnlyClient):
+    """Baseline: no anchors at all. First use is the single-root rule;
+    only clients that pinned an account before detect its reset."""
+
+    def collect_anchors(self, x: str) -> Set[Binding]:
+        return set()
+
+
+class AccountWideAnchorClient(WarnOnlyClient):
+    """Middle variant: anchors accept the devices reachable from them, but
+    acceptance stays account-wide (no witness scope). This is the design
+    before witness scope was added."""
+
+    def _first_use(self, x: str, space: str) -> None:
+        st = self.state
+        if x == self.own.account:
+            return
+        if any(b.account == x for b in self.account_wide_set()):
+            return
+        anchors = self.collect_anchors(x)
+        reach = {b for b in self._reach(x, anchors) if self.usable(b)}
+        if anchors and reach and not any(b.account == x for b in st.history_all):
+            self._pin(reach, None)
+            return
+        super()._first_use(x, space)
+
+
+# The design the specification adopts.
+SpecClient = AccountWideAnchorClient

@@ -17,6 +17,11 @@ muts = {
  "revoked stays usable": ("return b not in self.state.revoked and self.world.present(b)", "return self.world.present(b)"),
  "scoped pins become account-wide": ("self._pin(cand, space if self.anchors_anywhere(x) else None)", "self._pin(cand, None)"),
  "no provenance anchors": ("found.add(cited.issuer)\n                    break", "break"),
+ "spec: no hold on reset": ("start = st.holds.setdefault((x, None), self.world.now)\n            if self.world.now - start >= REENROLL_HOLD:",
+                            "start = st.holds.setdefault((x, None), self.world.now)\n            if True:"),
+ "spec: anchors re-pin a previously pinned account": ("if anchors and reach and not any(b.account == x for b in st.history_all):", "if anchors and reach:"),
+ "spec: anchors ignored": ("        anchors = self.collect_anchors(x)\n        reach = {b for b in self._reach(x, anchors) if self.usable(b)}\n        if anchors and reach",
+                           "        anchors = set()\n        reach = set()\n        if anchors and reach"),
 }
 base = open(os.path.join(src, "peep_trust.py")).read()
 for name, (old, new) in muts.items():
