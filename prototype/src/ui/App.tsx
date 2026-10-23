@@ -2,10 +2,13 @@
 // and the inspector.
 
 import { useState } from "react";
+import { AdversaryPanel } from "./adversary/Adversary";
 import { Inspector } from "./inspector/Inspector";
 import { NodeCard } from "./node/NodeCard";
 import { useSim } from "./sim";
 import { accounts, clock, installationsOf, short } from "./views";
+
+// Sandbox: accounts and unlinked installs. Attacks live in AdversaryPanel.
 
 export function App() {
   return (
@@ -14,7 +17,10 @@ export function App() {
       <Narration />
       <main>
         <section className="nodes">
-          <Sandbox />
+          <div className="panels">
+            <Sandbox />
+            <AdversaryPanel />
+          </div>
           <Grid />
         </section>
         <Inspector />
@@ -82,7 +88,8 @@ function Sandbox() {
   const [device, setDevice] = useState("phone");
   const [account, setAccount] = useState("");
   return (
-    <div className="sandbox">
+    <details className="panel sandbox" open>
+      <summary>Sandbox</summary>
       <div className="row">
         <input placeholder="New account (e.g. dana)" value={name} onChange={(e) => setName(e.target.value.replace(/[^a-z0-9]/g, ""))} />
         <button
@@ -108,16 +115,8 @@ function Sandbox() {
         >
           Install unlinked
         </button>
-        <button
-          disabled={!account}
-          className="danger"
-          title="Someone with the password deletes every device and enrolls their own"
-          onClick={() => sim.act(`attacker took over ${short(account)}`, (w) => w.takeover(account, `attacker${installationsOf(w, account).filter((i) => i.name.startsWith("attacker")).length || ""}`))}
-        >
-          Take over
-        </button>
       </div>
-    </div>
+    </details>
   );
 }
 

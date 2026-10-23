@@ -44,7 +44,7 @@ input, select { border: 1px solid var(--line); border-radius: 6px; padding: 3px 
 
 main { flex: 1; display: grid; grid-template-columns: 1fr 460px; min-height: 0; }
 .nodes { overflow: auto; padding: 12px 14px; }
-.sandbox { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 12px; }
+
 .row { display: flex; gap: 6px; margin-top: 6px; }
 .row input { flex: 1; }
 
@@ -114,3 +114,11 @@ td.unknown { color: #b0b5c0; }
   .nodes { overflow: visible; }
   .inspector { border-left: none; border-top: 1px solid var(--line); min-height: 320px; }
 }
+
+.panels { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; align-items: flex-start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px 8px; margin: 0; flex: 1 1 360px; }
+.panel > summary { font-weight: 600; color: var(--ink); }
+.panel h5 { margin: 8px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.panel .row select { max-width: 170px; }
+.adversary { border-color: #f0c8c8; }
+.policy { background: #fdf1f1; border-radius: 6px; padding: 2px 6px; margin-top: 4px; }

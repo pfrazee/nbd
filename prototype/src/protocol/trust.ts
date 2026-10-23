@@ -118,7 +118,7 @@ export class Trust {
       if (rev < prev.rev) return false; // rollback: refuse
       const seen = prev.commits.get(rev);
       if (seen !== undefined && seen !== snap.commit.data) {
-        this.alarm("fork", `${account}'s repo showed two different commits at revision ${rev}`);
+        this.alarmOnce(`fork:${account}:${rev}`, "fork", `${account}'s PDS showed two different commits at revision ${rev}.`);
         return false;
       }
     }

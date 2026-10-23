@@ -22,27 +22,46 @@ export class Repo {
   rev = 0;
   records = new Map<RecordPath, Cbor>();
   history: Snapshot[] = [];
+  times: number[] = []; // world time of each commit in history
 
-  constructor(readonly did: Did, readonly name: string, private readonly key: KeyPair) {
+  constructor(readonly did: Did, readonly name: string, private readonly key: KeyPair, private readonly clock: () => number) {
     this.commit();
   }
 
   commit(): Snapshot {
     this.rev += 1;
-    const unsigned = { did: this.did, repo: this.name, rev: this.rev, data: snapshotData(this.records) };
-    const commit = { ...unsigned, sig: sign(this.key.secretKey, commitUnsigned(unsigned) as unknown[]) };
-    const snap = { commit, records: new Map(this.records) };
+    const snap = this.sign(new Map(this.records), this.rev);
     this.history.push(snap);
+    this.times.push(this.clock());
     return snap;
+  }
+
+  /** Sign an arbitrary record map at a revision: what the PDS, which holds
+   * the repo key, can always do. Honest flows only sign real state. */
+  sign(records: Map<RecordPath, Cbor>, rev: number): Snapshot {
+    const unsigned = { did: this.did, repo: this.name, rev, data: snapshotData(records) };
+    return { commit: { ...unsigned, sig: sign(this.key.secretKey, commitUnsigned(unsigned) as unknown[]) }, records };
   }
 
   latest(): Snapshot {
     return this.history[this.history.length - 1];
   }
+
+  /** The newest commit made at or before world time `t`. */
+  asOf(t: number): Snapshot {
+    let i = this.times.length - 1;
+    while (i > 0 && this.times[i] > t) i--;
+    return this.history[i];
+  }
+
+  atRev(rev: number): Snapshot | undefined {
+    return this.history.find((s) => s.commit.rev === rev);
+  }
 }
 
 /** Per-observer views let a malicious PDS show different clients different
- * states (M3). Honest by default: everyone sees the latest commit. */
+ * states (see adversary.ts). Honest by default: everyone sees the latest
+ * commit, delayed by the observer's network lag. */
 export type ViewHook = (observer: string, repo: Repo) => Snapshot | null;
 
 export class Pds {
@@ -52,12 +71,12 @@ export class Pds {
   viewHook: ViewHook | null = null;
   private sessionCounter = 0;
 
-  constructor(readonly name: string, private readonly rng: Rng) {}
+  constructor(readonly name: string, private readonly rng: Rng, private readonly clock: () => number) {}
 
   createAccount(did: Did): Uint8Array {
     const key = signingKeyPair(this.rng.derive(`repo-key/${did}`));
     this.keys.set(did, key);
-    this.repos.set(did, new Repo(did, did, key));
+    this.repos.set(did, new Repo(did, did, key, this.clock));
     return key.publicKey;
   }
 
@@ -71,7 +90,7 @@ export class Pds {
     if (!r) {
       const key = this.keys.get(did);
       if (!key) throw new Error(`pds ${this.name}: no account ${did}`);
-      r = new Repo(did, name, key);
+      r = new Repo(did, name, key, this.clock);
       this.repos.set(name, r);
     }
     return r;
@@ -116,9 +135,9 @@ export class Pds {
     return snap;
   }
 
-  /** What `observer` gets when it enumerates a repo. */
-  enumerate(observer: string, did: Did, space?: string): Snapshot {
+  /** What `observer` gets when it enumerates a repo, `lag` hours late. */
+  enumerate(observer: string, did: Did, space?: string, lag = 0): Snapshot {
     const repo = this.repo(did, space);
-    return this.viewHook?.(observer, repo) ?? repo.latest();
+    return this.viewHook?.(observer, repo) ?? (lag > 0 ? repo.asOf(this.clock() - lag) : repo.latest());
   }
 }

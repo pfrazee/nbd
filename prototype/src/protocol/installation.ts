@@ -317,6 +317,18 @@ export class Installation {
       }
     }
 
+    // Commits in grant evidence: a different commit at a revision this
+    // installation verified means the PDS showed different histories.
+    for (const [, , e] of grants) {
+      for (const b of e?.blocks ?? []) {
+        const c = b as { did?: string; rev?: number; data?: string };
+        if (typeof c.did !== "string" || typeof c.rev !== "number" || typeof c.data !== "string" || Object.keys(c).length !== 3) continue;
+        const mine = this.trust.state.views.get(c.did)?.commits.get(c.rev);
+        if (mine !== undefined && mine !== c.data)
+          this.trust.raise(`fork:${c.did}:${c.rev}`, "fork", `${c.did}'s PDS showed different histories: another member saw a different commit at revision ${c.rev}.`);
+      }
+    }
+
     // Audit grants to this account's bindings (audit.md#direct-sync).
     for (const [, g, e] of grants) {
       if (g.recipient.account !== this.did) continue;
@@ -355,9 +367,14 @@ export class Installation {
       const d = authorizeExchange(this.trust, sp.host, sp.uri, this.binding, r, "issuer", this.binding);
       this.decide(`grant to ${label(r)}: ${d.result} ${d.reason}`);
       if (d.result !== "OK") continue;
-      const views = [this.did, r.account].map((a) => this.trust.state.views.get(a)).filter(Boolean);
-      const extra: Cbor[] = views.flatMap((v) => v!.approvals.map((a) => asCbor(a)))
-        .concat(views.map((v) => ({ rev: v!.rev, data: v!.data })));
+      // Evidence carries the approvals and the commit this device relied on
+      // for each party's account.
+      const extra: Cbor[] = [];
+      for (const a of new Set([this.did, r.account])) {
+        const v = this.trust.state.views.get(a);
+        if (!v) continue;
+        extra.push(...v.approvals.map((ap) => asCbor(ap)), { did: a, rev: v.rev, data: v.data });
+      }
       const { grant, evidence } = buildGrant({
         space: sp.uri, key: sp.key!, config: sp.host.config!, issuer: this.binding, issuerSign: this.signKey, recipient: r,
         issuerMembership: sp.host.memberships.get(this.did)!, recipientMembership: sp.host.memberships.get(r.account)!,

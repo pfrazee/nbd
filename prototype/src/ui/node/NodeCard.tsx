@@ -14,7 +14,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
   const st = inst.trust.state;
   const [newSpace, setNewSpace] = useState("");
   const [linkName, setLinkName] = useState("");
-  const attacker = inst.name.startsWith("attacker");
+  const attacker = /^(attacker|sub|pds-device)/.test(inst.name);
   const revoked = st.revoked.has(bindingId(inst.binding));
   const ownDevices = allBindings(w).filter((b) => b.account === inst.did && present(w, b));
   const people = inst.trackedAccounts().filter((d) => d !== inst.did);
@@ -25,6 +25,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
         <div>
           <strong>{short(inst.did)}</strong> · {inst.name}
           {attacker && <span className="tag bad">attacker</span>}
+          {(w.lag.get(inst.id) ?? 0) > 0 && <span className="tag" title="Reads repos this many hours late">{w.lag.get(inst.id)}h late</span>}
         </div>
         <label className="toggle" title="An offline installation stops syncing">
           <input

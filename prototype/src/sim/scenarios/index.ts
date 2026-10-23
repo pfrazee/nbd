@@ -238,4 +238,204 @@ const s5: Scenario = {
   ],
 };
 
-export const scenarios: Scenario[] = [s1, s2, s3, s4, s5];
+const s6: Scenario = {
+  id: "substitution",
+  title: "6. First-contact substitution by a malicious PDS",
+  summary: "Bob's PDS shows Carol, who has never met Bob, a device it controls instead of his. Carol shares the key with it; auditing reveals it only afterwards.",
+  steps: [
+    ...bookClub(),
+    {
+      title: "Carol is invited; Bob's PDS substitutes his devices for her",
+      narration: "Carol's app meets Bob for the first time and trusts what his PDS shows: one device, the PDS's own. Alice already knew Bob and sees his real repo.",
+      run: (w, c) => {
+        c.did.carol = w.account("carol");
+        c.inst.carolPhone = w.install(c.did.carol, "phone");
+        c.inst.sub = w.substituteDevices(c.did.bob, c.inst.carolPhone);
+        c.inst.alicePhone.invite(c.space.club, c.did.carol);
+        c.inst.carolPhone.join(c.space.club);
+        c.inst.sub.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Carol accepted the substitute as Bob", c.inst.carolPhone.trust.isAccepted(c.inst.sub.binding)),
+        check("Carol never saw Bob's real phone", !c.inst.carolPhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("The substitute got the key, from Carol", hasKey(c.inst.sub, c.space.club)),
+        check("Alice did not accept the substitute", !c.inst.alicePhone.trust.isAccepted(c.inst.sub.binding)),
+      ],
+    },
+    {
+      title: "Detection, after the fact",
+      narration: "Bob's phone audits grants in other members' repos and finds one to a Bob device it never approved. Alice's app compares the commit in Carol's grant evidence with the one it verified for the same revision, and they differ. Neither undoes the disclosure.",
+      run: (w) => w.settle(),
+      expect: (_w, c) => [
+        check("Bob's phone alarms about an unrecognised device with access", alarms(c.inst.bobPhone, "unapproved-grant").length > 0),
+        check("Alice's app raises a fork alarm", alarms(c.inst.alicePhone, "fork").length > 0),
+      ],
+    },
+  ],
+};
+
+const s7: Scenario = {
+  id: "hidden-reset",
+  title: "7. A malicious PDS hides a reset from the account's own devices",
+  summary: "Bob's PDS resets his account but keeps showing his phone the old state, so his phone never alarms. Alice waits out the hold, then shares; only Bob's audit of her grant reveals it.",
+  steps: [
+    ...bookClub(),
+    {
+      title: "Bob's PDS resets his account in secret",
+      narration: "It deletes Bob's phone and enrolls its own device, but serves Bob's phone the old commit. Alice's app sees the reset and holds; Bob's phone sees nothing wrong.",
+      run: (w, c) => {
+        c.inst.sub = w.hiddenReset(c.did.bob);
+        c.inst.sub.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Alice holds the PDS's device", !!c.inst.alicePhone.trust.hold(c.did.bob)),
+        check("Bob's phone does not alarm", c.inst.bobPhone.trust.state.alarms.length === 0),
+      ],
+    },
+    {
+      title: "72 hours later",
+      narration: "Nobody stopped the hold, because Bob never learned of the reset. Alice's app shares with the new device. Bob's phone then finds Alice's grant to a Bob device it never approved: detection, after disclosure.",
+      run: (w) => w.advance(72),
+      expect: (_w, c) => [
+        check("Alice accepts the PDS's device", c.inst.alicePhone.trust.isAccepted(c.inst.sub.binding)),
+        check("The PDS's device holds the key", hasKey(c.inst.sub, c.space.club)),
+        check("Bob's phone alarms about the grant", alarms(c.inst.bobPhone, "unapproved-grant").length > 0),
+        check("Bob's phone still never saw itself removed", alarms(c.inst.bobPhone, "own-removed").length === 0),
+      ],
+    },
+  ],
+};
+
+const s8: Scenario = {
+  id: "fork",
+  title: "8. Divergent histories",
+  summary: "Bob's PDS shows Alice a history where his phone was deleted, while Carol sees it present. The fork surfaces when a grant's evidence carries Carol's commit to Alice.",
+  steps: [
+    ...bookClub({ carol: true }),
+    {
+      title: "Bob's PDS forks his history for Alice",
+      narration: "Alice's app sees Bob's phone removed and revokes it; Carol's app sees it present. Each history has increasing revisions, so neither app can tell on its own.",
+      run: (w, c) => w.hideDeviceFrom(c.inst.bobPhone.binding, c.inst.alicePhone),
+      expect: (_w, c) => [
+        check("Alice revoked Bob's phone", !c.inst.alicePhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("Carol still accepts Bob's phone", c.inst.carolPhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("No fork alarm yet", alarms(c.inst.alicePhone, "fork").length === 0),
+      ],
+    },
+    {
+      title: "Bob links a tablet; Carol shares with it",
+      narration: "Carol's grant evidence includes the commit of Bob's repo she relied on. Alice's app verified a different commit at that revision: a fork alarm.",
+      run: (w, c) => {
+        c.inst.bobTablet = w.install(c.did.bob, "tablet", { link: c.inst.bobPhone });
+        c.inst.bobTablet.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Bob's tablet holds the key", hasKey(c.inst.bobTablet, c.space.club)),
+        check("Alice's app raises a fork alarm", alarms(c.inst.alicePhone, "fork").length > 0),
+      ],
+    },
+  ],
+};
+
+const s9: Scenario = {
+  id: "recovery",
+  title: "9. Total device loss, and a stale backup during the hold",
+  summary: "Bob loses his only phone and starts over. Alice's app holds his new phone; her own phone breaks mid-hold and she restores an old backup, whose stored time is not credited.",
+  steps: [
+    ...bookClub(),
+    {
+      title: "Bob loses his phone and installs on a new one",
+      narration: "Without a backup or a surviving device there is nothing to link from. Until Bob removes the lost phone, Alice's app sees an unlinked device and shares nothing with it.",
+      run: (w, c) => {
+        w.setOnline(c.inst.bobPhone, false);
+        c.inst.bobNew = w.install(c.did.bob, "new-phone");
+        c.inst.bobNew.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Alice does not accept the unlinked phone", !c.inst.alicePhone.trust.isAccepted(c.inst.bobNew.binding)),
+        check("Alice has no hold yet", !c.inst.alicePhone.trust.hold(c.did.bob)),
+      ],
+    },
+    {
+      title: "Bob removes the lost phone at his provider",
+      narration: "Every device Alice knew is gone, so the new phone becomes a re-enrollment candidate: Alice's app holds it for 72 hours.",
+      run: (w, c) => w.removeDevice(c.inst.bobPhone),
+      expect: (_w, c) => [check("Alice holds Bob's new phone", !!c.inst.alicePhone.trust.hold(c.did.bob))],
+    },
+    {
+      title: "Alice backs up her phone an hour in, then it breaks at hour 60",
+      narration: "She restores the backup onto a replacement. Backups carry credited time, not start times, and time in storage is not credited: the restored phone has about 1 hour of credit, not 60.",
+      run: (w, c) => {
+        w.advance(1);
+        w.backup(c.inst.alicePhone);
+        w.advance(59);
+        c.inst.aliceRestored = w.restore(c.inst.alicePhone, w.backups.length - 1);
+      },
+      expect: (_w, c) => [
+        check("The restored phone still holds", !!c.inst.aliceRestored.trust.hold(c.did.bob)),
+        check("About 71 hours remain on it", Math.abs((c.inst.aliceRestored.holdRemaining(c.did.bob) ?? 0) - 71) < 0.5),
+      ],
+    },
+    {
+      title: "Hour 72: the original phone would have shared by now",
+      narration: "The restored phone keeps its own count. Bob still has no key from Alice.",
+      run: (w) => w.advance(12),
+      expect: (_w, c) => [
+        check("Still held on the restored phone", !c.inst.aliceRestored.trust.isAccepted(c.inst.bobNew.binding)),
+        check("Bob's new phone has no key", !hasKey(c.inst.bobNew, c.space.club)),
+      ],
+    },
+    {
+      title: "Hold complete on the restored phone",
+      narration: "Alice's app shares with Bob's new phone, which reads the history again. Messages only the lost phone held would be gone.",
+      run: (w) => w.advance(60),
+      expect: (_w, c) => [
+        check("Alice's restored phone accepts Bob's new phone", c.inst.aliceRestored.trust.isAccepted(c.inst.bobNew.binding)),
+        check("Bob's new phone reads the history", texts(c.inst.bobNew, c.space.club).includes("Welcome! First book is Middlemarch.")),
+      ],
+    },
+  ],
+};
+
+const s10: Scenario = {
+  id: "removed-member",
+  title: "10. A removed member keeps the key",
+  summary: "Alice removes Carol. New grants stop and Carol's access ends with her credential, but she keeps the key and everything she already read.",
+  steps: [
+    ...bookClub({ carol: true }),
+    {
+      title: "Alice removes Carol and posts right away",
+      narration: "Removal is not immediate: Carol's current credential still works for a few minutes, so she can read a message posted just after.",
+      run: (w, c) => {
+        c.inst.alicePhone.removeMember(c.space.club, c.did.carol);
+        c.inst.alicePhone.post(c.space.club, "Planning Carol's surprise party.");
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Bob sees that Carol was removed", notices(c.inst.bobPhone, "membership").some((n) => n.text.includes("removed"))),
+        check("Carol still holds the key", hasKey(c.inst.carolPhone, c.space.club)),
+        check("Carol can still read it, for now", texts(c.inst.carolPhone, c.space.club).includes("Planning Carol's surprise party.")),
+      ],
+    },
+    {
+      title: "An hour later",
+      narration: "Carol's credential has expired and the host won't issue another, so she can't fetch new ciphertext. She keeps the key; nothing was rotated.",
+      run: (w, c) => {
+        w.advance(1);
+        c.inst.alicePhone.post(c.space.club, "Party is Saturday.");
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Carol cannot fetch the new message", !texts(c.inst.carolPhone, c.space.club).includes("Party is Saturday.")),
+        check("Carol still holds the key", hasKey(c.inst.carolPhone, c.space.club)),
+        check("Bob reads it", texts(c.inst.bobPhone, c.space.club).includes("Party is Saturday.")),
+      ],
+    },
+  ],
+};
+
+export const scenarios: Scenario[] = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10];

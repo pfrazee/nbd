@@ -4,10 +4,11 @@
 
 import { type Cbor, ref } from "../protocol/encoding";
 import { type KeyPair, Rng, sign } from "../protocol/crypto";
-import { Installation, type Network } from "../protocol/installation";
-import type { Snapshot, WriteOp } from "../protocol/repo";
+import { Installation, type InstallationState, type Network } from "../protocol/installation";
+import type { RecordPath, Snapshot, WriteOp } from "../protocol/repo";
 import { approvalPayload } from "../protocol/trust";
 import { type Approval, type Binding, COL, type Did, asCbor } from "../protocol/types";
+import { Adversary } from "./adversary";
 import { Host } from "./host";
 import { Pds, type Session } from "./pds";
 
@@ -23,6 +24,11 @@ export class World implements Network {
   readonly host = new Host("host.example");
   readonly installations = new Map<string, Installation>();
   readonly log: LogEntry[] = [];
+  /** Hours each installation's reads of repos lag behind the present. */
+  readonly lag = new Map<string, number>();
+  readonly adversary = new Adversary((did) => this.pdsOf.get(did));
+  readonly stolen: StolenKeys[] = [];
+  readonly backups: { name: string; from: string; at: number; state: InstallationState }[] = [];
   private counter = 0;
 
   constructor(seed = "peep") {
@@ -40,7 +46,7 @@ export class World implements Network {
   }
 
   enumerate(observer: string, did: Did): Snapshot | null {
-    return this.pdsOf.get(did)?.enumerate(observer, did) ?? null;
+    return this.pdsOf.get(did)?.enumerate(observer, did, undefined, this.lag.get(observer) ?? 0) ?? null;
   }
 
   private sessionPds(sessionId: string): [Pds, Session] | null {
@@ -61,7 +67,7 @@ export class World implements Network {
     if (credentialExpiry <= this.t) return null;
     const pds = this.pdsOf.get(did);
     if (!pds?.repos.has(`${did}|${space}`)) return null;
-    return pds.enumerate(observer, did, space);
+    return pds.enumerate(observer, did, space, this.lag.get(observer) ?? 0);
   }
 
   write(sessionId: string, ops: WriteOp[], space?: string): void {
@@ -82,7 +88,7 @@ export class World implements Network {
   pds(name: string): Pds {
     let p = this.pdses.get(name);
     if (!p) {
-      p = new Pds(name, this.rng.derive(`pds/${name}`));
+      p = new Pds(name, this.rng.derive(`pds/${name}`), () => this.t);
       this.pdses.set(name, p);
     }
     return p;
@@ -150,7 +156,108 @@ export class World implements Network {
 
   /** Copy an installation's keys, as a thief or an unwiped old device would. */
   stealKeys(inst: Installation): StolenKeys {
-    return { sign: inst.signKey, enc: inst.encKey, deviceId: inst.binding.device.deviceId, binding: inst.binding };
+    const k = { sign: inst.signKey, enc: inst.encKey, deviceId: inst.binding.device.deviceId, binding: inst.binding };
+    this.stolen.push(k);
+    this.note(`keys of ${inst.id} copied`);
+    return k;
+  }
+
+  // ---- malicious PDS -------------------------------------------------------------
+
+  /** An installation the PDS itself operates for `did`, with a session that
+   * can write anything. Its device record is published only where the
+   * caller puts it. */
+  private pdsDevice(did: Did, deviceName: string): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const id = `${did.replace("did:plc:", "")}/${deviceName}`;
+    const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
+    inst.sessionId = pds.login(did, "password", `${pds.name} operator`).id;
+    this.installations.set(id, inst);
+    return inst;
+  }
+
+  /** First-contact substitution: `victim` (and the substitute itself) see
+   * `did`'s repo with every device replaced by one the PDS controls. */
+  substituteDevices(did: Did, victim: Installation, deviceName = "attacker"): Installation {
+    const sub = this.pdsDevice(did, deviceName);
+    const record = sub.deviceRecord() as { collection: string; rkey: string; value: Cbor };
+    this.adversary.add({
+      kind: "forge", did, observers: [victim.id, sub.id], revOffset: 0,
+      describe: `${this.pdsOf.get(did)!.name} shows ${victim.id} a substitute device for ${did}`,
+      transform: (records) => {
+        const out = new Map<RecordPath, Cbor>();
+        for (const [k, v] of records) if (!k.startsWith(COL.device + "/") && !k.startsWith(COL.approval + "/")) out.set(k, v);
+        out.set(`${record.collection}/${record.rkey}`, record.value);
+        return out;
+      },
+    });
+    this.note(`${this.pdsOf.get(did)!.name} substitutes ${sub.id} for ${did}, shown to ${victim.id}`);
+    this.settle();
+    return sub;
+  }
+
+  /** The PDS resets `did` (deleting every device, enrolling its own) while
+   * showing the account's own installations the old state. */
+  hiddenReset(did: Did, deviceName = "attacker"): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const own = [...this.installations.values()].filter((i) => i.did === did).map((i) => i.id);
+    this.adversary.add({ kind: "withhold", did, observers: own, rev: pds.repo(did).rev, describe: `${pds.name} hides ${did}'s newer commits from its own devices` });
+    const sub = this.pdsDevice(did, deviceName);
+    const devices = [...pds.repo(did).records.keys()].filter((k) => k.startsWith(COL.device + "/"));
+    pds.write(sub.sessionId!, [
+      ...devices.map((k) => ({ action: "delete" as const, collection: COL.device, rkey: k.slice(COL.device.length + 1) })),
+      sub.deviceRecord(),
+    ]);
+    this.note(`${pds.name} reset ${did} to ${sub.id}, hidden from ${own.join(", ")}`);
+    this.settle();
+    return sub;
+  }
+
+  /** Show `victim` a history where `target`'s record was deleted. */
+  hideDeviceFrom(target: Binding, victim: Installation): void {
+    const path = `${COL.device}/${target.device.deviceId}`;
+    this.adversary.add({
+      kind: "forge", did: target.account, observers: [victim.id], revOffset: 1,
+      describe: `${this.pdsOf.get(target.account)!.name} hides ${target.device.deviceId.slice(0, 6)} from ${victim.id}`,
+      transform: (records) => {
+        const out = new Map(records);
+        out.delete(path);
+        return out;
+      },
+    });
+    this.note(`${this.pdsOf.get(target.account)!.name} forks ${target.account}'s history for ${victim.id}`);
+    this.settle();
+  }
+
+  setLag(inst: Installation, hours: number): void {
+    if (hours > 0) this.lag.set(inst.id, hours);
+    else this.lag.delete(inst.id);
+    this.note(`${inst.id} now sees repos ${hours}h late`);
+    this.settle();
+  }
+
+  // ---- backups -------------------------------------------------------------------
+
+  backup(inst: Installation, name = `${inst.id} backup`): void {
+    this.backups.push({ name, from: inst.id, at: this.t, state: inst.exportState() });
+    this.note(`${inst.id} backed up`);
+  }
+
+  /** `from` is lost; a new installation restores its keys and the backup. */
+  restore(from: Installation, backupIndex: number, deviceName = `${from.name}-restored`): Installation {
+    const b = this.backups[backupIndex];
+    from.online = false;
+    if (from.sessionId) this.pdsOf.get(from.did)!.endSession(from.sessionId);
+    this.installations.delete(from.id);
+    const id = `${from.did.replace("did:plc:", "")}/${deviceName}`;
+    const inst = new Installation(this, id, deviceName, from.did, this.rng.derive(`install/${id}/${++this.counter}`), from.clockOffset,
+      { sign: from.signKey, enc: from.encKey, deviceId: from.binding.device.deviceId });
+    inst.sessionId = this.pdsOf.get(from.did)!.login(from.did, "app", id).id;
+    this.installations.set(id, inst);
+    inst.importState(b.state);
+    this.note(`${from.id} was lost; ${id} restored ${b.name} from ${b.at.toFixed(0)}h`);
+    this.settle();
+    return inst;
   }
 
   /** Publish an approval signed with `signer`'s keys for `target`, through

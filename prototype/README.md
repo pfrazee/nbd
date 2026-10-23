@@ -16,7 +16,7 @@ The **Trust** tab is the heart of it: rows are installations, columns are every 
 ## Layout
 
 - `src/protocol/`: the client, free of UI code. `crypto.ts` composes the `peep-hpke-v1` HPKE profile from noble primitives, checked against the RFC 9180 test vector for that suite; `trust.ts` ports `SpecClient` (first use, approvals with the live-binding rule, revocation, holds); `grants.ts` implements G1–G5 and A1–A7; `installation.ts` runs the sync loop.
-- `src/world/`: the emulated PDS (signed commits, create-only app sessions, one-off delete authorizations), Spaces host (membership, configuration, short-lived credentials), and `World`, which adds the clock and user and attacker actions.
+- `src/world/`: the emulated PDS (signed, timestamped commits, create-only app sessions, one-off delete authorizations), Spaces host (membership, configuration, short-lived credentials), `adversary.ts` (a malicious PDS withholding commits from, or signing forged snapshots for, chosen installations), and `World`, which adds the clock, per-installation network lag, backups, and user and attacker actions.
 - `src/sim/`: narrated scenarios with expectations, and an invariant monitor ported from `model/test_walks.py`, judged on each installation's own observations.
 - `src/ui/`: a store over one simulation (`sim.ts`), node cards that each render one installation's own state with the [TOFU flow](../ux-flows/tofu.md) copy, and the inspector (trust matrix, key holders, repos, log).
 
@@ -24,10 +24,10 @@ The **Trust** tab is the heart of it: rows are installations, columns are every 
 
 - A repo enumeration is the whole record map at a signed commit: no MST, CIDs, DID documents, or key rotation.
 - Credentials are a virtual-time expiry gated on a live session and eligible membership; no delegation tokens or HTTP signatures.
-- Installations sync whenever the world settles while they are online; no network delays yet.
+- Installations sync whenever the world settles while they are online. Network lag is per installation: it reads every repo as it was that many hours ago. Host reads are never delayed.
 - Keys and nonces come from a seeded generator so runs replay. Never do this outside a simulation.
 - Records only; no blobs.
 
 ## Status
 
-M2: protocol core, emulated world, and scenarios 1–5 (create and join; phone swap seen; phone swap missed by an offline contact; takeover at an honest PDS; a removed device's key during a hold), headless in tests and playable in the UI with a sandbox for free play. Next (M3): an adversary panel (malicious PDS views, partitions, stolen keys), network delays, and scenarios 6–10.
+M3: scenarios 1–10, headless in tests and playable in the UI: create and join; phone swap seen; phone swap missed by an offline contact; takeover at an honest PDS; a removed device's key during a hold; first-contact substitution by a malicious PDS; a reset hidden from the account's own devices; divergent histories; total device loss with a stale backup; a removed member keeping the key. The adversary panel drives the same attacks by hand, plus network lag, copied keys, and backups. Next (M4): a fuzz walker over installations with lag and forged views, and replaying shared-view traces through `model/peep_trust.py` to cross-check accepted sets.
