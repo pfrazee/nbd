@@ -88,8 +88,16 @@ export function asCbor<T>(x: T): Cbor {
   return x as unknown as Cbor;
 }
 
+// Bindings are immutable once published, so IDs are cached per object.
+const ids = new WeakMap<Binding, string>();
+
 export function bindingId(b: Binding): string {
-  return ref(["peep/device-binding", 1, asCbor(b)]);
+  let id = ids.get(b);
+  if (id === undefined) {
+    id = ref(["peep/device-binding", 1, asCbor(b)]);
+    ids.set(b, id);
+  }
+  return id;
 }
 
 export function sameBinding(a: Binding, b: Binding): boolean {

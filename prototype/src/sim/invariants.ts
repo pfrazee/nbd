@@ -63,7 +63,9 @@ export class InvariantMonitor {
       // New usable acceptances of accounts this installation already knew.
       if (i.imports === before.imports) {
         const knew = new Set([...before.accepted].map((id) => st.accepted.get(id)!.binding.account));
-        const base = new Set(before.accepted);
+        // Devices this installation approved itself were authenticated by
+        // pairing; it need not see its own approval come back first.
+        const base = new Set([...before.accepted, ...st.approvedByMe]);
         for (const [account, h] of before.holds) {
           const ids = h.key.slice(account.length + 1).split(",");
           if (this.world.t - (this.firstSeen.get(h.key) ?? Infinity) >= REENROLL_HOLD - EPS) ids.forEach((x) => base.add(x));
@@ -90,10 +92,15 @@ export class InvariantMonitor {
       out.push("own binding revoked without takeover alarm");
 
     if (i.online) {
+      // After a detected fork the account's history is suspect, and clients
+      // rightly refuse it rather than revoke on it.
+      const forked = new Set(st.alarms.filter((a) => a.kind === "fork").map((a) => a.subject));
       for (const [id, a] of st.accepted) {
+        if (forked.has(a.binding.account)) continue;
         const view = st.views.get(a.binding.account);
         const p = view?.present.get(a.binding.device.deviceId);
-        if (view && !st.revoked.has(id) && (!p || bindingId(p) !== id)) out.push(`${label(a.binding)} absent but not revoked`);
+        if (view && view.rev >= (a.rev ?? 0) && !st.revoked.has(id) && (!p || bindingId(p) !== id))
+          out.push(`${label(a.binding)} absent but not revoked`);
       }
     }
     return out;

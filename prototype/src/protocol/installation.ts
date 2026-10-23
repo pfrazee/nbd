@@ -33,7 +33,8 @@ export interface Network {
   enumerate(observer: string, did: Did): Snapshot | null;
   credential(sessionId: string, space: string): number | null;
   readSpace(observer: string, credentialExpiry: number, did: Did, space: string): Snapshot | null;
-  write(sessionId: string, ops: WriteOp[], space?: string): void;
+  /** Returns the revision of the commit the write produced. */
+  write(sessionId: string, ops: WriteOp[], space?: string): number;
   spaceWriters(space: string): Did[];
   host: HostApi;
 }
@@ -96,15 +97,20 @@ export class Installation {
     return this.net.now() + this.clockOffset;
   }
 
-  private write(ops: WriteOp[], space?: string): boolean {
-    if (!this.sessionId) return false;
+  /** Write in one commit; returns its revision, or null on failure. */
+  private writeRev(ops: WriteOp[], space?: string): number | null {
+    if (!this.sessionId) return null;
     try {
-      this.net.write(this.sessionId, ops, space);
+      const rev = this.net.write(this.sessionId, ops, space);
       this.writes++;
-      return true;
+      return rev;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  private write(ops: WriteOp[], space?: string): boolean {
+    return this.writeRev(ops, space) !== null;
   }
 
   // ---- devices -----------------------------------------------------------
@@ -122,20 +128,25 @@ export class Installation {
   approve(target: Installation): boolean {
     const unsigned = { version: 1 as const, signer: this.binding, target: target.binding };
     const approval: Approval = { ...unsigned, proof: sign(this.signKey.secretKey, approvalPayload(unsigned)) };
-    const id = bindingId(target.binding);
-    this.trust.state.approvedByMe.add(id);
-    this.trust.state.accepted.set(id, { binding: target.binding, evidence: `approved by ${label(this.binding)} (this device)` });
-    return this.write([
+    const rev = this.writeRev([
       { action: "create", collection: COL.approval, rkey: ref(asCbor(approval)), value: { $type: COL.approval, value: asCbor(approval) } },
       target.deviceRecord(),
     ]);
+    if (rev === null) return false;
+    // The commit this device wrote proves the target present at its revision.
+    const id = bindingId(target.binding);
+    this.trust.state.approvedByMe.add(id);
+    this.trust.state.accepted.set(id, { binding: target.binding, evidence: `approved by ${label(this.binding)} (this device)`, rev });
+    return true;
   }
 
   /** Pairing copies pins from the approving installation. */
   pairFrom(approver: Installation): void {
     this.imports++;
     this.trust.importFrom(cloneTrust(approver.trust.state));
-    this.trust.state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own" });
+    // The approver's commit published this device's record.
+    const published = approver.trust.state.accepted.get(bindingId(this.binding))?.rev;
+    this.trust.state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own", rev: published });
     this.trust.state.approvedByMe.add(bindingId(this.binding));
     // Own devices known at pairing are not news to this user.
     for (const [id, a] of this.trust.state.accepted) if (a.binding.account === this.did) this.trust.state.noticed.add(`added:${id}`);
@@ -325,7 +336,7 @@ export class Installation {
         if (typeof c.did !== "string" || typeof c.rev !== "number" || typeof c.data !== "string" || Object.keys(c).length !== 3) continue;
         const mine = this.trust.state.views.get(c.did)?.commits.get(c.rev);
         if (mine !== undefined && mine !== c.data)
-          this.trust.raise(`fork:${c.did}:${c.rev}`, "fork", `${c.did}'s PDS showed different histories: another member saw a different commit at revision ${c.rev}.`);
+          this.trust.raise(`fork:${c.did}:${c.rev}`, "fork", `${c.did}'s PDS showed different histories: another member saw a different commit at revision ${c.rev}.`, c.did);
       }
     }
 

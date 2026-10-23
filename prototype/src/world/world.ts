@@ -13,6 +13,17 @@ import { Host } from "./host";
 import { Pds, type Session } from "./pds";
 
 export type LogEntry = { at: number; text: string };
+
+/** Public-repo operations in the Python model's terms (model/peep_trust.py
+ * World): bindings are [account, deviceId]. */
+export type TraceBinding = [string, string];
+export type TraceOp =
+  | { op: "add"; b: TraceBinding }
+  | { op: "approve"; s: TraceBinding; t: TraceBinding }
+  | { op: "delete"; b: TraceBinding }
+  | { op: "wait"; h: number };
+
+const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
 export type StolenKeys = { sign: KeyPair; enc: KeyPair; deviceId: string; binding: Binding };
 
 export class World implements Network {
@@ -29,6 +40,8 @@ export class World implements Network {
   readonly adversary = new Adversary((did) => this.pdsOf.get(did));
   readonly stolen: StolenKeys[] = [];
   readonly backups: { name: string; from: string; at: number; state: InstallationState }[] = [];
+  /** When set, public-repo operations are appended here for replay. */
+  trace: TraceOp[] | null = null;
   private counter = 0;
 
   constructor(seed = "peep") {
@@ -70,10 +83,10 @@ export class World implements Network {
     return pds.enumerate(observer, did, space, this.lag.get(observer) ?? 0);
   }
 
-  write(sessionId: string, ops: WriteOp[], space?: string): void {
+  write(sessionId: string, ops: WriteOp[], space?: string): number {
     const found = this.sessionPds(sessionId);
     if (!found) throw new Error("world: unknown session");
-    found[0].write(sessionId, ops, space);
+    return found[0].write(sessionId, ops, space).commit.rev;
   }
 
   spaceWriters(space: string): Did[] {
@@ -112,11 +125,18 @@ export class World implements Network {
     inst.sessionId = this.pdsOf.get(did)!.login(did, "app", id).id;
     this.installations.set(id, inst);
     if (opts.link) {
-      opts.link.approve(inst);
+      if (!opts.link.approve(inst)) {
+        // Linking needs the approver to publish; without a session it can't.
+        this.installations.delete(id);
+        this.pdsOf.get(did)!.endSession(inst.sessionId);
+        throw new Error(`${opts.link.id} could not publish the approval`);
+      }
+      this.trace?.push({ op: "approve", s: tb(opts.link.binding), t: tb(inst.binding) }, { op: "add", b: tb(inst.binding) });
       inst.pairFrom(opts.link);
       this.note(`${opts.link.id} linked ${id}`);
     } else {
       inst.publishOwnRecord();
+      this.trace?.push({ op: "add", b: tb(inst.binding) });
       this.note(`${id} installed`);
     }
     this.settle();
@@ -134,6 +154,7 @@ export class World implements Network {
     if (target instanceof Installation && opts.endSession !== false && target.sessionId) pds.endSession(target.sessionId);
     const auth = pds.login(binding.account, "delete-auth", "delete authorization");
     pds.write(auth.id, [{ action: "delete", collection: COL.device, rkey: binding.device.deviceId }]);
+    this.trace?.push({ op: "delete", b: tb(binding) });
     this.note(`${binding.account} removed device ${binding.device.deviceId.slice(0, 6)}`);
     this.settle();
   }
@@ -143,12 +164,14 @@ export class World implements Network {
     const pds = this.pdsOf.get(did)!;
     const s = pds.login(did, "password", "attacker");
     const devices = [...pds.repo(did).records.keys()].filter((k) => k.startsWith(COL.device + "/"));
+    for (const k of devices) this.trace?.push({ op: "delete", b: [did.replace("did:plc:", ""), k.slice(COL.device.length + 1)] });
     pds.write(s.id, devices.map((k) => ({ action: "delete" as const, collection: COL.device, rkey: k.slice(COL.device.length + 1) })));
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
     inst.sessionId = s.id;
     this.installations.set(id, inst);
     inst.publishOwnRecord();
+    this.trace?.push({ op: "add", b: tb(inst.binding) });
     this.note(`attacker took over ${did}: deleted ${devices.length} device(s), enrolled ${id}`);
     this.settle();
     return inst;
@@ -267,6 +290,7 @@ export class World implements Network {
     const approval: Approval = { ...unsigned, proof: sign(signer.sign.secretKey, approvalPayload(unsigned)) };
     const value: Cbor = { $type: COL.approval, value: asCbor(approval) };
     this.write(sessionId, [{ action: "create", collection: COL.approval, rkey: ref(asCbor(approval)), value }]);
+    this.trace?.push({ op: "approve", s: tb(signer.binding), t: tb(target.binding) });
     this.note(`approval signed with ${signer.binding.account}'s old key ${signer.deviceId.slice(0, 6)} for ${target.id}`);
     this.settle();
   }
@@ -279,6 +303,7 @@ export class World implements Network {
 
   advance(hours: number): void {
     this.t += hours;
+    this.trace?.push({ op: "wait", h: hours });
     this.settle();
   }
 
@@ -290,6 +315,22 @@ export class World implements Network {
       if (!changed) return;
     }
     throw new Error("world: settle did not converge");
+  }
+
+  /** Every device binding ever published, in order of first appearance. */
+  allBindings(): Binding[] {
+    const out = new Map<string, Binding>();
+    for (const pds of this.pdses.values())
+      for (const repo of pds.repos.values()) {
+        if (repo.name.includes("|")) continue;
+        for (const snap of repo.history)
+          for (const [k, v] of snap.records)
+            if (k.startsWith(COL.device + "/")) {
+              const b = (v as { value: Binding }).value;
+              out.set(`${b.account}/${b.device.deviceId}/${ref(asCbor(b))}`, b);
+            }
+      }
+    return [...out.values()];
   }
 
   note(text: string): void {

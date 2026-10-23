@@ -14,7 +14,7 @@ import {
 export const REENROLL_HOLD = 72; // hours
 
 export type Hold = { candidate: string[]; bindings: Binding[]; credited: number; checkpoint: number };
-export type Alarm = { at: number; kind: string; text: string };
+export type Alarm = { at: number; kind: string; text: string; subject?: Did };
 export type Notice = { at: number; kind: string; text: string };
 
 /** What this installation last verified about one account's public repo. */
@@ -27,7 +27,9 @@ export type AccountView = {
 };
 
 export type TrustState = {
-  accepted: Map<string, { binding: Binding; evidence: string }>;
+  /** `rev`: the repo revision at which the binding was known present; only
+   * a snapshot at least that new can prove it absent. */
+  accepted: Map<string, { binding: Binding; evidence: string; rev?: number }>;
   revoked: Map<string, Binding>;
   holds: Map<Did, Hold>;
   candidatesSeen: Map<string, Binding>;
@@ -70,12 +72,22 @@ function isBinding(x: unknown, account: Did): x is Binding {
     && b.device.encryptPubkey instanceof Uint8Array && b.device.encryptPubkey.length === 32;
 }
 
+// Approval records are immutable objects, so signature checks are cached per
+// object and account (simulation speed only; it changes no outcome).
+const checked = new WeakMap<object, Map<Did, boolean>>();
+
 /** D1: schema, same-account scope, and signature. */
 export function validApproval(x: unknown, account: Did): x is Approval {
   const a = x as Approval;
-  if (!a || a.version !== 1 || !(a.proof instanceof Uint8Array)) return false;
-  if (!isBinding(a.signer, account) || !isBinding(a.target, account)) return false;
-  return verify(a.proof, approvalPayload(withoutProof(a)), a.signer.device.authPubkey);
+  if (!a || typeof a !== "object") return false;
+  let m = checked.get(a);
+  const cached = m?.get(account);
+  if (cached !== undefined) return cached;
+  const ok = a.version === 1 && a.proof instanceof Uint8Array && isBinding(a.signer, account) && isBinding(a.target, account)
+    && verify(a.proof, approvalPayload(withoutProof(a)), a.signer.device.authPubkey);
+  if (!m) checked.set(a, (m = new Map()));
+  m.set(account, ok);
+  return ok;
 }
 
 export class Trust {
@@ -118,7 +130,7 @@ export class Trust {
       if (rev < prev.rev) return false; // rollback: refuse
       const seen = prev.commits.get(rev);
       if (seen !== undefined && seen !== snap.commit.data) {
-        this.alarmOnce(`fork:${account}:${rev}`, "fork", `${account}'s PDS showed two different commits at revision ${rev}.`);
+        this.alarmOnce(`fork:${account}:${rev}`, "fork", `${account}'s PDS showed two different commits at revision ${rev}.`, account);
         return false;
       }
     }
@@ -153,8 +165,10 @@ export class Trust {
     const tracked = [...st.accepted.values()].map((a) => a.binding)
       .concat([...st.candidatesSeen.values()])
       .filter((b) => b.account === account);
+    const viewRev = st.views.get(account)?.rev ?? 0;
     for (const b of tracked) {
       const id = bindingId(b);
+      if (viewRev < (st.accepted.get(id)?.rev ?? 0)) continue; // snapshot predates the binding
       if (!st.revoked.has(id) && !this.presentBinding(account, b)) {
         st.revoked.set(id, b);
         if (sameBinding(b, this.own))
@@ -312,14 +326,14 @@ export class Trust {
 
   // ---- reporting -----------------------------------------------------------
 
-  private alarm(kind: string, text: string): void {
-    this.state.alarms.push({ at: this.localNow(), kind, text });
+  private alarm(kind: string, text: string, subject?: Did): void {
+    this.state.alarms.push({ at: this.localNow(), kind, text, subject });
   }
 
-  private alarmOnce(key: string, kind: string, text: string): void {
+  private alarmOnce(key: string, kind: string, text: string, subject?: Did): void {
     if (this.state.noticed.has(key)) return;
     this.state.noticed.add(key);
-    this.alarm(kind, text);
+    this.alarm(kind, text, subject);
   }
 
   notice(key: string, kind: string, text: string): void {
@@ -328,8 +342,8 @@ export class Trust {
     this.state.notices.push({ at: this.localNow(), kind, text });
   }
 
-  raise(key: string, kind: string, text: string): void {
-    this.alarmOnce(key, kind, text);
+  raise(key: string, kind: string, text: string, subject?: Did): void {
+    this.alarmOnce(key, kind, text, subject);
   }
 }
 
