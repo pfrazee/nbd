@@ -1,6 +1,6 @@
 # Trust designs compared
 
-PEEP tried several ways to protect a client meeting an account for the first time, then adopted the Signal-level [security goals](../security-goals.md): trust on first use, approvals afterwards, and a re-enrollment hold for clients that knew the account. [`compare.py`](compare.py) runs the adopted design and three rejected ones against the same scenarios, and [`test_compare.py`](test_compare.py) pins the results. Outcomes are from the viewing client's side: **compromised** means it accepts the attacker's device in the target space, **hold** means it waits out the re-enrollment hold, **declined** means it refuses an honest device, and **safe** means it accepts honest devices and refuses attackers.
+PEEP tried several ways to protect a client meeting an account for the first time, then adopted the current [security goals](../security-goals.md): trust on first use, approvals afterwards, and a re-enrollment hold for clients that knew the account. [`compare.py`](compare.py) runs the adopted design and three rejected ones against the same scenarios, and [`test_compare.py`](test_compare.py) pins the results. Outcomes are from the viewing client's side: **compromised** means it accepts the attacker's device in the target space, **hold** means it waits out the re-enrollment hold, **declined** means it refuses an honest device, and **safe** means it accepts honest devices and refuses attackers.
 
 | Design | First use | Status |
 | --- | --- | --- |

@@ -164,6 +164,19 @@ class FirstContactExposure(Base):
         m = self.w.add_device(B("carol", "m"))
         self.assertTrue(self.meet(m, COMMUNITY))
 
+    def test_limitation_hold_is_per_client_not_space_wide(self):
+        # Documented: at the same instant, a client that knew the account
+        # holds while a newcomer in the same space accepts and can grant.
+        (bob,) = self.account("bob", "b0")
+        self.w.admit(COMMUNITY, "alice", "bob")
+        self.assertTrue(self.meet(bob, COMMUNITY))
+        self.w.delete_device(bob)
+        m = self.w.add_device(B("bob", "m"))
+        carol = self.CLIENT(self.w, self.w.add_device(B("carol", "c0")))
+        self.w.admit(COMMUNITY, "carol")
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.assertTrue(carol.accepted(m, COMMUNITY))
+
     def test_restore_keeps_revocations_after_resurrection(self):
         (bob,) = self.account("bob", "b0")
         self.w.admit(COMMUNITY, "alice", "bob")
@@ -210,6 +223,12 @@ class RevocationAndReset(Base):
         self.w.add_device(bob)
         self.assertFalse(self.meet(bob, COMMUNITY))
         self.assertIn("resurrected bob/b0", self.client.state.alarms)
+
+    def test_own_removal_alarms(self):
+        self.w.delete_device(self.alice)
+        self.client.sync()
+        self.assertIn(self.alice, self.client.state.revoked)
+        self.assertIn("removed alice/a0", self.client.state.alarms)
 
     def test_approval_survives_approver_revocation(self):
         a, b = self.account("bob", "a", "b")

@@ -29,6 +29,7 @@ MUTATIONS = {
     "hold not bound to candidate": ("if held is None or held[0] != key:", "if held is None:"),
     "replaced candidates not revoked": ("            st.candidates_seen |= key\n", ""),
     "imports merge any candidate": ("elif mine[0] == cand:", "else:"),
+    "no takeover alarm": ("                    st.alarms.append(f\"removed {b}\")  # takeover alarm\n", "                    pass\n"),
     "revoked stays usable": (
         "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),

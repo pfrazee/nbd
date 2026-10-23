@@ -466,6 +466,8 @@ class SpecClient:
         for b in set(st.accepted) | st.candidates_seen:
             if b not in st.revoked and not self.world.present(b):
                 st.revoked.add(b)
+                if b == self.own:
+                    st.alarms.append(f"removed {b}")  # takeover alarm
         for b in st.revoked:
             if self.world.present(b) and f"resurrected {b}" not in st.alarms:
                 st.alarms.append(f"resurrected {b}")
