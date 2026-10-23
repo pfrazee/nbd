@@ -498,8 +498,9 @@ class SpecClient:
             elif mine[0] == cand:
                 st.holds[x] = (cand, max(credited, mine[1]), now)
             # A different candidate: keep this client's own observation.
-        self._own_removal_alarm()
-        self._reconcile_holds()
+        # Check imported bindings against current repo state before they
+        # can end a hold; sync then alarms and reconciles.
+        self.sync()
 
     # ---- rules -----------------------------------------------------------
 

@@ -40,7 +40,11 @@ MUTATIONS = {
     "no takeover alarm": (
         "            self.state.alarms.append(msg)\n", "            pass\n"),
     "import skips takeover alarm": (
-        "observation.\n        self._own_removal_alarm()", "observation.\n"),
+        "        # can end a hold; sync then alarms and reconciles.\n        self.sync()",
+        "        self._reconcile_holds()"),
+    "import ends holds before checking the repo": (
+        "        # can end a hold; sync then alarms and reconciles.\n        self.sync()",
+        "        self._reconcile_holds()\n        self.sync()"),
     "imports keep earliest checkpoint": (
         "(cand, max(credited, mine[1]), now)", "(cand, max(credited, mine[1]), min(_theirs, mine[2]))"),
     "imports credit storage time": ("st.holds[x] = (cand, credited, now)", "st.holds[x] = (cand, credited, _theirs)"),

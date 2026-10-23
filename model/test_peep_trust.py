@@ -231,6 +231,21 @@ class Holds(Base):
         self.assertFalse(self.client.hold_pending("bob", COMMUNITY))
         self.assertTrue(self.meet(m, COMMUNITY))
 
+    def test_import_of_unseen_deleted_binding_keeps_hold_credit(self):
+        laptop = self.CLIENT(self.w, self.w.add_device(B("alice", "l")))
+        laptop.pair(self.bob)
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(self.bob, b1)  # still approved by the deleted b0
+        self.assertTrue(laptop.accepted(b1, COMMUNITY))
+        backup = laptop.export_state()
+        self.w.delete_device(b1)
+        m = self.w.add_device(B("bob", "m"))
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.w.now += REENROLL_HOLD - 1
+        self.client.import_state(backup)  # b1 is new to this client
+        self.w.now += 1
+        self.assertTrue(self.meet(m, COMMUNITY))
+
     def test_deleting_candidate_cancels_hold(self):
         m = self.w.add_device(B("bob", "m"))
         self.meet(m, COMMUNITY)
