@@ -539,14 +539,14 @@ class SpecClient:
         accepted (even if since revoked). Acceptance then persists. A target
         whose record is absent was deleted (records are created with their
         first approval), so it is accepted already revoked: it gets no keys,
-        but its own approvals still connect the devices it added."""
+        but its own approvals still connect the devices it added. The same
+        holds for a target this client had already revoked."""
         st = self.state
         while True:
             added = False
             for x in self.world.accounts():
                 for ap in self.world.account_approvals(x):
-                    if (ap.signer in st.accepted and ap.target not in st.accepted
-                            and ap.target not in st.revoked):
+                    if ap.signer in st.accepted and ap.target not in st.accepted:
                         st.accepted[ap.target] = f"approved by {ap.signer}"
                         if not self.world.present(ap.target):
                             st.revoked.add(ap.target)

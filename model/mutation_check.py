@@ -31,8 +31,8 @@ MUTATIONS = {
     "cancelled holds kept": ("elif cand & st.revoked:", "elif False:"),
     "first use for known accounts": ("        if not self._knew(x):\n", "        if True:\n"),
     "approvals need an unrevoked signer": (
-        "if (ap.signer in st.accepted and ap.target not in st.accepted",
-        "if (ap.signer in self.account_wide_set() and ap.target not in st.accepted"),
+        "if ap.signer in st.accepted and ap.target not in st.accepted:",
+        "if ap.signer in self.account_wide_set() and ap.target not in st.accepted:"),
     "no hold": ("if held[1] >= REENROLL_HOLD:", "if True:"),
     "hold not bound to candidate": ("if held is None or held[0] != key:", "if held is None:"),
     "replaced candidates not revoked": ("            st.candidates_seen |= key\n", ""),
@@ -49,8 +49,11 @@ MUTATIONS = {
         "(cand, max(credited, mine[1]), now)", "(cand, max(credited, mine[1]), min(_theirs, mine[2]))"),
     "imports credit storage time": ("st.holds[x] = (cand, credited, now)", "st.holds[x] = (cand, credited, _theirs)"),
     "paths stop at deleted devices": (
-        "                            and ap.target not in st.revoked):",
-        "                            and self._usable(ap.target)):"),
+        "if ap.signer in st.accepted and ap.target not in st.accepted:",
+        "if ap.signer in st.accepted and ap.target not in st.accepted and self._usable(ap.target):"),
+    "paths stop at revoked devices": (
+        "if ap.signer in st.accepted and ap.target not in st.accepted:",
+        "if ap.signer in st.accepted and ap.target not in st.accepted and ap.target not in st.revoked:"),
     "deleted path targets stay usable": (
         "                        if not self.world.present(ap.target):\n                            st.revoked.add(ap.target)\n",
         ""),

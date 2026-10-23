@@ -221,6 +221,17 @@ class Holds(Base):
         self.w.now = REENROLL_HOLD + 10
         self.assertTrue(fresh.accepted(m2, COMMUNITY))
 
+    def test_revoked_candidate_still_carries_approval_authority(self):
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.meet(b1, COMMUNITY)  # observed as a candidate...
+        self.w.delete_device(b1)
+        self.client.sync()  # ...then revoked
+        b2 = self.w.add_device(B("bob", "b2"))
+        self.w.approve(self.bob, b1)  # an authenticated path appears later
+        self.w.approve(b1, b2)
+        self.assertTrue(self.meet(b2, COMMUNITY))
+        self.assertNotIn(b1, self.client.account_wide_set())
+
     def test_import_cannot_resurrect_completed_hold(self):
         m = self.w.add_device(B("bob", "m"))
         self.meet(m, COMMUNITY)
