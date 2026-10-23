@@ -1,11 +1,11 @@
 """Executable model of PEEP device trust.
 
-`SpecClient` (AccountWideAnchorClient) models the rules in
-device-enrollment.md: local trust, first-use anchors with account-wide
-acceptance, revocation, and re-enrollment. The other clients are variants
+`SpecClient` models the rules in device-enrollment.md: trust on first
+use, approvals afterwards, revocation by observed absence, and a
+re-enrollment hold bound to its candidate. The other clients are variants
 kept for comparison (see COMPARISON.md): ScopedWitnessClient, the rejected
 per-space witness design, which also holds the shared machinery;
-WarnOnlyClient; and TofuClient. Everything is modelled abstractly. There is no
+WarnOnlyClient; and AccountWideAnchorClient. Everything is modelled abstractly. There is no
 cryptography: a record "signed by" a binding is valid exactly when whoever
 created it held that binding's key, and tests only create records the
 creating party could sign. Repos hold the current state the client would
@@ -395,14 +395,6 @@ class WarnOnlyClient(ScopedWitnessClient):
         self._pin(cand & reach if anchors else cand, None)
 
 
-class TofuClient(WarnOnlyClient):
-    """Baseline: no anchors at all. First use is the single-root rule;
-    only clients that pinned an account before detect its reset."""
-
-    def collect_anchors(self, x: str) -> Set[Binding]:
-        return set()
-
-
 class AccountWideAnchorClient(WarnOnlyClient):
     """Middle variant: anchors accept the devices reachable from them, but
     acceptance stays account-wide (no witness scope). This is the design
@@ -422,5 +414,149 @@ class AccountWideAnchorClient(WarnOnlyClient):
         super()._first_use(x, space)
 
 
-# The design the specification adopts.
-SpecClient = AccountWideAnchorClient
+
+@dataclass
+class SpecState:
+    """Persisted state for SpecClient."""
+
+    accepted: Dict[Binding, str] = field(default_factory=dict)  # binding -> evidence
+    revoked: Set[Binding] = field(default_factory=set)
+    holds: Dict[str, Tuple[FrozenSet[Binding], float]] = field(default_factory=dict)
+    candidates_seen: Set[Binding] = field(default_factory=set)
+    alarms: List[str] = field(default_factory=list)
+
+    def copy(self) -> "SpecState":
+        return SpecState(dict(self.accepted), set(self.revoked), dict(self.holds),
+                         set(self.candidates_seen), list(self.alarms))
+
+
+class SpecClient:
+    """The specified design: trust on first use, approvals afterwards,
+    revocation by observed absence, and a re-enrollment hold bound to its
+    exact candidate for clients that knew the account. Acceptance is
+    persisted with its evidence, independent of the current repo graph."""
+
+    def __init__(self, world: World, own: Binding):
+        self.world = world
+        self.own = own
+        self.state = SpecState(accepted={own: "own"})
+
+    # ---- public API ------------------------------------------------------
+
+    def pair(self, *bindings: Binding) -> None:
+        for b in bindings:
+            self.state.accepted.setdefault(b, "paired")
+
+    def accepted(self, b: Binding, space: str = "") -> bool:
+        self.sync()
+        self._first_use(b.account)
+        self._approvals()
+        return b in self.state.accepted and b not in self.state.revoked
+
+    def hold_pending(self, account: str, space: str = "") -> bool:
+        self.sync()
+        self._first_use(account)
+        return account in self.state.holds
+
+    def account_wide_set(self) -> Set[Binding]:
+        return {b for b in self.state.accepted if b not in self.state.revoked}
+
+    def sync(self) -> None:
+        st = self.state
+        for b in set(st.accepted) | st.candidates_seen:
+            if b not in st.revoked and not self.world.present(b):
+                st.revoked.add(b)
+        for b in st.revoked:
+            if self.world.present(b) and f"resurrected {b}" not in st.alarms:
+                st.alarms.append(f"resurrected {b}")
+
+    def export_state(self) -> SpecState:
+        return self.state.copy()
+
+    def import_state(self, other: SpecState) -> None:
+        st = self.state
+        for b, ev in other.accepted.items():
+            st.accepted.setdefault(b, ev)
+        st.revoked |= other.revoked
+        st.candidates_seen |= other.candidates_seen
+        for x, (cand, t) in other.holds.items():
+            mine = st.holds.get(x)
+            if mine is None:
+                st.holds[x] = (cand, t)
+            elif mine[0] == cand:
+                st.holds[x] = (cand, min(t, mine[1]))
+            # A different candidate: keep this client's own observation.
+
+    # ---- rules -----------------------------------------------------------
+
+    def _usable(self, b: Binding) -> bool:
+        return b not in self.state.revoked and self.world.present(b)
+
+    def _knew(self, x: str) -> bool:
+        return any(b.account == x for b in self.state.accepted)
+
+    def _approvals(self) -> None:
+        """Accept targets of present approvals whose signer this client has
+        accepted (even if since revoked). Acceptance then persists."""
+        st = self.state
+        while True:
+            added = False
+            for x in self.world.accounts():
+                for ap in self.world.account_approvals(x):
+                    if (ap.signer in st.accepted and ap.target not in st.accepted
+                            and self._usable(ap.target)):
+                        st.accepted[ap.target] = f"approved by {ap.signer}"
+                        added = True
+            if not added:
+                return
+
+    def _reach(self, x: str, starts: Iterable[Binding]) -> Set[Binding]:
+        aps = self.world.account_approvals(x)
+        seen = set(starts)
+        frontier = list(seen)
+        while frontier:
+            n = frontier.pop()
+            for ap in aps:
+                if ap.signer == n and ap.target not in seen:
+                    seen.add(ap.target)
+                    frontier.append(ap.target)
+        return seen
+
+    def single_root_set(self, x: str) -> Optional[Set[Binding]]:
+        present = {b for b in self.world.present_devices(x) if self._usable(b)}
+        if not present:
+            return None
+        aps = self.world.account_approvals(x)
+        nodes = set(present) | {a.signer for a in aps} | {a.target for a in aps}
+        incoming = {a.target for a in aps}
+        live_roots = [r for r in nodes if r not in incoming and self._reach(x, [r]) & present]
+        if len(live_roots) != 1:
+            return None
+        return present if present <= self._reach(x, live_roots) else None
+
+    def _first_use(self, x: str) -> None:
+        st = self.state
+        if x == self.own.account:
+            return
+        self._approvals()
+        if any(b.account == x for b in self.account_wide_set()):
+            return
+        cand = self.single_root_set(x)
+        if not self._knew(x):
+            if cand is not None:
+                for b in cand:
+                    st.accepted[b] = "first use"
+            return
+        # Re-enrollment: every accepted binding of x is revoked.
+        if cand is None:
+            return
+        key = frozenset(cand)
+        held = st.holds.get(x)
+        if held is None or held[0] != key:
+            st.candidates_seen |= key
+            st.holds[x] = (key, self.world.now)  # new or changed candidate restarts
+            held = st.holds[x]
+        if self.world.now - held[1] >= REENROLL_HOLD:
+            for b in key:
+                st.accepted[b] = "re-enrolled"
+            del st.holds[x]

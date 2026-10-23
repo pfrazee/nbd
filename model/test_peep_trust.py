@@ -1,15 +1,12 @@
-"""Adversarial cases for the PEEP trust model (TODO-17).
-
-Most classes test SpecClient, the design the specification adopts.
-ScopedWitnessAlternative tests the rejected per-space design, kept so the
-comparison in COMPARISON.md stays honest.
+"""Adversarial cases for SpecClient, the design the specification adopts
+(TODO-17). Anchor and witness variants are tested in test_variants.py.
 
 Run: python3 -I -m unittest discover -s model
 """
 
 import unittest
 
-from peep_trust import REENROLL_HOLD, Binding, ScopedWitnessClient, SpecClient, World
+from peep_trust import REENROLL_HOLD, Binding, SpecClient, World
 
 COMMUNITY = "community"
 PRIVATE = "private"
@@ -63,215 +60,121 @@ class GenuineFirstContact(Base):
         self.assertTrue(self.meet(m, COMMUNITY))
 
 
-class Anchors(Base):
+class TakeoverAfterFirstContact(Base):
+    """Goal 2: after first contact, takeover cannot silently add a device."""
+
     def setUp(self):
         super().setUp()
-        (self.dave,) = self.account("dave", "d0")
         (self.bob,) = self.account("bob", "b0")
-        self.w.admit(COMMUNITY, "alice", "bob", "dave")
-        self.assertTrue(self.meet(self.dave, COMMUNITY))
-        # Dave witnesses Bob's honest device.
-        self.w.grant("g-dave-bob", COMMUNITY, self.dave, self.bob)
-
-    def test_backward_approval_does_not_admit_newcomer(self):
-        m = self.w.add_device(B("bob", "m"))
-        self.w.approve(m, self.bob)  # signed by M's own key
+        self.w.admit(COMMUNITY, "alice", "bob")
         self.assertTrue(self.meet(self.bob, COMMUNITY))
+
+    def test_unlinked_device_is_declined(self):
+        m = self.w.add_device(B("bob", "m"))
         self.assertFalse(self.meet(m, COMMUNITY))
 
-    def test_disconnected_device_beside_live_ones_is_declined(self):
+    def test_backward_approval_is_declined(self):
         m = self.w.add_device(B("bob", "m"))
+        self.w.approve(m, self.bob)
+        self.assertFalse(self.meet(m, COMMUNITY))
         self.assertTrue(self.meet(self.bob, COMMUNITY))
-        self.assertFalse(self.meet(m, COMMUNITY))
 
-    def test_self_issued_grant_is_not_an_anchor(self):
-        m = self.w.add_device(B("bob", "m"))
-        self.w.grant("g-m-dave", COMMUNITY, m, self.dave)  # garbage, from Bob's repo
-        self.w.grant("g-m-self", COMMUNITY, m, m)
-        self.assertFalse(self.meet(m, COMMUNITY))
+    def test_approved_device_is_accepted(self):
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(self.bob, b1)
+        self.assertTrue(self.meet(b1, COMMUNITY))
 
-    def test_unaccepted_other_account_cannot_witness(self):
-        # One malicious PDS hosts X and Y: YM grants garbage to XM.
-        (xa,) = self.account("x", "xa")
-        (ya,) = self.account("y", "ya")
-        xm = self.w.add_device(B("x", "xm"))
-        ym = self.w.add_device(B("y", "ym"))
-        self.w.admit(COMMUNITY, "x", "y")
-        self.w.grant("g-dave-xa", COMMUNITY, self.dave, xa)
-        self.w.grant("g-ym-xm", COMMUNITY, ym, xm)
-        self.assertFalse(self.meet(ym, COMMUNITY))  # two roots in Y: declined
-        self.assertTrue(self.meet(xa, COMMUNITY))
-        self.assertFalse(self.meet(xm, COMMUNITY))
+    def test_approval_acceptance_survives_deleted_approval(self):
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(self.bob, b1)
+        self.assertTrue(self.meet(b1, COMMUNITY))
+        self.w.approvals["bob"].clear()  # withhold or delete the approval
+        self.assertTrue(self.meet(b1, COMMUNITY))
+        other = self.CLIENT(self.w, self.alice)
+        other.import_state(self.client.export_state())
+        self.assertTrue(other.accepted(b1, COMMUNITY))
 
-    def test_forged_witness_for_missing_binding_only_holds(self):
-        # Fresh account Carol with an honest device; Dave names a binding
-        # Carol never had. That reads as a reset: a hold, never admission.
-        (carol,) = self.account("carol", "c0")
-        self.w.admit(COMMUNITY, "carol")
-        self.w.grant("g-dave-fake", COMMUNITY, self.dave, B("carol", "fake"))
-        self.assertFalse(self.meet(carol, COMMUNITY))
-        self.assertTrue(self.client.hold_pending("carol", COMMUNITY))
+
+class FirstUseDirection(Base):
+    def test_attacker_cycle_pointing_at_honest_device_is_declined(self):
+        r, a = self.account("bob", "r", "a")
+        m1, m2 = self.w.add_device(B("bob", "m1")), self.w.add_device(B("bob", "m2"))
+        self.w.approve(m1, m2)
+        self.w.approve(m2, m1)
+        self.w.approve(m1, a)  # no root of their own; points at an honest device
+        self.w.admit(COMMUNITY, "alice", "bob")
+        self.assertFalse(self.meet(m1, COMMUNITY))
+        self.assertFalse(self.meet(r, COMMUNITY))  # declined and surfaced
+
+
+class Holds(Base):
+    def setUp(self):
+        super().setUp()
+        (self.bob,) = self.account("bob", "b0")
+        self.w.admit(COMMUNITY, "alice", "bob")
+        self.assertTrue(self.meet(self.bob, COMMUNITY))
+        self.w.delete_device(self.bob)
+
+    def test_replacing_candidate_restarts_hold_and_revokes_it(self):
+        m1 = self.w.add_device(B("bob", "m1"))
+        self.assertFalse(self.meet(m1, COMMUNITY))
+        self.w.now += REENROLL_HOLD - 1
+        self.w.delete_device(m1)
+        m2 = self.w.add_device(B("bob", "m2"))
+        self.assertFalse(self.meet(m2, COMMUNITY))
+        self.w.now += 1
+        self.assertFalse(self.meet(m2, COMMUNITY))  # only 1h for m2
+        self.assertIn(m1, self.client.state.revoked)
         self.w.now += REENROLL_HOLD
-        self.assertTrue(self.meet(carol, COMMUNITY))
+        self.assertTrue(self.meet(m2, COMMUNITY))
 
-
-class WitnessScenes(Base):
-    """Shared setup for astra's cross-space and chained-witness cases."""
-
-    def setUp(self):
-        super().setUp()
-        (self.charlie,) = self.account("charlie", "c0")
-        (self.dave,) = self.account("dave", "d0")
-        (self.eve,) = self.account("eve", "e0")
-        (self.bob,) = self.account("bob", "b0")
-        (self.dana,) = self.account("dana", "n0")
-        self.w.admit(COMMUNITY, "alice", "charlie", "dave", "bob", "dana")
-        self.w.admit(PRIVATE, "alice", "eve", "bob", "dana")
-        for b in (self.charlie, self.dave, self.eve):
-            self.assertTrue(self.meet(b, COMMUNITY))
-        # Honest witnesses for Bob and Dana in each space.
-        self.w.grant("g-dave-bob", COMMUNITY, self.dave, self.bob)
-        self.w.grant("g-dave-dana", COMMUNITY, self.dave, self.dana)
-        self.w.grant("g-eve-bob", PRIVATE, self.eve, self.bob)
-        self.w.grant("g-eve-dana", PRIVATE, self.eve, self.dana)
-        # Bob's malicious PDS publishes BM; Charlie (community only) colludes.
-        self.bm = self.w.add_device(B("bob", "bm"))
-        self.w.grant("g-charlie-bm", COMMUNITY, self.charlie, self.bm)
-
-
-class ColludingWitnessLimitation(WitnessScenes):
-    """The spec's documented limitation: a member the client accepted can
-    vouch for a device published by someone controlling another member's
-    repo, and the resulting pin is account-wide."""
-
-    def test_limitation_colluding_witness_reaches_other_spaces(self):
-        self.assertTrue(self.meet(self.bm, COMMUNITY))
-        self.assertTrue(self.meet(self.bm, PRIVATE))
-
-    def test_limitation_witness_chain(self):
-        self.meet(self.bm, COMMUNITY)
-        dm = self.w.add_device(B("dana", "dm"))
-        self.w.grant("g-bm-dm", PRIVATE, self.bm, dm)
-        self.assertTrue(self.meet(dm, PRIVATE))
-
-    def test_honest_witnesses_alone_admit_nothing_extra(self):
-        del self.w.grants["g-charlie-bm"]
-        self.assertTrue(self.meet(self.bob, PRIVATE))
-        self.assertFalse(self.meet(self.bm, COMMUNITY))
-        self.assertFalse(self.meet(self.bm, PRIVATE))
-
-    def test_first_use_pin_is_account_wide_and_persists(self):
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-        self.assertIn(self.bob, self.client.account_wide_set())
-        self.w.remove_member(COMMUNITY, "dave")
-        self.w.delete_device(self.charlie)
-        self.assertTrue(self.meet(self.bob, PRIVATE))
-
-    def test_pinned_account_ignores_witnesses(self):
-        fresh = self.CLIENT(self.w, self.alice)
-        fresh.pair(self.bob, self.charlie)
-        self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
-        self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
-
-    def test_pinned_reset_holds_despite_witness(self):
-        # Every pinned Bob device is revoked; Charlie's witness for BM must
-        # not let BM skip the re-enrollment hold.
-        fresh = self.CLIENT(self.w, self.alice)
-        fresh.pair(self.bob, self.charlie)
-        self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
-        self.w.delete_device(self.bob)
-        self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
-        self.assertTrue(fresh.hold_pending("bob", COMMUNITY))
-
-
-class ScopedWitnessAlternative(WitnessScenes):
-    """The rejected per-space design (ScopedWitnessClient)."""
-
-    CLIENT = ScopedWitnessClient
-
-    def test_reset_holds(self):
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-        self.w.delete_device(self.bob)
-        self.w.delete_device(self.bm)
+    def test_resurrected_record_neither_blocks_nor_joins_candidate(self):
         n = self.w.add_device(B("bob", "n"))
         self.assertFalse(self.meet(n, COMMUNITY))
-        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
+        self.w.add_device(self.bob)  # revoked record reappears
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(n, COMMUNITY))
+        self.assertFalse(self.meet(self.bob, COMMUNITY))
 
-    def test_cross_space_witness_is_scoped(self):
-        self.assertTrue(self.meet(self.bm, COMMUNITY))
-        self.assertFalse(self.meet(self.bm, PRIVATE))
-        self.assertTrue(self.meet(self.bob, PRIVATE))
+    def test_import_merges_hold_only_for_identical_candidate(self):
+        m1 = self.w.add_device(B("bob", "m1"))
+        self.meet(m1, COMMUNITY)  # hold for {m1} starts at 0
+        old = self.client.export_state()
+        self.w.now += 10
+        self.w.delete_device(m1)
+        m2 = self.w.add_device(B("bob", "m2"))
+        fresh = self.CLIENT(self.w, self.alice)
+        fresh.pair(self.bob)
+        fresh.sync()
+        self.assertFalse(fresh.accepted(m2, COMMUNITY))  # hold for {m2} at 10
+        fresh.import_state(old)
+        self.w.now = REENROLL_HOLD
+        self.assertFalse(fresh.accepted(m2, COMMUNITY))
+        self.w.now = REENROLL_HOLD + 10
+        self.assertTrue(fresh.accepted(m2, COMMUNITY))
 
-    def test_witness_chain_does_not_launder_scope(self):
-        dm = self.w.add_device(B("dana", "dm"))
-        self.w.grant("g-bm-dm-private", PRIVATE, self.bm, dm)
-        self.w.grant("g-bm-dm-community", COMMUNITY, self.bm, dm)
-        self.assertFalse(self.meet(dm, PRIVATE))
-        self.assertTrue(self.meet(dm, COMMUNITY))  # within Charlie's reach only
 
-    def test_approvals_inherit_scope(self):
-        bm2 = self.w.add_device(B("bob", "bm2"))
-        self.w.approve(self.bm, bm2)
-        self.assertTrue(self.meet(bm2, COMMUNITY))
-        self.assertFalse(self.meet(bm2, PRIVATE))
+class FirstContactExposure(Base):
+    """Documented non-goals: first contact, including just after takeover."""
 
-    def test_scoped_acceptance_never_becomes_account_wide(self):
-        self.meet(self.bob, COMMUNITY)
-        self.meet(self.bob, PRIVATE)
-        self.assertNotIn(self.bob, self.client.account_wide_set())
+    def test_limitation_newcomer_after_takeover_gets_no_hold(self):
+        (carol,) = self.account("carol", "c0")
+        self.w.admit(COMMUNITY, "alice", "carol")
+        self.w.delete_device(carol)
+        m = self.w.add_device(B("carol", "m"))
+        self.assertTrue(self.meet(m, COMMUNITY))
 
-    def test_witness_ineligibility_lapses_its_bases(self):
-        self.assertTrue(self.meet(self.bm, COMMUNITY))
-        self.w.remove_member(COMMUNITY, "charlie")
-        self.assertFalse(self.meet(self.bm, COMMUNITY))
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-
-    def test_witness_revocation_lapses_its_bases(self):
-        self.assertTrue(self.meet(self.bm, COMMUNITY))
-        self.w.delete_device(self.charlie)
-        self.assertFalse(self.meet(self.bm, COMMUNITY))
-
-    def test_multiple_paths_union_and_lapse_independently(self):
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-        self.assertTrue(self.meet(self.bob, PRIVATE))
-        self.w.remove_member(PRIVATE, "eve")
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-
-    def test_restore_does_not_widen_scope(self):
-        self.assertTrue(self.meet(self.bm, COMMUNITY))
+    def test_restore_keeps_revocations_after_resurrection(self):
+        (bob,) = self.account("bob", "b0")
+        self.w.admit(COMMUNITY, "alice", "bob")
+        self.assertTrue(self.meet(bob, COMMUNITY))
+        self.w.delete_device(bob)
+        self.client.sync()
         saved = self.client.export_state()
+        self.w.add_device(bob)
         other = self.CLIENT(self.w, self.alice)
         other.import_state(saved)
-        self.assertFalse(other.accepted(self.bm, PRIVATE))
-        self.assertTrue(other.accepted(self.bob, PRIVATE))
-
-    def test_pinned_account_ignores_witnesses(self):
-        fresh = self.CLIENT(self.w, self.alice)
-        fresh.pair(self.bob, self.charlie)  # both pinned account-wide
-        self.assertTrue(fresh.accepted(self.bob, COMMUNITY))
-        self.assertFalse(fresh.accepted(self.bm, COMMUNITY))
-
-    def test_first_contact_in_witnessless_space_stays_scoped(self):
-        third = "book-club"
-        (gus,) = self.account("gus", "g0")
-        self.w.admit(third, "alice", "gus")
-        self.w.grant("g-dave-gus", COMMUNITY, self.dave, gus)
-        self.w.admit(COMMUNITY, "gus")
-        self.assertTrue(self.meet(gus, third))  # no anchors in book-club
-        self.assertNotIn(gus, self.client.account_wide_set())
-
-    def test_limitation_witnessless_space_falls_back_to_first_contact(self):
-        # In a space with no witnesses for Hal, a malicious PDS that steals
-        # the root wins there: the per-space fallback is plain TOFU.
-        third = "book-club"
-        hal = self.w.add_device(B("hal", "h0"))
-        hm = self.w.add_device(B("hal", "hm"))
-        self.w.approve(hm, hal)
-        self.w.admit(COMMUNITY, "hal")
-        self.w.admit(third, "alice", "hal")
-        self.w.grant("g-dave-hal", COMMUNITY, self.dave, hal)
-        self.assertFalse(self.meet(hm, COMMUNITY))  # anchors exclude HM here
-        self.assertTrue(self.meet(hm, third))        # but not in book-club
+        self.assertFalse(other.accepted(bob, COMMUNITY))
 
 
 class RevocationAndReset(Base):
@@ -308,18 +211,6 @@ class RevocationAndReset(Base):
         self.assertFalse(self.meet(bob, COMMUNITY))
         self.assertIn("resurrected bob/b0", self.client.state.alarms)
 
-    def test_restore_keeps_pins_and_revocations(self):
-        (bob,) = self.account("bob", "b0")
-        self.w.admit(COMMUNITY, "alice", "bob")
-        self.assertTrue(self.meet(bob, COMMUNITY))
-        self.w.delete_device(bob)
-        self.client.sync()
-        saved = self.client.export_state()
-        self.w.add_device(bob)
-        other = self.CLIENT(self.w, self.alice)
-        other.import_state(saved)
-        self.assertFalse(other.accepted(bob, COMMUNITY))
-
     def test_approval_survives_approver_revocation(self):
         a, b = self.account("bob", "a", "b")
         self.w.admit(COMMUNITY, "alice", "bob")
@@ -339,61 +230,6 @@ class RevocationAndReset(Base):
         self.w.approve(a, c)
         self.assertTrue(self.meet(c, COMMUNITY))
 
-
-class NewcomerResets(Base):
-    """A client meeting an account for the first time after its reset."""
-
-    def setUp(self):
-        super().setUp()
-        (self.bob,) = self.account("bob", "b0")
-        self.w.admit(COMMUNITY, "alice", "bob", "carol")
-        self.assertTrue(self.meet(self.bob, COMMUNITY))
-
-    def takeover(self):
-        self.w.delete_device(self.carol)
-        return self.w.add_device(B("carol", "m"))
-
-    def test_recipient_anchor_triggers_hold(self):
-        (self.carol,) = self.account("carol", "c0")
-        self.w.grant("g-bob-carol", COMMUNITY, self.bob, self.carol)
-        m = self.takeover()
-        self.assertFalse(self.meet(m, COMMUNITY))
-        self.assertTrue(self.client.hold_pending("carol", COMMUNITY))
-
-    def test_creator_issuer_anchor_via_provenance(self):
-        (self.carol,) = self.account("carol", "c0")
-        bob2 = self.w.add_device(B("bob", "b1"))
-        self.w.approve(self.bob, bob2)
-        # Carol created the space: her grant to Bob, Bob to his own device.
-        self.w.grant("g-carol-bob", COMMUNITY, self.carol, self.bob)
-        self.w.grant("g-bob-bob2", COMMUNITY, self.bob, bob2, provenance="g-carol-bob")
-        self.w.grant("g-bob2-x", COMMUNITY, bob2, B("zed", "z0"), provenance="g-bob-bob2")
-        m = self.takeover()
-        self.assertFalse(self.meet(m, COMMUNITY))
-        self.assertTrue(self.client.hold_pending("carol", COMMUNITY))
-
-    def test_retiring_with_descendants_needs_no_hold(self):
-        self.carol, c1 = self.account("carol", "c0", "c1")
-        self.w.grant("g-bob-carol", COMMUNITY, self.bob, self.carol)
-        self.w.delete_device(self.carol)
-        self.assertTrue(self.meet(c1, COMMUNITY))
-        self.assertFalse(self.client.hold_pending("carol", COMMUNITY))
-
-    def test_limitation_retiring_only_anchored_branch_holds(self):
-        phone, tablet = self.account("carol", "phone", "tablet")
-        self.carol = phone
-        self.w.grant("g-bob-tablet", COMMUNITY, self.bob, tablet)
-        self.w.delete_device(tablet)
-        self.assertFalse(self.meet(phone, COMMUNITY))
-        self.assertTrue(self.client.hold_pending("carol", COMMUNITY))
-
-    def test_mitigation_survivor_obtains_grant_before_retirement(self):
-        phone, tablet = self.account("carol", "phone", "tablet")
-        self.carol = phone
-        self.w.grant("g-bob-tablet", COMMUNITY, self.bob, tablet)
-        self.w.grant("g-bob-phone", COMMUNITY, self.bob, phone)
-        self.w.delete_device(tablet)
-        self.assertTrue(self.meet(phone, COMMUNITY))
 
 
 if __name__ == "__main__":

@@ -28,7 +28,6 @@ Alice adds Bob.
 
 ![Adding a member, steps 1–3: Alice invites Bob with one tap, Carol sees the "Alice added Bob" timeline line, and Bob taps Join on the invited space](images/relaxed-tofu-adding-a-member-1.webp)
 
-![Adding a member, steps 4–7: Bob's "Getting access…" state, the nudge notification if it stalls, Bob's unlocked space with full history, and a later "Bob's devices changed" timeline line](images/relaxed-tofu-adding-a-member-2.webp)
 
 ### Adding a device
 
@@ -42,7 +41,7 @@ Alice adds Bob.
 ### Losing every device
 
 1. **"Restore from backup"** or **"Start over"** ([total device loss](../device-enrollment.md#total-device-loss)).
-2. **Starting over:** the app asks the user to sign in at their provider and deletes the old devices, then shows "Your spaces will unlock on Friday." Members see a quiet line: "Alice reset her devices. Her new device can read this space from Friday."
+2. **Starting over:** the app asks the user to sign in at their provider and deletes the old devices, then shows "Your spaces will start unlocking in at least 3 days," with each space's status as members' apps catch up. Members see a quiet line: "Alice reset her devices. This device will share with her new device from Friday."
 3. **The hold is not softened.** Relaxed apps can't skip or shorten the [72-hour wait](../device-enrollment.md#re-enrollment), and an old device that sees itself removed still alarms.
 
 ### Creating a space from an existing space
@@ -72,7 +71,6 @@ Surfaces the specification requires to exist but allows to be buried:
 - **Member access**, deep in space settings: the devices each member has been granted keys to, as observed by this user's devices, with who granted them and when, and devices declined as unlinked ([auditing](../audit.md#direct-sync)).
 - **Lost local state** is reported by the app itself when it detects it, not from settings: for example, after a reinstall without restore, "This device couldn't restore its saved security state and trusted everyone again" ([recovery](../device-enrollment.md#recovery)).
 
-![Settings: Devices & security with the device list, Link a new device, and I lost a device; and a member-access screen listing the devices Bob has been granted keys to, including an accepted key change](images/relaxed-tofu-settings.png)
 
 ## What stays and what goes
 

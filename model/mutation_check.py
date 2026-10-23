@@ -1,35 +1,56 @@
-"""Mutation check: break one rule at a time and confirm a test fails.
+"""Mutation check: break one rule of SpecClient at a time and confirm a
+test in test_peep_trust.py fails.
 
 Run: python3 -I model/mutation_check.py
 MISSED means no test notices that rule being broken.
 """
-import os, shutil, subprocess, sys, tempfile
-src = os.path.dirname(os.path.abspath(__file__))
-muts = {
- "undirected reach": ("if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)",
-                      "if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)\n                if ap.target == n and ap.signer not in seen:\n                    seen.add(ap.signer)\n                    frontier.append(ap.signer)"),
- "witness need not be accepted": ("if (g.space == space and g.issuer in acc and", "if (g.space == space and"),
- "witness grant from any space": ("if (g.space == space and g.issuer in acc and", "if (g.issuer in acc and"),
- "witness eligibility ignored": ("\n                    and self.world.eligible(g.issuer.account, space)):", "):"),
- "dead roots counted": ("live_roots = [r for r in roots if self._reach(x, [r]) & present]", "live_roots = roots"),
- "witnesses for pinned accounts": ("if self._pinned_account_wide(x):\n                    continue", "pass"),
- "no hold": ("if self.world.now - start >= REENROLL_HOLD:", "if True:"),
- "revoked stays usable": ("return b not in self.state.revoked and self.world.present(b)", "return self.world.present(b)"),
- "scoped pins become account-wide": ("self._pin(cand, space if self.anchors_anywhere(x) else None)", "self._pin(cand, None)"),
- "no provenance anchors": ("found.add(cited.issuer)\n                    break", "break"),
- "spec: no hold on reset": ("start = st.holds.setdefault((x, None), self.world.now)\n            if self.world.now - start >= REENROLL_HOLD:",
-                            "start = st.holds.setdefault((x, None), self.world.now)\n            if True:"),
- "spec: anchors re-pin a previously pinned account": ("if anchors and reach and not any(b.account == x for b in st.history_all):", "if anchors and reach:"),
- "spec: anchors ignored": ("        anchors = self.collect_anchors(x)\n        reach = {b for b in self._reach(x, anchors) if self.usable(b)}\n        if anchors and reach",
-                           "        anchors = set()\n        reach = set()\n        if anchors and reach"),
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+SRC = os.path.dirname(os.path.abspath(__file__))
+SPEC = "class SpecClient:"
+
+MUTATIONS = {
+    "undirected reach": (
+        "                if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)\n        return seen\n\n    def single_root_set",
+        "                if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)\n                if ap.target == n and ap.signer not in seen:\n                    seen.add(ap.signer)\n                    frontier.append(ap.signer)\n        return seen\n\n    def single_root_set"),
+    "dead roots counted": (
+        "live_roots = [r for r in nodes if r not in incoming and self._reach(x, [r]) & present]",
+        "live_roots = [r for r in nodes if r not in incoming]"),
+    "first use for known accounts": ("        if not self._knew(x):\n", "        if True:\n"),
+    "approvals need an unrevoked signer": (
+        "if (ap.signer in st.accepted and ap.target not in st.accepted",
+        "if (ap.signer in self.account_wide_set() and ap.target not in st.accepted"),
+    "no hold": ("if self.world.now - held[1] >= REENROLL_HOLD:", "if True:"),
+    "hold not bound to candidate": ("if held is None or held[0] != key:", "if held is None:"),
+    "replaced candidates not revoked": ("            st.candidates_seen |= key\n", ""),
+    "imports merge any candidate": ("elif mine[0] == cand:", "else:"),
+    "revoked stays usable": (
+        "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
+        "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),
 }
-base = open(os.path.join(src, "peep_trust.py")).read()
-for name, (old, new) in muts.items():
-    assert old in base, name
-    d = tempfile.mkdtemp()
-    shutil.copy(os.path.join(src, "test_peep_trust.py"), d)
-    open(os.path.join(d, "peep_trust.py"), "w").write(base.replace(old, new, 1))
-    r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d], capture_output=True, text=True)
-    fails = [l.split(" (")[0].replace("FAIL: ", "").replace("ERROR: ", "") for l in r.stderr.splitlines() if l.startswith(("FAIL:", "ERROR:"))]
-    print(f"{'CAUGHT' if fails else 'MISSED'} {name}: {', '.join(fails) or '-'}")
-    shutil.rmtree(d)
+
+
+def main():
+    base = open(os.path.join(SRC, "peep_trust.py")).read()
+    head, spec = base.split(SPEC, 1)
+    for name, (old, new) in MUTATIONS.items():
+        assert old in spec, name
+        d = tempfile.mkdtemp()
+        shutil.copy(os.path.join(SRC, "test_peep_trust.py"), d)
+        with open(os.path.join(d, "peep_trust.py"), "w") as f:
+            f.write(head + SPEC + spec.replace(old, new, 1))
+        r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d],
+                           capture_output=True, text=True)
+        fails = [ln.split(" (")[0].split(": ", 1)[1] for ln in r.stderr.splitlines()
+                 if ln.startswith(("FAIL:", "ERROR:"))]
+        print(f"{'CAUGHT' if fails else 'MISSED'} {name}: {', '.join(fails) or '-'}")
+        shutil.rmtree(d)
+
+
+if __name__ == "__main__":
+    main()

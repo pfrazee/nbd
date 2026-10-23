@@ -14,10 +14,10 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from peep_trust import (AccountWideAnchorClient, Binding,  # noqa: E402
-                        ScopedWitnessClient, TofuClient, WarnOnlyClient, World)
+                        ScopedWitnessClient, SpecClient, WarnOnlyClient, World)
 
-VARIANTS = [("TOFU only", TofuClient), ("Warnings only", WarnOnlyClient),
-            ("Account-wide anchors (spec)", AccountWideAnchorClient),
+VARIANTS = [("TOFU + approvals (spec)", SpecClient), ("Warnings only", WarnOnlyClient),
+            ("Account-wide anchors", AccountWideAnchorClient),
             ("Scoped witnesses", ScopedWitnessClient)]
 COMMUNITY, PRIVATE = "community", "private"
 
@@ -120,6 +120,18 @@ def reset_seen_by_pinned_client(cls):
     return s.outcome(None, m)
 
 
+def takeover_adds_device_for_existing_contact(cls):
+    """The viewer already pinned Bob; a takeover adds M, unlinked or with an
+    approval signed by M pointing at Bob's device."""
+    s = Scene(cls)
+    bob = s.dev("bob", "b0")
+    s.w.admit(COMMUNITY, "alice", "bob")
+    s.meet(bob)
+    m = s.dev("bob", "m")
+    s.w.approve(m, bob)
+    return s.outcome(bob, m)
+
+
 def colluding_accounts_same_pds(cls):
     """One malicious PDS hosts X and Y; YM grants garbage to XM. The viewer
     has not accepted YM; an accepted member granted to X's honest device."""
@@ -160,6 +172,25 @@ def colluding_witness_cross_space(cls):
 def colluding_witness_cross_space_no_private_witness(cls):
     """As above, but no member of the private space has granted to Bob."""
     return _cross_space(cls, private_witness=False)
+
+
+def single_pds_manufactures_witness(cls):
+    """One malicious PDS hosts Y and X. It substitutes Y's devices before the
+    viewer first meets Y, then uses Y's device to vouch for an attacker
+    device of X. The private space has an honest witness for X."""
+    s = Scene(cls)
+    eve = witness(s, "eve", spaces=(COMMUNITY, PRIVATE))
+    ym = s.dev("y", "ym")  # Y's only visible device: substituted
+    s.w.admit(COMMUNITY, "y")
+    s.meet(ym)  # genuine first contact with Y
+    xa = s.dev("x", "xa")
+    for sp in (COMMUNITY, PRIVATE):
+        s.w.admit(sp, "x")
+        s.w.grant(f"g-eve-xa-{sp}", sp, eve, xa)
+    xm = s.dev("x", "xm")
+    s.w.approve(xm, xa)
+    s.w.grant("g-ym-xm", COMMUNITY, ym, xm)
+    return s.outcome(xa, xm, PRIVATE)
 
 
 def witness_chain(cls):
@@ -213,20 +244,29 @@ SCENARIOS = [
     ("Reset at honest PDS, newcomer with recipient anchor", reset_seen_by_newcomer),
     ("Reset of a creator who only issued, newcomer", creator_reset_seen_by_newcomer),
     ("Reset, client already pinned the account", reset_seen_by_pinned_client),
+    ("Takeover adds a device, client already pinned the account", takeover_adds_device_for_existing_contact),
     ("Two accounts on one malicious PDS witness each other", colluding_accounts_same_pds),
     ("Colluding witness + malicious PDS, other space has a witness", colluding_witness_cross_space),
     ("Colluding witness + malicious PDS, other space has none", colluding_witness_cross_space_no_private_witness),
+    ("One malicious PDS manufactures a witness for another of its accounts", single_pds_manufactures_witness),
     ("Witness chain into a private space", witness_chain),
     ("Retire the only anchored branch (availability)", retire_only_anchored_branch),
     ("Forged witness naming a missing binding (availability)", forged_witness_missing_binding),
 ]
 
 
+FIRST_CONTACT = {
+    "takeover_adds_device_for_existing_contact": False,
+    "reset_seen_by_pinned_client": False,
+}
+
+
 def table():
-    head = "| Scenario | " + " | ".join(n for n, _ in VARIANTS) + " |"
-    rows = [head, "| --- |" + " --- |" * len(VARIANTS)]
+    head = "| Scenario | Viewer's first contact? | " + " | ".join(n for n, _ in VARIANTS) + " |"
+    rows = [head, "| --- | --- |" + " --- |" * len(VARIANTS)]
     for label, fn in SCENARIOS:
-        rows.append(f"| {label} | " + " | ".join(fn(cls) for _, cls in VARIANTS) + " |")
+        fc = "yes" if FIRST_CONTACT.get(fn.__name__, True) else "no"
+        rows.append(f"| {label} | {fc} | " + " | ".join(fn(cls) for _, cls in VARIANTS) + " |")
     return "\n".join(rows)
 
 

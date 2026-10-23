@@ -9,7 +9,6 @@ A manifest is `{ version: 1, space, blocks: CID[] }`, with `blocks` a set of exa
 - Both parties' exact bindings and the signed approvals on the paths used for issuance.
 - Configuration and both membership decisions.
 - For each party's account, the signed repo commit and proof path against which the issuer [proved](device-enrollment.md#repo-observations) that party's device record present. Readers verify these as historical commits; after signing-key rotation they may become unverifiable, which is an audit gap, not invalid evidence.
-- Key provenance: the grant through which the issuing device obtained the space key, unless that device generated it as the space's creator. Provenance lets readers whose clients accepted the citing binding learn [issuer anchors](device-enrollment.md#first-use-anchors); it reveals which grant the issuer used, which other members of the space can already read.
 
 The grant header's binding and host-state references MUST be in its manifest; the package includes the manifest itself. A manifest MUST NOT reference its enclosing grant.
 
@@ -54,7 +53,7 @@ Clients MUST report three separate assessments: cryptographic/binding/evidence v
 
 ## Direct sync
 
-Auditors MUST discover repos through authenticated host writer discovery, available membership information, and retained participant/issuer history, including known former participants while access permits. Auditors MUST resolve each account's current repo host and sync directly with Spaces credentials/DPoP. Auditors MUST use permissioned-repo integrity/commit rules, not public MST proofs; public device/revocation records use public-repo sync. See the [Spaces sync boundary](https://github.com/bluesky-social/proposals/tree/main/0016-permissioned-data#the-sync-boundary-writer-set).
+Auditors MUST discover repos through authenticated host writer discovery, available membership information, and retained participant/issuer history, including known former participants while access permits. Auditors MUST resolve each account's current repo host and sync directly with Spaces credentials bound to the requester's key with HTTP Message Signatures, as the [pinned Spaces revision](core.md#spaces-dependency) specifies. Auditors MUST use permissioned-repo integrity/commit rules, not public MST proofs; public device/revocation records use public-repo sync. See the [Spaces sync boundary](https://github.com/bluesky-social/proposals/tree/main/0016-permissioned-data#the-sync-boundary-writer-set).
 
 Auditors MUST atomically persist each authenticated repo checkpoint, retained record IDs/CIDs, audit cursor, pending evidence requests, and gaps with processed evidence. Notifications schedule catch-up; periodic discovery/sweeps recover missed notifications. Discontinuity, migration, or invalid checkpoints require reconciliation without erasing history or marking skipped intervals complete. Deleted immutable audit records are gaps, not revocations; only a deleted device record [revokes](device-enrollment.md#device-revocations) anything; deleting a disposable key request is not an audit gap. Renew credentials normally; failed renewal proves neither an empty repo nor a clean audit. Auditors MUST stop retrieval when denied and preserve permitted local copies.
 
