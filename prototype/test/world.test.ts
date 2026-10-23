@@ -41,3 +41,42 @@ describe("network lag", () => {
     expect(texts()).toContain("hello");
   });
 });
+
+describe("hold imports", () => {
+  it("an import never lends credit to a different candidate", () => {
+    const w = new World("imports-merge");
+    const { alice, bob, space } = club(w);
+    const laptop = w.install(alice.did, "laptop", { link: alice });
+    laptop.join(space); // installations track accounts they share a space with
+    w.settle();
+    w.setOnline(laptop, false);
+    w.removeDevice(bob);
+    const first = w.install(bob.did, "first"); // candidate seen by the phone only
+    w.advance(60);
+    w.backup(alice); // carries 60h of credit for {first}
+    w.removeDevice(first);
+    w.setOnline(laptop, true);
+    w.install(bob.did, "second"); // the laptop's candidate is {second}
+    expect(laptop.trust.hold(bob.did)).toBeTruthy();
+    laptop.importState(w.backups[0].state);
+    w.settle();
+    expect(laptop.holdRemaining(bob.did)).toBeCloseTo(72, 0); // its own candidate, no borrowed credit
+  });
+
+  it("importing a live binding ends a hold", () => {
+    const w = new World("imports-live");
+    const { alice, bob, space } = club(w);
+    const laptop = w.install(alice.did, "laptop", { link: alice });
+    laptop.join(space); // installations track accounts they share a space with
+    w.settle();
+    w.setOnline(laptop, false);
+    const tablet = w.install(bob.did, "tablet", { link: bob });
+    w.removeDevice(bob); // the phone saw the link; the laptop did not
+    w.setOnline(laptop, true);
+    expect(laptop.trust.hold(bob.did)).toBeTruthy();
+    expect(alice.trust.isAccepted(tablet.binding)).toBe(true);
+    laptop.importState(alice.exportState());
+    expect(laptop.trust.isAccepted(tablet.binding)).toBe(true);
+    expect(laptop.trust.hold(bob.did)).toBeFalsy();
+  });
+});

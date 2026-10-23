@@ -9,7 +9,7 @@ npm install
 npm test
 ```
 
-`npm test` runs the crypto vectors, the ten scenarios, random walks in two modes, and a check that the trace fixtures still regenerate. Longer walks: `PEEP_WALKS=300 PEEP_STEPS=40 npx vitest run test/fuzz.test.ts`.
+`npm test` runs the crypto vectors, the ten scenarios, random walks in two modes, the disclosure-check tests, and a check that the trace fixtures still regenerate. Longer walks: `PEEP_WALKS=300 PEEP_STEPS=40 npx vitest run test/fuzz.test.ts`. `node test/mutate.mjs --all` breaks one trust rule at a time and reports whether any test notices; every mutation should be caught.
 
 `npm run dev` serves the UI at <http://localhost:5199>. Pick a scenario and press **Start**, then **Next step**; the narration says what to notice and checks it. Every control keeps working after a scenario ends, and the URL (`?scenario=swap-missed&step=6`) reproduces the exact state. `npm run build` produces a static site in `dist/`.
 
@@ -19,7 +19,7 @@ The **Trust** tab is the heart of it: rows are installations, columns are every 
 
 - `src/protocol/`: the client, free of UI code. `crypto.ts` composes the `peep-hpke-v1` HPKE profile from noble primitives, checked against the RFC 9180 test vector for that suite; `trust.ts` ports `SpecClient` (first use, approvals with the live-binding rule, revocation, holds); `grants.ts` implements G1–G5 and A1–A7; `installation.ts` runs the sync loop.
 - `src/world/`: the emulated PDS (signed, timestamped commits, create-only app sessions, one-off delete authorizations), Spaces host (membership, configuration, short-lived credentials), `adversary.ts` (a malicious PDS withholding commits from, or signing forged snapshots for, chosen installations), and `World`, which adds the clock, per-installation network lag, backups, and user and attacker actions.
-- `src/sim/`: narrated scenarios with expectations; an invariant monitor ported from `model/test_walks.py`, judged on each installation's own observations; and `fuzz.ts`, random walks with shrinking over user, attacker, network, and malicious-PDS actions.
+- `src/sim/`: narrated scenarios with expectations; an invariant monitor ported from `model/test_walks.py` (the single-root rule restated, closure under approvals, re-enrollment holding, justified acceptance and revocation, views never rolling back, hold credit), judged on each installation's own observations; `disclosure.ts`, a goal-level check that judges every grant to an attacker-controlled device, and every grant to a removed device, against the world's ground truth rather than the clients' reasoning; and `fuzz.ts`, random walks with shrinking over user, attacker (takeover, devices added with the password, copied keys, recreated records), network (lag, offline), clock (backward moves), and malicious-PDS (substitution, hidden reset, forks, rollback) actions.
 - `traces/`: shared-view walks recorded as public-repo operations plus the viewer's decisions after each step. `model/test_traces.py` replays them through `SpecClient`, so the prototype and the model must agree exactly. Regenerate with `PEEP_WRITE_TRACES=1 npx vitest run test/traces.test.ts`.
 - `src/ui/`: a store over one simulation (`sim.ts`), node cards that each render one installation's own state with the [TOFU flow](../ux-flows/tofu.md) copy, and the inspector (trust matrix, key holders, repos, log).
 

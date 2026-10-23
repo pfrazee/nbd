@@ -21,7 +21,19 @@ export type TraceOp =
   | { op: "add"; b: TraceBinding }
   | { op: "approve"; s: TraceBinding; t: TraceBinding }
   | { op: "delete"; b: TraceBinding }
-  | { op: "wait"; h: number };
+  | { op: "wait"; h: number }
+  | { op: "skew"; who: string; h: number };
+
+/** Ground truth for the disclosure check: who really controls each device. */
+export type Provenance = {
+  attacker: Set<string>; // device IDs an attacker or malicious PDS controls
+  stolenAt: Map<string, number>; // device ID -> when its keys were copied
+  publishedAt: Map<string, number>; // device ID -> when its record first became visible
+  publishedSeq: Map<string, number>; // the same, as a position in the event sequence
+  /** `standing`: when signed, the account still had a device record the
+   * attacker does not control, so it was not a full reset. */
+  approvals: { signer: string; target: string; at: number; compromised: boolean; standing: boolean }[];
+};
 
 const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
 export type StolenKeys = { sign: KeyPair; enc: KeyPair; deviceId: string; binding: Binding };
@@ -40,6 +52,18 @@ export class World implements Network {
   readonly adversary = new Adversary((did) => this.pdsOf.get(did));
   readonly stolen: StolenKeys[] = [];
   readonly backups: { name: string; from: string; at: number; state: InstallationState }[] = [];
+  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [] };
+  /** Orders events that happen at the same world time. */
+  private seq = 0;
+
+  tick(): number {
+    return ++this.seq;
+  }
+
+  private published(deviceId: string): void {
+    this.provenance.publishedAt.set(deviceId, this.t);
+    this.provenance.publishedSeq.set(deviceId, this.tick());
+  }
   /** When set, public-repo operations are appended here for replay. */
   trace: TraceOp[] | null = null;
   private counter = 0;
@@ -132,6 +156,9 @@ export class World implements Network {
         throw new Error(`${opts.link.id} could not publish the approval`);
       }
       this.trace?.push({ op: "approve", s: tb(opts.link.binding), t: tb(inst.binding) }, { op: "add", b: tb(inst.binding) });
+      const linker = opts.link.binding.device.deviceId;
+      this.provenance.approvals.push({ signer: linker, target: inst.binding.device.deviceId, at: this.t, compromised: this.compromised(linker), standing: this.standing(did) });
+      if (this.provenance.attacker.has(linker)) this.provenance.attacker.add(inst.binding.device.deviceId);
       inst.pairFrom(opts.link);
       this.note(`${opts.link.id} linked ${id}`);
     } else {
@@ -139,6 +166,7 @@ export class World implements Network {
       this.trace?.push({ op: "add", b: tb(inst.binding) });
       this.note(`${id} installed`);
     }
+    this.published(inst.binding.device.deviceId);
     this.settle();
     return inst;
   }
@@ -171,8 +199,27 @@ export class World implements Network {
     inst.sessionId = s.id;
     this.installations.set(id, inst);
     inst.publishOwnRecord();
+    this.provenance.attacker.add(inst.binding.device.deviceId);
+    this.published(inst.binding.device.deviceId);
     this.trace?.push({ op: "add", b: tb(inst.binding) });
     this.note(`attacker took over ${did}: deleted ${devices.length} device(s), enrolled ${id}`);
+    this.settle();
+    return inst;
+  }
+
+  /** Someone with the password publishes their own device beside the
+   * account's others. Contacts see it unlinked unless something approves it. */
+  attackerDevice(did: Did, deviceName: string): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const id = `${did.replace("did:plc:", "")}/${deviceName}`;
+    const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
+    inst.sessionId = pds.login(did, "password", "attacker").id;
+    this.installations.set(id, inst);
+    inst.publishOwnRecord();
+    this.provenance.attacker.add(inst.binding.device.deviceId);
+    this.published(inst.binding.device.deviceId);
+    this.trace?.push({ op: "add", b: tb(inst.binding) });
+    this.note(`attacker added ${id} with the password`);
     this.settle();
     return inst;
   }
@@ -181,8 +228,52 @@ export class World implements Network {
   stealKeys(inst: Installation): StolenKeys {
     const k = { sign: inst.signKey, enc: inst.encKey, deviceId: inst.binding.device.deviceId, binding: inst.binding };
     this.stolen.push(k);
+    if (!this.provenance.stolenAt.has(k.deviceId)) this.provenance.stolenAt.set(k.deviceId, this.t);
     this.note(`keys of ${inst.id} copied`);
     return k;
+  }
+
+  /** The account has a device record the attacker does not control. */
+  standing(did: Did): boolean {
+    for (const k of this.pdsOf.get(did)!.repo(did).records.keys())
+      if (k.startsWith(COL.device + "/") && !this.provenance.attacker.has(k.slice(COL.device.length + 1))) return true;
+    return false;
+  }
+
+  /** Controlled by an attacker, or its keys copied. */
+  compromised(deviceId: string): boolean {
+    return this.provenance.attacker.has(deviceId) || this.provenance.stolenAt.has(deviceId);
+  }
+
+  /** Recreate a deleted device record: through the device's own session if it
+   * survived removal, otherwise through someone with the password. */
+  recreateRecord(inst: Installation): void {
+    const pds = this.pdsOf.get(inst.did)!;
+    const own = inst.sessionId ? pds.sessions.get(inst.sessionId) : undefined;
+    const session = own?.alive && own.kind !== "delete-auth" ? own.id : pds.login(inst.did, "password", "recreate").id;
+    pds.write(session, [inst.deviceRecord()]);
+    this.trace?.push({ op: "add", b: tb(inst.binding) });
+    this.note(`${inst.id}'s record recreated`);
+    this.settle();
+  }
+
+  /** Roll `victim` back: serve it `did`'s repo as of `back` commits ago. */
+  rollback(did: Did, victim: Installation, back: number): void {
+    const pds = this.pdsOf.get(did)!;
+    const rev = Math.max(1, pds.repo(did).rev - back);
+    this.adversary.add({ kind: "withhold", did, observers: [victim.id], rev, describe: `${pds.name} serves ${victim.id} ${did}'s repo at revision ${rev}` });
+    this.note(`${pds.name} rolls ${victim.id} back to ${did}@${rev}`);
+    this.settle();
+  }
+
+  /** Move an installation's clock. Forward jumps while it is not running
+   * shorten its holds, which PEEP's goals exclude; scenarios and the walker
+   * move clocks backward or set distinct clock domains. */
+  skew(inst: Installation, hours: number): void {
+    inst.clockOffset += hours;
+    this.trace?.push({ op: "skew", who: inst.binding.device.deviceId, h: hours });
+    this.note(`${inst.id}'s clock moved ${hours}h`);
+    this.settle();
   }
 
   // ---- malicious PDS -------------------------------------------------------------
@@ -196,6 +287,8 @@ export class World implements Network {
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
     inst.sessionId = pds.login(did, "password", `${pds.name} operator`).id;
     this.installations.set(id, inst);
+    this.provenance.attacker.add(inst.binding.device.deviceId);
+    this.published(inst.binding.device.deviceId);
     return inst;
   }
 
@@ -291,6 +384,7 @@ export class World implements Network {
     const value: Cbor = { $type: COL.approval, value: asCbor(approval) };
     this.write(sessionId, [{ action: "create", collection: COL.approval, rkey: ref(asCbor(approval)), value }]);
     this.trace?.push({ op: "approve", s: tb(signer.binding), t: tb(target.binding) });
+    this.provenance.approvals.push({ signer: signer.deviceId, target: target.binding.device.deviceId, at: this.t, compromised: true, standing: this.standing(target.did) });
     this.note(`approval signed with ${signer.binding.account}'s old key ${signer.deviceId.slice(0, 6)} for ${target.id}`);
     this.settle();
   }

@@ -59,10 +59,10 @@ export class Walk {
     const acct = pick(ACCOUNTS);
     const kinds: [string, number][] = [
       ["link", 4], ["install", 1], ["remove", 3], ["removeQuiet", 1], ["wait", 3], ["join", 2], ["post", 2],
-      ["takeover", 1], ["steal", 1], ["approve", 2],
+      ["takeover", 1], ["steal", 1], ["approve", 2], ["recreate", 2], ["attackerAdd", 1], ["skew", 1],
     ];
     if (!this.shared)
-      kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1]);
+      kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1]);
     const total = kinds.reduce((s, [, n]) => s + n, 0);
     let r = rng.int(total);
     let kind = kinds[0][0];
@@ -92,6 +92,19 @@ export class Walk {
         const targets = insts.filter((i) => i.did === w.stolen[k].binding.account && i.binding.device.deviceId !== w.stolen[k].deviceId);
         return targets.length ? ["approve", k, pick(targets).id] : ["wait", 1];
       }
+      case "recreate": {
+        // A removed device, or someone with the password, republishes its record.
+        const gone = insts.filter((i) => !w.pdsOf.get(i.did)!.repo(i.did).records.has(`com.example.peep.device/${i.binding.device.deviceId}`));
+        return gone.length ? ["recreate", pick(gone).id] : ["wait", 1];
+      }
+      case "attackerAdd":
+        return ["attackerAdd", acct, `x${this.name()}`];
+      case "skew":
+        // Clocks only move backward: a forward jump while not running
+        // shortens holds, which the goals exclude.
+        return ["skew", pick(insts).id, -pick([1, 24, 72])];
+      case "rollback":
+        return ["rollback", acct, pick(insts).id, 1 + rng.int(3)];
       case "online": {
         const i = pick(insts);
         return ["online", i.id, !i.online];
@@ -136,6 +149,10 @@ export class Walk {
     else if (kind === "takeover") w.takeover(did(String(a[1])), String(a[2]));
     else if (kind === "steal") { const i = inst(a[1]); if (i) w.stealKeys(i); }
     else if (kind === "approve") { const k = w.stolen[Number(a[1])]; const t = inst(a[2]); if (k && t?.sessionId) { try { w.approveWith(k, t, t.sessionId); } catch { /* session ended */ } } }
+    else if (kind === "recreate") { const i = inst(a[1]); if (i) w.recreateRecord(i); }
+    else if (kind === "attackerAdd") w.attackerDevice(did(String(a[1])), String(a[2]));
+    else if (kind === "skew") { const i = inst(a[1]); if (i) w.skew(i, Number(a[2])); }
+    else if (kind === "rollback") { const v = inst(a[2]); if (v) w.rollback(did(String(a[1])), v, Number(a[3])); }
     else if (kind === "online") { const i = inst(a[1]); if (i) w.setOnline(i, Boolean(a[2])); }
     else if (kind === "lag") { const i = inst(a[1]); if (i) w.setLag(i, Number(a[2])); }
     else if (kind === "sub") { const v = inst(a[2]); if (v) w.substituteDevices(did(String(a[1])), v, String(a[3])); }

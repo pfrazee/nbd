@@ -4,15 +4,17 @@
 // show them.
 
 import type { Installation } from "../protocol/installation";
-import { REENROLL_HOLD } from "../protocol/trust";
+import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
 import { type Binding, bindingId, label } from "../protocol/types";
 import type { World } from "../world/world";
+import { DisclosureCheck } from "./disclosure";
 
 const EPS = 1e-9;
 
 type Snap = {
   accepted: Set<string>;
   revoked: Set<string>;
+  revs: Map<string, number>;
   holds: Map<string, { key: string; credited: number }>;
   imports: number;
 };
@@ -22,6 +24,7 @@ function snap(i: Installation): Snap {
   return {
     accepted: new Set(st.accepted.keys()),
     revoked: new Set(st.revoked.keys()),
+    revs: new Map([...st.views].map(([d, v]) => [d, v.rev])),
     holds: new Map([...st.holds].map(([d, h]) => [d, { key: `${d}:${h.candidate.join(",")}`, credited: h.credited }])),
     imports: i.imports,
   };
@@ -32,10 +35,14 @@ export class InvariantMonitor {
   /** World time each exact candidate was first seen by any installation. */
   private firstSeen = new Map<string, number>();
   readonly violations: { at: number; text: string }[] = [];
+  private readonly disclosure: DisclosureCheck;
 
-  constructor(private readonly world: World) {}
+  constructor(private readonly world: World) {
+    this.disclosure = new DisclosureCheck(world);
+  }
 
   before(): void {
+    this.disclosure.begin();
     for (const i of this.world.installations.values()) this.prev.set(i.id, snap(i));
   }
 
@@ -48,6 +55,7 @@ export class InvariantMonitor {
       }
       for (const v of this.check(i)) out.push(`${i.id}: ${v}`);
     }
+    for (const v of this.disclosure.check()) out.push(`goal: ${v}`);
     for (const text of out) this.violations.push({ at: this.world.t, text });
     return out;
   }
@@ -91,10 +99,57 @@ export class InvariantMonitor {
     if (st.revoked.has(bindingId(i.binding)) && !st.alarms.some((a) => a.kind === "own-removed"))
       out.push("own binding revoked without takeover alarm");
 
+    // After a detected fork the account's history is suspect, and clients
+    // rightly refuse it rather than act on it.
+    const forked = new Set(st.alarms.filter((a) => a.kind === "fork").map((a) => a.subject));
+
+    if (before) {
+      // Rollback refusal: a verified view of a repo never moves backward.
+      for (const [d, v] of st.views)
+        if (v.rev < (before.revs.get(d) ?? 0)) out.push(`view of ${d} rolled back from ${before.revs.get(d)} to ${v.rev}`);
+      // Revocation is justified by a view at least as new as the binding's
+      // acceptance that shows its record absent.
+      if (i.imports === before.imports)
+        for (const [id, b] of st.revoked) {
+          if (before.revoked.has(id) || forked.has(b.account)) continue;
+          const v = st.views.get(b.account);
+          const p = v?.present.get(b.device.deviceId);
+          if (!v || v.rev < (st.accepted.get(id)?.rev ?? 0) || (p && bindingId(p) === id))
+            out.push(`revoked ${label(b)} without a view newer than its record showing it absent`);
+        }
+    }
     if (i.online) {
-      // After a detected fork the account's history is suspect, and clients
-      // rightly refuse it rather than revoke on it.
-      const forked = new Set(st.alarms.filter((a) => a.kind === "fork").map((a) => a.subject));
+      for (const [account, view] of st.views) {
+        if (account === i.did || forked.has(account)) continue;
+        const expect = singleRoot(view, st.revoked);
+        const want = expect ? expect.map(bindingId).sort() : null;
+        const live = i.trust.live(account).length > 0;
+        const knows = i.trust.knew(account);
+
+        // First use follows the single-root rule (restated independently).
+        const knewBefore = !!before && [...before.accepted].some((id) => st.accepted.get(id)?.binding.account === account);
+        if (before && !knewBefore && knows && i.imports === before.imports) {
+          const got = [...st.accepted].filter(([id, a]) => a.binding.account === account && !before.accepted.has(id) && !st.revoked.has(id))
+            .map(([id]) => id).sort();
+          if (!want) out.push(`first use of ${account} accepted ${got.length} binding(s); the rule declines`);
+          else if (got.join() !== want.join()) out.push(`first use of ${account} accepted ${got.length}, the rule accepts ${want.length}`);
+        }
+
+        // Closure: approvals by accepted signers are applied while the
+        // account has a live accepted binding.
+        if (live)
+          for (const ap of view.approvals)
+            if (st.accepted.has(bindingId(ap.signer)) && !st.accepted.has(bindingId(ap.target)))
+              out.push(`${label(ap.target)} approved by accepted ${label(ap.signer)} but not accepted`);
+
+        // Re-enrollment: a known account with no live binding whose present
+        // records satisfy the rule has exactly that candidate on hold.
+        if (knows && !live && want) {
+          const h = st.holds.get(account);
+          if (!h || h.candidate.join() !== want.join()) out.push(`re-enrollment of ${account} is not holding the rule's candidate`);
+        }
+      }
+
       for (const [id, a] of st.accepted) {
         if (forked.has(a.binding.account)) continue;
         const view = st.views.get(a.binding.account);
@@ -132,4 +187,29 @@ export class InvariantMonitor {
       if (!added) return seen;
     }
   }
+}
+
+/** The first-use rule, restated from model/test_walks.py: the present,
+ * unrevoked records a client accepts on first contact, or null. */
+function singleRoot(view: AccountView, revoked: Map<string, Binding>): Binding[] | null {
+  const present = [...view.present.values()].filter((b) => !revoked.has(bindingId(b)));
+  if (!present.length) return null;
+  const aps = view.approvals;
+  const incoming = new Set(aps.map((a) => bindingId(a.target)));
+  const roots = present.filter((b) => !incoming.has(bindingId(b)));
+  if (roots.length > 1) return null;
+  const presentIds = new Set(present.map(bindingId));
+  const starts = new Set(roots.length ? roots.map(bindingId)
+    : aps.flatMap((a) => [bindingId(a.signer), bindingId(a.target)]).filter((id) => !presentIds.has(id)));
+  if (!starts.size) return null;
+  const reached = new Set(starts);
+  for (let added = true; added; ) {
+    added = false;
+    for (const a of aps)
+      if (reached.has(bindingId(a.signer)) && !reached.has(bindingId(a.target))) {
+        reached.add(bindingId(a.target));
+        added = true;
+      }
+  }
+  return present.every((b) => reached.has(bindingId(b))) ? present : null;
 }

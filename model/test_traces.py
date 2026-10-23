@@ -2,7 +2,8 @@
 SpecClient and compare the viewer's decisions after every step.
 
 Each fixture in ../prototype/traces/ records public-repo operations (device
-records added and deleted, approvals, elapsed time) from a random walk in
+records added, deleted, and recreated, approvals, elapsed time, the viewer's
+clock moving back) from a random walk in
 the TypeScript prototype, and what the prototype's viewer installation then
 accepted and held. Trust depends only on those observations and time, so the
 two implementations must agree exactly. Regenerate fixtures with
@@ -28,7 +29,8 @@ def B(pair):
 def replay(trace):
     """Yield (step, expected, actual) for every step of a trace."""
     w = World()
-    client = SpecClient(w, B(trace["viewer"]))
+    viewer = B(trace["viewer"])
+    client = SpecClient(w, viewer)
     seen = []
     for n, step in enumerate(trace["steps"]):
         for op in step["ops"]:
@@ -43,6 +45,9 @@ def replay(trace):
                 w.delete_device(B(op["b"]))
             elif op["op"] == "wait":
                 w.now += op["h"]
+            elif op["op"] == "skew":
+                if op["who"] == viewer.device:  # only the viewer's clock matters here
+                    client.clock_offset += op["h"]
             else:
                 raise ValueError(op)
         accepted = sorted(repr(b) for b in seen if client.accepted(b))
