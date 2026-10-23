@@ -38,7 +38,9 @@ export interface Network {
   host: HostApi;
 }
 
-export type Message = { author: Did; rkey: string; text: string; device: string } | { author: Did; rkey: string; locked: true };
+export type Message =
+  | { author: Did; rkey: string; text: string; device: string; at: number }
+  | { author: Did; rkey: string; locked: true; at: number };
 
 type SpaceLocal = {
   uri: string;
@@ -135,6 +137,8 @@ export class Installation {
     this.trust.importFrom(cloneTrust(approver.trust.state));
     this.trust.state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own" });
     this.trust.state.approvedByMe.add(bindingId(this.binding));
+    // Own devices known at pairing are not news to this user.
+    for (const [id, a] of this.trust.state.accepted) if (a.binding.account === this.did) this.trust.state.noticed.add(`added:${id}`);
   }
 
   exportState(): InstallationState {
@@ -196,7 +200,8 @@ export class Installation {
   }
 
   private publishMessage(sp: SpaceLocal, rkey: string, text: string): void {
-    const content = { $type: "app.example.message#content", text, device: this.name };
+    // Send time in whole seconds of world time, inside the encrypted content.
+    const content = { $type: "app.example.message#content", text, device: this.name, at: Math.round(this.net.now() * 3600) };
     const envelope = encryptRecord({
       key: sp.key!, keyId: sp.host.config!.keyId, space: sp.uri, author: this.did, collection: COL.message, rkey, content, rng: this.rng,
     });
@@ -211,18 +216,18 @@ export class Installation {
       for (const [rkey, v] of recordsIn(snap, COL.message)) {
         const env = (v as { envelope?: Envelope }).envelope;
         if (!sp.key || !env) {
-          out.push({ author: did, rkey, locked: true });
+          out.push({ author: did, rkey, locked: true, at: snap.commit.rev });
           continue;
         }
         try {
-          const c = decryptRecord({ key: sp.key, envelope: env, space: sp.uri, author: did, collection: COL.message, rkey }) as { text: string; device: string };
-          out.push({ author: did, rkey, text: c.text, device: c.device });
+          const c = decryptRecord({ key: sp.key, envelope: env, space: sp.uri, author: did, collection: COL.message, rkey }) as { text: string; device: string; at: number };
+          out.push({ author: did, rkey, text: c.text, device: c.device, at: c.at / 3600 });
         } catch {
-          out.push({ author: did, rkey, locked: true });
+          out.push({ author: did, rkey, locked: true, at: snap.commit.rev });
         }
       }
     }
-    return out;
+    return out.sort((a, b) => a.at - b.at);
   }
 
   // ---- sync ----------------------------------------------------------------
@@ -232,7 +237,6 @@ export class Installation {
   sync(): boolean {
     if (!this.online) return false;
     const before = this.fingerprint();
-    this.lastDecisions = [];
     for (const did of this.trackedAccounts()) this.observeAccount(did);
     for (const sp of this.spaces.values()) this.syncSpace(sp);
     return this.fingerprint() !== before;
@@ -304,7 +308,7 @@ export class Installation {
       for (const [, g, e] of grants) {
         if (g.recipient.account !== this.did || g.recipient.deviceId !== this.binding.device.deviceId) continue;
         const d = acceptGrant({ grant: g, evidence: e, space: sp.uri, own: this.binding, ownEnc: this.encKey, trust: this.trust, host: sp.host, mode: "current" });
-        this.lastDecisions.push(`accept ${label(g.issuer)}: ${d.result} ${d.reason}`);
+        this.decide(`accept from ${label(g.issuer)}: ${d.result} ${d.reason}`);
         if (d.result === "OK" && d.key) {
           sp.key = d.key;
           sp.keyFrom = label(g.issuer);
@@ -349,7 +353,7 @@ export class Installation {
       if (sameBinding(r, this.binding) || sp.issued.has(rid)) continue;
       if (grants.some(([, g]) => g.issuer.deviceId === this.binding.device.deviceId && g.recipient.deviceId === r.device.deviceId)) continue;
       const d = authorizeExchange(this.trust, sp.host, sp.uri, this.binding, r, "issuer", this.binding);
-      this.lastDecisions.push(`grant ${label(r)}: ${d.result} ${d.reason}`);
+      this.decide(`grant to ${label(r)}: ${d.result} ${d.reason}`);
       if (d.result !== "OK") continue;
       const views = [this.did, r.account].map((a) => this.trust.state.views.get(a)).filter(Boolean);
       const extra: Cbor[] = views.flatMap((v) => v!.approvals.map((a) => asCbor(a)))
@@ -368,6 +372,13 @@ export class Installation {
   }
 
   // ---- reporting -----------------------------------------------------------
+
+  /** Keep recent grant decisions, collapsing repeats from settle rounds. */
+  private decide(text: string): void {
+    if (this.lastDecisions.slice(-6).includes(text)) return;
+    this.lastDecisions.push(text);
+    if (this.lastDecisions.length > 20) this.lastDecisions.shift();
+  }
 
   holdRemaining(account: Did): number | null {
     const h = this.trust.hold(account);

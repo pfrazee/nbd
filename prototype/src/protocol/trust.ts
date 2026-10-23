@@ -336,5 +336,5 @@ export class Trust {
 export function fmtHour(h: number): string {
   const day = Math.floor(h / 24);
   const hour = Math.floor(h % 24);
-  return `day ${day + 1}, ${String(hour).padStart(2, "0")}:00`;
+  return `Day ${day + 1}, ${String(hour).padStart(2, "0")}:00`;
 }
