@@ -23,3 +23,5 @@ Read the specifications below:
 | [Auditing](audit.md) | Evidence, publication, retention, historical validation, and sync. |
 | [Rationale](rationale.md) | Design choices and comparison with MLS, Megolm, Signal sender keys, and Keybase team keys (informative). |
 | [Remaining work](TODOs.md) | Implementation, [validation cases](TODOs.md#validation-cases), and deferred extensions. |
+| [Executable model](model/README.md) | Local trust in Python, with adversarial cases, random walks, and mutation testing (informative). |
+| [Prototype](prototype/README.md) | Multi-device simulation with a playable UI; start with its [reviewer guide](prototype/README.md#for-reviewers) (informative). |

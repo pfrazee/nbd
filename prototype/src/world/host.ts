@@ -59,6 +59,14 @@ export class Host {
     return m;
   }
 
+  /** A malicious host replaces the creation-fixed key ID or commitment,
+   * which an honest host refuses (core.md#trusted-host-state). */
+  tamper(uri: string, change: { keyId?: string; commitment?: Uint8Array }): void {
+    const s = this.space(uri);
+    s.config = { ...s.config, ...change, revision: s.config.revision + 1 };
+    s.history.set(ref(asCbor(s.config)), s.config);
+  }
+
   // Authenticated reads.
   spaceName(uri: string): string {
     return this.space(uri).name;

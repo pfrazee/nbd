@@ -9,7 +9,7 @@
 import { Rng } from "../protocol/crypto";
 import type { Installation } from "../protocol/installation";
 import { commitment } from "../protocol/grants";
-import { type Binding, bindingId } from "../protocol/types";
+import { type Binding, COL, bindingId } from "../protocol/types";
 import type { TraceBinding, TraceOp } from "../world/world";
 import { World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
@@ -26,6 +26,7 @@ export class Walk {
   readonly world: World;
   readonly monitor: InvariantMonitor;
   readonly space: string;
+  readonly spaces: string[];
   readonly viewer: Installation;
   readonly trace: Trace | null;
   private names = 0;
@@ -38,6 +39,11 @@ export class Walk {
     this.space = phones[0].createSpace("Club");
     for (const p of phones.slice(1)) phones[0].invite(this.space, p.did);
     for (const p of phones) p.join(this.space);
+    // A second space with fewer members, so trust reuse across spaces is exercised.
+    const garden = phones[0].createSpace("Garden");
+    phones[0].invite(garden, phones[1].did);
+    phones[1].join(garden);
+    this.spaces = [this.space, garden];
     w.settle();
     this.monitor = new InvariantMonitor(w);
     this.trace = shared ? { seed, viewer: [this.viewer.did.slice(8), this.viewer.binding.device.deviceId], steps: [] } : null;
@@ -60,9 +66,11 @@ export class Walk {
     const kinds: [string, number][] = [
       ["link", 4], ["install", 1], ["remove", 3], ["removeQuiet", 1], ["wait", 3], ["join", 2], ["post", 2],
       ["takeover", 1], ["steal", 1], ["approve", 2], ["recreate", 2], ["attackerAdd", 1], ["skew", 1],
+      ["forget", 1], ["fault", 1], ["rotate", 1],
     ];
     if (!this.shared)
-      kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1]);
+      kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
+        ["tamper", 1], ["migrate", 1]);
     const total = kinds.reduce((s, [, n]) => s + n, 0);
     let r = rng.int(total);
     let kind = kinds[0][0];
@@ -77,11 +85,25 @@ export class Walk {
       case "removeQuiet":
         return insts.length ? [kind, pick(insts).id] : ["wait", 1];
       case "join": {
-        const out = insts.filter((i) => !i.spaces.has(this.space));
-        return out.length ? ["join", pick(out).id] : ["post", pick(insts).id];
+        const s = rng.int(this.spaces.length);
+        const out = insts.filter((i) => !i.spaces.has(this.spaces[s]));
+        return out.length ? ["join", pick(out).id, s] : ["post", pick(insts).id, s];
       }
       case "post":
-        return ["post", pick(insts).id];
+        return ["post", pick(insts).id, rng.int(this.spaces.length)];
+      case "forget":
+        return ["forget", pick(insts).id, rng.int(this.spaces.length)];
+      case "fault":
+        return ["fault", pick(insts).id, pick(["reject", "lost-ack"]), 1 + rng.int(3), pick(["com.example.peep.grant", "com.example.peep.evidence", "com.example.peep.keyRequest", ""])];
+      case "rotate":
+        return ["rotate", acct];
+      case "tamper":
+        return ["tamper", rng.int(this.spaces.length)];
+      case "migrate": {
+        const present = [...w.pdsOf.get(did(acct))!.repo(did(acct)).records.keys()].filter((k) => k.startsWith("com.example.peep.device/"));
+        const drop = rng.int(2) === 0 && present.length ? pick(present).split("/")[1] : "";
+        return ["migrate", acct, `pds.m${this.name()}.example`, drop];
+      }
       case "takeover":
         return ["takeover", acct, `attacker${this.name()}`];
       case "steal":
@@ -144,8 +166,13 @@ export class Walk {
     }
     else if (kind === "install") w.install(did(String(a[1])), String(a[2]));
     else if (kind === "remove" || kind === "removeQuiet") { const i = inst(a[1]); if (i) w.removeDevice(i, { endSession: kind === "remove" }); }
-    else if (kind === "join") { const i = inst(a[1]); if (i) { i.join(this.space); w.settle(); } }
-    else if (kind === "post") { const i = inst(a[1]); if (i?.spaces.has(this.space)) { i.post(this.space, `m${w.t}`); w.settle(); } }
+    else if (kind === "join") { const i = inst(a[1]); if (i) { i.join(this.spaces[Number(a[2] ?? 0)]); w.settle(); } }
+    else if (kind === "post") { const s = this.spaces[Number(a[2] ?? 0)]; const i = inst(a[1]); if (i?.spaces.has(s)) { i.post(s, `m${w.t}`); w.settle(); } }
+    else if (kind === "forget") { const i = inst(a[1]); if (i) { i.forgetKey(this.spaces[Number(a[2])]); w.settle(); } }
+    else if (kind === "fault") { const i = inst(a[1]); if (i) w.fault(i, a[2] as "reject" | "lost-ack", Number(a[3]), String(a[4]) || undefined); }
+    else if (kind === "rotate") w.rotateRepoKey(did(String(a[1])));
+    else if (kind === "tamper") { const s = this.spaces[Number(a[1])]; w.host.tamper(s, { commitment: new Uint8Array(32) }); w.settle(); }
+    else if (kind === "migrate") w.migrate(did(String(a[1])), String(a[2]), a[3] ? [String(a[3])] : []);
     else if (kind === "takeover") w.takeover(did(String(a[1])), String(a[2]));
     else if (kind === "steal") { const i = inst(a[1]); if (i) w.stealKeys(i); }
     else if (kind === "approve") { const k = w.stolen[Number(a[1])]; const t = inst(a[2]); if (k && t?.sessionId) { try { w.approveWith(k, t, t.sessionId); } catch { /* session ended */ } } }
@@ -174,19 +201,48 @@ export class Walk {
     }
     const v = this.monitor.after();
     if (v.length) return v[0];
-    for (const i of this.world.installations.values()) {
-      const sp = i.spaces.get(this.space);
-      const cfg = sp?.host.config;
-      if (sp?.key && cfg && bindingId(i.binding) && !eq(commitment(this.space, cfg.keyId, sp.key), cfg.commitment))
-        return `${i.id} holds a key that does not match the commitment`;
-    }
+    for (const i of this.world.installations.values())
+      for (const s of this.spaces) {
+        const sp = i.spaces.get(s);
+        const cfg = sp?.host.config;
+        if (sp?.key && cfg && bindingId(i.binding) && !eq(commitment(s, cfg.keyId, sp.key), cfg.commitment))
+          return `${i.id} holds a key that does not match the commitment`;
+      }
     if (this.shared) this.record();
     return null;
   }
 
+  private lastRecords = new Map<string, Map<string, unknown>>();
+
+  /** Public-repo operations since the last step, from what the repos now
+   * hold rather than from what actions intended, so faults cannot skew the
+   * trace. Deletions, then approvals, then additions; order within a step
+   * does not matter to the model, which only judges the end of each step. */
+  private repoOps(): TraceOp[] {
+    const del: TraceOp[] = [];
+    const appr: TraceOp[] = [];
+    const add: TraceOp[] = [];
+    for (const a of ACCOUNTS) {
+      const recs = new Map<string, unknown>(this.world.pdsOf.get(did(a))!.repo(did(a)).records);
+      const prev = this.lastRecords.get(a) ?? new Map<string, unknown>();
+      const tbOf = (v: unknown): TraceBinding => { const b = (v as { value: Binding }).value; return [a, b.device.deviceId]; };
+      for (const [k, v] of prev) if (k.startsWith(COL.device + "/") && !recs.has(k)) del.push({ op: "delete", b: tbOf(v) });
+      for (const [k, v] of recs) {
+        if (prev.has(k)) continue;
+        if (k.startsWith(COL.device + "/")) add.push({ op: "add", b: tbOf(v) });
+        else if (k.startsWith(COL.approval + "/")) {
+          const ap = (v as { value: { signer: Binding; target: Binding } }).value;
+          appr.push({ op: "approve", s: [a, ap.signer.device.deviceId], t: [a, ap.target.device.deviceId] });
+        }
+      }
+      this.lastRecords.set(a, recs);
+    }
+    return [...del, ...appr, ...add];
+  }
+
   private record(): void {
     const w = this.world;
-    const ops = w.trace!.splice(0);
+    const ops = [...this.repoOps(), ...w.trace!.splice(0).filter((o) => o.op === "wait" || o.op === "skew")];
     const accepted = w.allBindings().filter((b: Binding) => this.viewer.trust.isAccepted(b))
       .map((b): TraceBinding => [b.account.slice(8), b.device.deviceId]);
     const holds = ACCOUNTS.filter((a) => this.viewer.trust.hold(did(a)));

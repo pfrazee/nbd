@@ -80,3 +80,24 @@ describe("hold imports", () => {
     expect(laptop.trust.hold(bob.did)).toBeFalsy();
   });
 });
+
+describe("multiple spaces", () => {
+  it("reuses device trust across spaces, and a reset is held in all of them", () => {
+    const w = new World("spaces");
+    const { alice, bob, space } = club(w);
+    const pin = alice.trust.state.accepted.get([...alice.trust.state.accepted.keys()].find((id) => alice.trust.state.accepted.get(id)!.binding.account === bob.did)!)!;
+    const garden = alice.createSpace("Garden");
+    alice.invite(garden, bob.did);
+    bob.join(garden);
+    w.settle();
+    expect(bob.spaces.get(garden)!.key).toBeTruthy();
+    expect(pin.evidence).toBe("first use"); // no second first contact
+    const attacker = w.takeover(bob.did);
+    attacker.join(space);
+    attacker.join(garden);
+    w.advance(24);
+    expect(attacker.spaces.get(space)!.key).toBeFalsy();
+    expect(attacker.spaces.get(garden)!.key).toBeFalsy();
+    expect(alice.trust.hold(bob.did)).toBeTruthy();
+  });
+});

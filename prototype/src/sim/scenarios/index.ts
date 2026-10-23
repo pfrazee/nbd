@@ -1,6 +1,7 @@
 // Scenarios 1-5 from the prototype plan. Each step narrates what a reviewer
 // should notice and checks it.
 
+import { bytesToHex } from "../../protocol/crypto";
 import type { Installation } from "../../protocol/installation";
 import { bindingId } from "../../protocol/types";
 import type { World } from "../../world/world";
@@ -438,4 +439,111 @@ const s10: Scenario = {
   ],
 };
 
-export const scenarios: Scenario[] = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10];
+const s11: Scenario = {
+  id: "eager-pinning",
+  title: "11. Why every member must pin eagerly",
+  summary: "Carol and Dave join after Bob and never exchange keys with him. Dave's app pins every member on joining; Carol's pins only when it first exchanges keys. After a takeover of Bob, Dave's app holds, but Carol's meets Bob for the first time through the attacker's device and shares at once.",
+  steps: [
+    ...bookClub(),
+    {
+      title: "Carol and Dave join; Carol's app pins lazily",
+      narration: "Both get the key from Alice. Dave's app pins every member it can see, Bob included. Carol's app only pins accounts it exchanges keys with, so it has never looked at Bob's devices.",
+      run: (w, c) => {
+        c.did.carol = w.account("carol");
+        c.did.dave = w.account("dave");
+        c.inst.carolPhone = w.install(c.did.carol, "phone");
+        c.inst.carolPhone.pinning = "lazy";
+        c.inst.davePhone = w.install(c.did.dave, "phone");
+        c.inst.alicePhone.invite(c.space.club, c.did.carol);
+        c.inst.alicePhone.invite(c.space.club, c.did.dave);
+        c.inst.carolPhone.join(c.space.club);
+        c.inst.davePhone.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Dave pinned Bob's phone", c.inst.davePhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("Carol has not pinned Bob at all", !c.inst.carolPhone.trust.knew(c.did.bob)),
+        check("Both hold the key", hasKey(c.inst.carolPhone, c.space.club) && hasKey(c.inst.davePhone, c.space.club)),
+      ],
+    },
+    {
+      title: "An attacker takes over Bob's account",
+      narration: "Alice's and Dave's apps knew Bob, so they see a reset and hold. Carol's app first meets Bob now, when the attacker's device asks for the key, and sees an ordinary first contact. One lazy member is enough to disclose the space: that is why the specification requires pinning every member on joining.",
+      run: (w, c) => {
+        c.inst.attacker = w.takeover(c.did.bob);
+        c.inst.attacker.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Dave holds the attacker's device", !!c.inst.davePhone.trust.hold(c.did.bob)),
+        check("Alice holds it too", !!c.inst.alicePhone.trust.hold(c.did.bob)),
+        check("Carol accepted it on first contact", c.inst.carolPhone.trust.isAccepted(c.inst.attacker.binding)),
+        check("The attacker got the key, from Carol", c.inst.attacker.spaces.get(c.space.club)?.keyFrom?.startsWith("did:plc:carol") ?? false),
+      ],
+    },
+  ],
+};
+
+const s12: Scenario = {
+  id: "replace-space",
+  title: "12. Replacing a space after compromise",
+  summary: "A thief with Bob's old laptop key slips a device in beside his live phone, and it gets Book club's key. Bob removes it; Alice moves the group to a new space. The thief keeps the old key, but not the new one.",
+  steps: [
+    ...bookClub({ carol: true }),
+    {
+      title: "Bob retires a laptop whose keys were copied",
+      narration: "He removes it properly, but a thief kept its keys.",
+      run: (w, c) => {
+        c.inst.bobLaptop = w.install(c.did.bob, "laptop", { link: c.inst.bobPhone });
+        c.stolen.laptop = w.stealKeys(c.inst.bobLaptop);
+        w.removeDevice(c.inst.bobLaptop);
+      },
+    },
+    {
+      title: "With Bob's password, the thief adds a device approved by the old laptop key",
+      narration: "Bob's phone is still live, so this is the documented revoked-signer gap: Alice's and Carol's apps accept the device and share the key. Bob's phone notifies him of a device he didn't add.",
+      run: (w, c) => {
+        c.inst.thief = w.attackerDevice(c.did.bob, "thief");
+        c.inst.thief.join(c.space.club);
+        w.approveWith(c.stolen.laptop, c.inst.thief, c.inst.thief.sessionId!);
+      },
+      expect: (_w, c) => [
+        check("The thief's device holds Book club's key", hasKey(c.inst.thief, c.space.club)),
+        check("Bob's phone noticed the new device", notices(c.inst.bobPhone, "own-added").length > 0),
+      ],
+    },
+    {
+      title: "Bob removes it and changes his password",
+      narration: "Removal stops new grants, but the thief keeps Book club's key: PEEP never rotates a space's key. Because the thief had a path to ciphertext outside access control, the group decides to move.",
+      run: (w, c) => {
+        for (const s of w.pdsOf.get(c.did.bob)!.liveSessions(c.did.bob)) if (s.label !== c.inst.bobPhone.id) w.pdsOf.get(c.did.bob)!.endSession(s.id);
+        w.removeDevice(c.inst.thief);
+      },
+      expect: (_w, c) => [
+        check("Alice revoked the thief's device", !c.inst.alicePhone.trust.isAccepted(c.inst.thief.binding)),
+        check("The thief still holds Book club's key", hasKey(c.inst.thief, c.space.club)),
+      ],
+    },
+    {
+      title: "Alice creates Book club 2 and admits the members she confirmed",
+      narration: "The new space has a fresh key and a new URI. Membership is not copied automatically; Alice admits Bob and Carol after checking their devices. Device trust carries over, so their apps get the key as soon as they ask, and the revoked device can't.",
+      run: (w, c) => {
+        c.space.club2 = c.inst.alicePhone.createSpace("Book club 2");
+        for (const d of [c.did.bob, c.did.carol]) c.inst.alicePhone.invite(c.space.club2, d);
+        c.inst.bobPhone.join(c.space.club2);
+        c.inst.carolPhone.join(c.space.club2);
+        c.inst.thief.join(c.space.club2);
+        c.inst.alicePhone.post(c.space.club2, "Moved here. Middlemarch chapter 3 next week.");
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Bob and Carol hold the new key", hasKey(c.inst.bobPhone, c.space.club2) && hasKey(c.inst.carolPhone, c.space.club2)),
+        check("The thief does not", !hasKey(c.inst.thief, c.space.club2)),
+        check("The new key differs from the old", bytesToHex(c.inst.alicePhone.spaces.get(c.space.club2)!.key!) !== bytesToHex(c.inst.alicePhone.spaces.get(c.space.club)!.key!)),
+        check("The old space stays readable to its holders", texts(c.inst.alicePhone, c.space.club).includes("Welcome! First book is Middlemarch.")),
+      ],
+    },
+  ],
+};
+
+export const scenarios: Scenario[] = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12];

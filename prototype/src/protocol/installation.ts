@@ -9,6 +9,7 @@ import { decryptRecord, encryptRecord } from "./content";
 import {
   type HostView, acceptGrant, authorizeExchange, buildGrant, commitment, keyRequestPayload,
 } from "./grants";
+import { type Issuance, move } from "./publish";
 import { type Snapshot, type WriteOp, recordsIn, verifySnapshot } from "./repo";
 import { type TrustState, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust } from "./trust";
 import {
@@ -48,9 +49,13 @@ type SpaceLocal = {
   host: HostView;
   key: Uint8Array | null;
   keyFrom: string | null;
+  /** The key came only from an archived grant: it reads history but
+   * authorizes no issuance or posting (audit.md#archived-grants). */
+  archived: boolean;
   credentialExpiry: number;
   requested: string | null; // rkey of this device's key request
-  issued: Set<string>; // recipient binding IDs this device granted to
+  issuances: Map<string, Issuance>; // current issuance per recipient binding ID
+  stopped: Issuance[]; // stopped issuances, retained with their outcomes
   outbox: { rkey: string; text: string }[]; // drafts waiting for the key
   sawOtherHolder: boolean;
 };
@@ -66,6 +71,11 @@ export class Installation {
   spaces = new Map<string, SpaceLocal>();
   sessionId: string | null = null;
   online = true;
+  /** "eager" pins every member of every joined space, as the spec requires;
+   * "lazy" pins an account only when it first exchanges keys with it, which
+   * the prototype keeps to show what eager pinning prevents. */
+  pinning: "eager" | "lazy" = "eager";
+  private contacts = new Set<Did>();
   writes = 0;
   imports = 0; // pairing and backup imports, for the invariant monitor
   lastDecisions: string[] = [];
@@ -128,14 +138,16 @@ export class Installation {
   approve(target: Installation): boolean {
     const unsigned = { version: 1 as const, signer: this.binding, target: target.binding };
     const approval: Approval = { ...unsigned, proof: sign(this.signKey.secretKey, approvalPayload(unsigned)) };
+    // The signed approval is persisted before publication; acceptance waits
+    // for an acknowledged commit, or for the approval proven in the repo.
+    const id = bindingId(target.binding);
+    this.trust.state.approvedByMe.add(id);
     const rev = this.writeRev([
       { action: "create", collection: COL.approval, rkey: ref(asCbor(approval)), value: { $type: COL.approval, value: asCbor(approval) } },
       target.deviceRecord(),
     ]);
     if (rev === null) return false;
     // The commit this device wrote proves the target present at its revision.
-    const id = bindingId(target.binding);
-    this.trust.state.approvedByMe.add(id);
     this.trust.state.accepted.set(id, { binding: target.binding, evidence: `approved by ${label(this.binding)} (this device)`, rev });
     return true;
   }
@@ -154,7 +166,7 @@ export class Installation {
 
   exportState(): InstallationState {
     this.trust.tick();
-    return { trust: cloneTrust(this.trust.state), spaces: new Map([...this.spaces].map(([k, s]) => [k, { ...s, issued: new Set(s.issued), outbox: [...s.outbox] }])) };
+    return { trust: cloneTrust(this.trust.state), spaces: new Map([...this.spaces].map(([k, s]) => [k, { ...s, issuances: new Map(s.issuances), stopped: [...s.stopped], outbox: [...s.outbox] }])) };
   }
 
   importState(s: InstallationState): void {
@@ -162,8 +174,8 @@ export class Installation {
     this.trust.importFrom(cloneTrust(s.trust));
     for (const [uri, sp] of s.spaces) {
       const mine = this.spaces.get(uri);
-      if (!mine) this.spaces.set(uri, { ...sp, issued: new Set(), outbox: [], requested: null });
-      else if (!mine.key && sp.key) Object.assign(mine, { key: sp.key, keyFrom: "imported" });
+      if (!mine) this.spaces.set(uri, { ...sp, issuances: new Map(), stopped: [], outbox: [], requested: null });
+      else if (!mine.key && sp.key) Object.assign(mine, { key: sp.key, keyFrom: "imported", archived: sp.archived });
     }
     this.sync();
   }
@@ -183,6 +195,13 @@ export class Installation {
     return space;
   }
 
+  /** Lose this device's copy of a space key (a wiped cache, a key-less
+   * restore). It requests a grant again. */
+  forgetKey(space: string): void {
+    const sp = this.spaces.get(space);
+    if (sp) Object.assign(sp, { key: null, keyFrom: null, archived: false, requested: null });
+  }
+
   invite(space: string, account: Did): void {
     this.net.host.setMembership(this.did, space, account, true);
   }
@@ -194,7 +213,7 @@ export class Installation {
   join(space: string): void {
     if (this.spaces.has(space)) return;
     this.spaces.set(space, {
-      uri: space, key: null, keyFrom: null, credentialExpiry: -1, requested: null, issued: new Set(), outbox: [], sawOtherHolder: false,
+      uri: space, key: null, keyFrom: null, archived: false, credentialExpiry: -1, requested: null, issuances: new Map(), stopped: [], outbox: [], sawOtherHolder: false,
       host: { config: null, firstKeyId: null, firstCommitment: null, memberships: new Map() },
     });
   }
@@ -203,7 +222,7 @@ export class Installation {
     const sp = this.spaces.get(space);
     if (!sp) throw new Error("not joined");
     const rkey = randomId(this.rng);
-    if (!sp.key) {
+    if (!sp.key || sp.archived) {
       sp.outbox.push({ rkey, text });
       return;
     }
@@ -254,9 +273,17 @@ export class Installation {
   }
 
   trackedAccounts(): Did[] {
-    const out = new Set<Did>([this.did]);
-    for (const sp of this.spaces.values()) for (const d of this.net.host.knownAccounts(sp.uri)) out.add(d);
+    const out = new Set<Did>([this.did, ...this.contacts]);
+    if (this.pinning === "eager")
+      for (const sp of this.spaces.values()) for (const d of this.net.host.knownAccounts(sp.uri)) out.add(d);
     return [...out];
+  }
+
+  /** A lazy client meets an account when it first exchanges keys with it. */
+  private contact(did: Did): void {
+    if (this.pinning === "eager" || this.contacts.has(did)) return;
+    this.contacts.add(did);
+    this.observeAccount(did);
   }
 
   private observeAccount(did: Did): void {
@@ -271,11 +298,13 @@ export class Installation {
     if (sp.host.firstKeyId === null) {
       sp.host.firstKeyId = cfg.keyId;
       sp.host.firstCommitment = cfg.commitment;
-    } else if (sp.host.firstKeyId !== cfg.keyId || ref(sp.host.firstCommitment!) !== ref(cfg.commitment)) {
-      this.trust.raise(`host-integrity:${sp.uri}`, "host-integrity", `The host changed ${this.net.host.spaceName(sp.uri)}'s key commitment`);
-      return;
     }
-    if (!sp.host.config || cfg.revision >= sp.host.config.revision) sp.host.config = { ...cfg };
+    // A configuration that changes the creation-fixed key ID or commitment is
+    // invalid: keep the last valid one and alarm, but keep following
+    // membership, which the bad configuration does not affect.
+    const tampered = sp.host.firstKeyId !== cfg.keyId || ref(sp.host.firstCommitment!) !== ref(cfg.commitment);
+    if (tampered) this.trust.raise(`host-integrity:${sp.uri}`, "host-integrity", `The host changed ${this.net.host.spaceName(sp.uri)}'s key commitment`);
+    else if (!sp.host.config || cfg.revision >= sp.host.config.revision) sp.host.config = { ...cfg };
     for (const d of this.net.host.knownAccounts(sp.uri)) {
       const m = this.net.host.membership(sp.uri, d);
       const prev = sp.host.memberships.get(d);
@@ -314,17 +343,20 @@ export class Installation {
       for (const [rkey, v] of recordsIn(snap, COL.keyRequest)) requests.push([did, rkey, (v as { value: KeyRequest }).value]);
     }
 
-    // Accept a grant addressed to this device.
-    if (!sp.key) {
-      for (const [, g, e] of grants) {
-        if (g.recipient.account !== this.did || g.recipient.deviceId !== this.binding.device.deviceId) continue;
-        const d = acceptGrant({ grant: g, evidence: e, space: sp.uri, own: this.binding, ownEnc: this.encKey, trust: this.trust, host: sp.host, mode: "current" });
-        this.decide(`accept from ${label(g.issuer)}: ${d.result} ${d.reason}`);
-        if (d.result === "OK" && d.key) {
-          sp.key = d.key;
-          sp.keyFrom = label(g.issuer);
-          break;
-        }
+    // Accept a grant addressed to this device: a current exchange if any
+    // issuer is still authorized, otherwise historical reading only.
+    if (!sp.key || sp.archived) {
+      const mine = grants.filter(([, g]) => g.recipient.account === this.did && g.recipient.deviceId === this.binding.device.deviceId);
+      for (const mode of sp.key ? (["current"] as const) : (["current", "archive"] as const)) {
+        const hit = mine.find(([, g, e]) => {
+          this.contact(g.issuer.account);
+          const d = acceptGrant({ grant: g, evidence: e, space: sp.uri, own: this.binding, ownEnc: this.encKey, trust: this.trust, host: sp.host, mode });
+          this.decide(`accept (${mode}) from ${label(g.issuer)}: ${d.result} ${d.reason}`);
+          if (d.result !== "OK" || !d.key) return false;
+          Object.assign(sp, { key: d.key, keyFrom: label(g.issuer), archived: mode === "archive" });
+          return true;
+        });
+        if (hit) break;
       }
     }
 
@@ -351,13 +383,13 @@ export class Installation {
     if ((sp.keyFrom && sp.keyFrom !== "generated") || grants.some(([, g]) => !(g.recipient.account === this.did && g.recipient.deviceId === this.binding.device.deviceId)))
       sp.sawOtherHolder = true;
 
-    if (sp.key) {
+    if (sp.key && !sp.archived) {
       for (const d of sp.outbox.splice(0)) this.publishMessage(sp, d.rkey, d.text);
       if (sp.requested) {
         this.write([{ action: "delete", collection: COL.keyRequest, rkey: sp.requested }], sp.uri);
         sp.requested = null;
       }
-      this.answerRequests(sp, requests, grants);
+      this.answerRequests(sp, requests, grants, repos.find(([d]) => d === this.did)?.[1] ?? null);
     } else if (!sp.requested && this.trust.isAccepted(this.binding)) {
       const unsigned = { version: 1 as const, space: sp.uri, recipient: this.binding, issuer: null };
       const req: KeyRequest = { ...unsigned, proof: sign(this.signKey.secretKey, keyRequestPayload(unsigned)) };
@@ -367,14 +399,18 @@ export class Installation {
     }
   }
 
-  private answerRequests(sp: SpaceLocal, requests: [Did, string, KeyRequest][], grants: [Did, SpaceKeyGrant, Evidence | null][]): void {
+  private answerRequests(sp: SpaceLocal, requests: [Did, string, KeyRequest][], grants: [Did, SpaceKeyGrant, Evidence | null][], own: Snapshot | null): void {
+    // Unfinished issuances first: they resend exact bytes or stop.
+    for (const iss of sp.issuances.values()) this.publish(sp, iss, own);
     for (const [did, , req] of requests) {
       const r = req?.recipient;
       if (!r || r.account !== did || req.space !== sp.uri) continue;
       if (!verify(req.proof, keyRequestPayload(withoutProof(req)), r.device.authPubkey)) continue;
       const rid = bindingId(r);
-      if (sameBinding(r, this.binding) || sp.issued.has(rid)) continue;
+      const current = sp.issuances.get(rid);
+      if (sameBinding(r, this.binding) || (current && current.state !== "stopped")) continue;
       if (grants.some(([, g]) => g.issuer.deviceId === this.binding.device.deviceId && g.recipient.deviceId === r.device.deviceId)) continue;
+      this.contact(r.account);
       const d = authorizeExchange(this.trust, sp.host, sp.uri, this.binding, r, "issuer", this.binding);
       this.decide(`grant to ${label(r)}: ${d.result} ${d.reason}`);
       if (d.result !== "OK") continue;
@@ -391,12 +427,50 @@ export class Installation {
         issuerMembership: sp.host.memberships.get(this.did)!, recipientMembership: sp.host.memberships.get(r.account)!,
         extraBlocks: extra, rng: this.rng,
       });
-      // Publication: evidence first, then the grant (audit.md#publication).
-      const er = ref(asCbor(evidence));
-      if (!this.write([{ action: "create", collection: COL.evidence, rkey: er, value: { $type: COL.evidence, value: asCbor(evidence) } }], sp.uri)) continue;
-      if (this.write([{ action: "create", collection: COL.grant, rkey: ref(asCbor(grant)), value: { $type: COL.grant, value: asCbor(grant) } }], sp.uri))
-        sp.issued.add(rid);
+      // P1: save exact bytes and the authorization basis before any upload.
+      if (current) sp.stopped.push(current);
+      const iss: Issuance = {
+        recipient: r, grant, evidence, grantKey: ref(asCbor(grant)), evidenceKey: ref(asCbor(evidence)), evidenceUp: false,
+        basis: { config: sp.host.config!.revision, issuer: sp.host.memberships.get(this.did)!.revision, recipient: sp.host.memberships.get(r.account)!.revision },
+        state: "prepared", history: ["prepared"],
+      };
+      sp.issuances.set(rid, iss);
+      this.publish(sp, iss, own);
     }
+  }
+
+  /** Advance one issuance through P2-P8 (audit.md#publication). */
+  private publish(sp: SpaceLocal, iss: Issuance, own: Snapshot | null): void {
+    if (iss.state === "acknowledged" || iss.state === "stopped") return;
+    const grantValue: Cbor = { $type: COL.grant, value: asCbor(iss.grant) };
+    // P4: reconcile an uncertain write by reading the repo back.
+    const seen = own?.records.get(`${COL.grant}/${iss.grantKey}`);
+    if (seen !== undefined) {
+      if (ref(seen) === ref(grantValue)) move(iss, "acknowledged", "found in the repo");
+      else move(iss, "stopped", "different bytes at the grant's identity");
+      return;
+    }
+    if (own?.records.has(`${COL.evidence}/${iss.evidenceKey}`)) iss.evidenceUp = true;
+    // Ready: authorization repeated now, on the exact recorded basis (P5, P7).
+    const m = { config: sp.host.config?.revision, issuer: sp.host.memberships.get(this.did)?.revision, recipient: sp.host.memberships.get(iss.recipient.account)?.revision };
+    if (m.config !== iss.basis.config || m.issuer !== iss.basis.issuer || m.recipient !== iss.basis.recipient) {
+      move(iss, "stopped", "host evidence changed");
+      return;
+    }
+    const d = authorizeExchange(this.trust, sp.host, sp.uri, this.binding, iss.recipient, "issuer", this.binding);
+    if (d.result !== "OK") {
+      move(iss, "stopped", `authorization lost: ${d.reason}`);
+      return;
+    }
+    // P2: evidence first, same bytes on every attempt.
+    if (!iss.evidenceUp) {
+      if (!this.write([{ action: "create", collection: COL.evidence, rkey: iss.evidenceKey, value: { $type: COL.evidence, value: asCbor(iss.evidence) } }], sp.uri)) return;
+      iss.evidenceUp = true;
+    }
+    // P3: record the uncertainty before releasing grant bytes.
+    if (iss.state !== "outcome-unknown") move(iss, "outcome-unknown", "uploading the grant");
+    if (this.write([{ action: "create", collection: COL.grant, rkey: iss.grantKey, value: grantValue }], sp.uri))
+      move(iss, "acknowledged", "write acknowledged");
   }
 
   // ---- reporting -----------------------------------------------------------
@@ -417,7 +491,7 @@ export class Installation {
   private fingerprint(): string {
     const st = this.trust.state;
     const holds = [...st.holds].map(([d, h]) => `${d}:${h.candidate.join(",")}:${h.credited >= REENROLL_HOLD}`).join(";");
-    const keys = [...this.spaces.values()].map((s) => `${s.uri}:${!!s.key}:${s.requested}:${s.issued.size}`).join(";");
+    const keys = [...this.spaces.values()].map((s) => `${s.uri}:${!!s.key}:${s.requested}:${[...s.issuances.values()].map((i) => i.state).join("")}:${s.stopped.length}`).join(";");
     return [st.accepted.size, st.revoked.size, holds, keys, this.writes, st.alarms.length, st.notices.length].join("|");
   }
 }

@@ -6,7 +6,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
-const FILE = "src/protocol/trust.ts";
+const TRUST = "src/protocol/trust.ts";
+const CLIENT = "src/protocol/installation.ts";
+// name: [from, to] in trust.ts, or [file, from, to].
 const MUTATIONS = {
   "approvals during re-enrollment": ["if (this.live(account).length === 0) return; // re-enrollment: only the hold accepts", "// guard removed"],
   "no hold": ["if (held.credited >= REENROLL_HOLD) {", "if (true) {"],
@@ -21,15 +23,22 @@ const MUTATIONS = {
   "backward clocks credit time": ["h.credited += Math.max(0, now - h.checkpoint);", "h.credited += Math.abs(now - h.checkpoint);"],
   "imports merge any candidate": ["else if (mine.candidate.join() === h.candidate.join()) mine.credited", "else mine.credited"],
   "holds kept with a live binding": ["if (this.live(account).length) st.holds.delete(account);", "if (false) st.holds.delete(account);"],
+  "lazy pinning by default": [CLIENT, 'pinning: "eager" | "lazy" = "eager";', 'pinning: "eager" | "lazy" = "lazy";'],
+  "archived keys issue grants": [CLIENT, "if (sp.key && !sp.archived) {", "if (sp.key) {"],
+  "publication ignores lost authority": [CLIENT, 'if (d.result !== "OK") {\n      move(iss, "stopped"', 'if (false) {\n      move(iss, "stopped"'],
+  "host alarm freezes membership": [CLIENT, "if (tampered) this.trust.raise(", "if (tampered) return void this.trust.raise("],
 };
 
 const all = process.argv.includes("--all");
-const original = readFileSync(FILE, "utf8");
+const originals = new Map([TRUST, CLIENT].map((f) => [f, readFileSync(f, "utf8")]));
 let missed = 0;
 try {
-  for (const [name, [from, to]] of Object.entries(MUTATIONS)) {
+  for (const [name, spec] of Object.entries(MUTATIONS)) {
+    const [file, from, to] = spec.length === 3 ? spec : [TRUST, ...spec];
+    const original = originals.get(file);
     if (!original.includes(from)) throw new Error(`mutation "${name}" no longer applies`);
-    writeFileSync(FILE, original.replace(from, to));
+    for (const [f, text] of originals) writeFileSync(f, text);
+    writeFileSync(file, original.replace(from, to));
     let caught = false;
     try {
       execFileSync("npx", ["vitest", "run", ...(all ? [] : ["test/fuzz.test.ts"])], { stdio: "pipe" });
@@ -40,6 +49,6 @@ try {
     console.log(`${caught ? "CAUGHT" : "MISSED"} ${name}`);
   }
 } finally {
-  writeFileSync(FILE, original);
+  for (const [f, text] of originals) writeFileSync(f, text);
 }
 process.exit(missed ? 1 : 0);

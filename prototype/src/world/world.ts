@@ -52,6 +52,9 @@ export class World implements Network {
   readonly adversary = new Adversary((did) => this.pdsOf.get(did));
   readonly stolen: StolenKeys[] = [];
   readonly backups: { name: string; from: string; at: number; state: InstallationState }[] = [];
+  /** Write faults per installation: "reject" fails before applying; "lost-ack"
+   * applies the write, then fails as a lost acknowledgement would. */
+  readonly faults = new Map<string, { mode: "reject" | "lost-ack"; collection?: string; count: number }>();
   readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [] };
   /** Orders events that happen at the same world time. */
   private seq = 0;
@@ -110,7 +113,19 @@ export class World implements Network {
   write(sessionId: string, ops: WriteOp[], space?: string): number {
     const found = this.sessionPds(sessionId);
     if (!found) throw new Error("world: unknown session");
-    return found[0].write(sessionId, ops, space).commit.rev;
+    const f = this.faults.get(found[1].label);
+    const hit = f && f.count > 0 && (!f.collection || ops.some((o) => o.collection === f.collection));
+    if (hit) f.count--;
+    if (hit && f.mode === "reject") throw new Error("world: write rejected");
+    const rev = found[0].write(sessionId, ops, space).commit.rev;
+    if (hit && f.mode === "lost-ack") throw new Error("world: acknowledgement lost");
+    return rev;
+  }
+
+  /** Make an installation's next `count` writes (to `collection`, if given) fail. */
+  fault(inst: Installation, mode: "reject" | "lost-ack", count: number, collection?: string): void {
+    this.faults.set(inst.id, { mode, collection, count });
+    this.note(`${inst.id}'s next ${count} write(s)${collection ? ` to ${collection.split(".").pop()}` : ""} will ${mode === "reject" ? "be rejected" : "lose their acknowledgement"}`);
   }
 
   spaceWriters(space: string): Did[] {
@@ -149,8 +164,10 @@ export class World implements Network {
     inst.sessionId = this.pdsOf.get(did)!.login(did, "app", id).id;
     this.installations.set(id, inst);
     if (opts.link) {
-      if (!opts.link.approve(inst)) {
-        // Linking needs the approver to publish; without a session it can't.
+      // Linking needs the approver to publish. A write whose acknowledgement
+      // was lost may still have landed: read the repo back before giving up.
+      const landed = () => this.pdsOf.get(did)!.repo(did).records.has(`${COL.device}/${inst.binding.device.deviceId}`);
+      if (!opts.link.approve(inst) && !landed()) {
         this.installations.delete(id);
         this.pdsOf.get(did)!.endSession(inst.sessionId);
         throw new Error(`${opts.link.id} could not publish the approval`);
@@ -254,6 +271,37 @@ export class World implements Network {
     pds.write(session, [inst.deviceRecord()]);
     this.trace?.push({ op: "add", b: tb(inst.binding) });
     this.note(`${inst.id}'s record recreated`);
+    this.settle();
+  }
+
+  /** Rotate an account's repo signing key; the DID document follows. */
+  rotateRepoKey(did: Did): void {
+    this.registry.set(did, this.pdsOf.get(did)!.rotateKey(did));
+    this.note(`${did} rotated its repo signing key`);
+    this.settle();
+  }
+
+  /** Move an account to another PDS. Repos keep their revisions; records in
+   * `drop` are not carried over, which revokes those devices. Every session
+   * at the old PDS ends, and the account's installations sign in again. */
+  migrate(did: Did, to: string, drop: string[] = []): void {
+    const from = this.pdsOf.get(did)!;
+    const dest = this.pds(to);
+    const repos = [...from.repos.values()].filter((r) => r.did === did).map((r) => ({
+      name: r.name, rev: r.rev,
+      records: new Map([...r.records].filter(([k]) => !drop.some((d) => k === `${COL.device}/${d}`))),
+    }));
+    for (const d of drop) this.trace?.push({ op: "delete", b: [did.replace("did:plc:", ""), d] });
+    const kinds = new Map(from.liveSessions(did).map((s) => [s.id, s.kind]));
+    from.release(did);
+    this.registry.set(did, dest.adopt(did, repos));
+    this.pdsOf.set(did, dest);
+    for (const i of this.installations.values()) {
+      if (i.did !== did || !i.sessionId) continue;
+      const kind = kinds.get(i.sessionId);
+      i.sessionId = kind && kind !== "delete-auth" ? dest.login(did, kind, i.id).id : null;
+    }
+    this.note(`${did} migrated from ${from.name} to ${to}${drop.length ? `, dropping ${drop.length} device record(s)` : ""}`);
     this.settle();
   }
 

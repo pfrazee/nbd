@@ -24,7 +24,18 @@ export class Repo {
   history: Snapshot[] = [];
   times: number[] = []; // world time of each commit in history
 
-  constructor(readonly did: Did, readonly name: string, private readonly key: KeyPair, private readonly clock: () => number) {
+  constructor(readonly did: Did, readonly name: string, private key: KeyPair, private readonly clock: () => number,
+    init?: { rev: number; records: Map<RecordPath, Cbor> }) {
+    if (init) {
+      this.rev = init.rev;
+      this.records = new Map(init.records);
+    }
+    this.commit();
+  }
+
+  /** Sign future commits with a new key, and issue a commit under it. */
+  rekey(key: KeyPair): void {
+    this.key = key;
     this.commit();
   }
 
@@ -78,6 +89,29 @@ export class Pds {
     this.keys.set(did, key);
     this.repos.set(did, new Repo(did, did, key, this.clock));
     return key.publicKey;
+  }
+
+  /** Rotate an account's repo signing key; returns the new public key. */
+  rotateKey(did: Did): Uint8Array {
+    const key = signingKeyPair(this.rng.derive(`repo-key/${did}/${this.repos.size}/${this.clock()}`));
+    this.keys.set(did, key);
+    for (const r of this.repos.values()) if (r.did === did) r.rekey(key);
+    return key.publicKey;
+  }
+
+  /** Take in a migrating account: its repos continue at their revisions. */
+  adopt(did: Did, repos: { name: string; rev: number; records: Map<RecordPath, Cbor> }[]): Uint8Array {
+    const key = signingKeyPair(this.rng.derive(`repo-key/${did}/adopted/${this.clock()}`));
+    this.keys.set(did, key);
+    for (const r of repos) this.repos.set(r.name, new Repo(did, r.name, key, this.clock, r));
+    return key.publicKey;
+  }
+
+  /** Stop hosting an account that migrated away. */
+  release(did: Did): void {
+    this.keys.delete(did);
+    for (const [name, r] of [...this.repos]) if (r.did === did) this.repos.delete(name);
+    for (const s of this.sessions.values()) if (s.did === did) s.alive = false;
   }
 
   hosts(did: Did): boolean {
