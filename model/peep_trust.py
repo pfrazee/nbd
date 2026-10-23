@@ -475,6 +475,7 @@ class SpecClient:
             if self.world.present(b) and f"resurrected {b}" not in st.alarms:
                 st.alarms.append(f"resurrected {b}")
         self._own_removal_alarm()
+        self._reconcile_holds()
 
     def export_state(self) -> SpecState:
         self._tick()
@@ -498,6 +499,7 @@ class SpecClient:
                 st.holds[x] = (cand, max(credited, mine[1]), now)
             # A different candidate: keep this client's own observation.
         self._own_removal_alarm()
+        self._reconcile_holds()
 
     # ---- rules -----------------------------------------------------------
 
@@ -507,6 +509,16 @@ class SpecClient:
         msg = f"removed {self.own}"
         if self.own in self.state.revoked and msg not in self.state.alarms:
             self.state.alarms.append(msg)
+
+    def _reconcile_holds(self) -> None:
+        """A hold ends with its enrollment or its cancellation; a stale
+        import cannot bring it back."""
+        st = self.state
+        for x, (cand, _credited, _checkpoint) in list(st.holds.items()):
+            if any(b.account == x for b in self.account_wide_set()):
+                del st.holds[x]  # completed, or the account has a live binding
+            elif cand & st.revoked:
+                del st.holds[x]  # cancelled: a candidate binding was revoked
 
     def _tick(self) -> None:
         """Credit elapsed local time to each hold; a clock that moved back
@@ -555,14 +567,15 @@ class SpecClient:
         aps = self.world.account_approvals(x)
         nodes = set(present) | {a.signer for a in aps} | {a.target for a in aps}
         incoming = {a.target for a in aps}
-        live_roots = [r for r in nodes if r not in incoming and self._reach(x, [r]) & present]
-        # Bindings without a present record have no authority of their own:
-        # a present root must be the only one and reach everything; without
-        # one, the roots lacking records together must.
-        present_roots = [r for r in live_roots if r in present]
-        if len(present_roots) > 1:
+        # Bindings without a present record have no authority of their own,
+        # and approvals among them (even cycles) cannot veto first use. Only
+        # a present record can be a root; it must be the only one and reach
+        # everything. Without one, the record-less bindings together must.
+        roots = [p for p in present if p not in incoming]
+        if len(roots) > 1:
             return None
-        starts = present_roots or live_roots
+        past = nodes - present
+        starts = roots or list(past)
         return present if starts and present <= self._reach(x, starts) else None
 
     def _first_use(self, x: str) -> None:

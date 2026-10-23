@@ -18,10 +18,17 @@ MUTATIONS = {
     "undirected reach": (
         "                if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)\n        return seen\n\n    def single_root_set",
         "                if ap.signer == n and ap.target not in seen:\n                    seen.add(ap.target)\n                    frontier.append(ap.target)\n                if ap.target == n and ap.signer not in seen:\n                    seen.add(ap.signer)\n                    frontier.append(ap.signer)\n        return seen\n\n    def single_root_set"),
-    "recordless roots counted separately": (
-        "if len(present_roots) > 1:", "if len(live_roots) > 1:"),
+    "record-less roots count as roots": (
+        "roots = [p for p in present if p not in incoming]",
+        "roots = [n for n in nodes if n not in incoming and self._reach(x, [n]) & present]"),
     "present root need not reach all": (
-        "starts = present_roots or live_roots", "starts = live_roots"),
+        "starts = roots or list(past)", "starts = roots + list(past)"),
+    "only record-less roots start": (
+        "past = nodes - present", "past = {n for n in nodes - present if n not in incoming}"),
+    "completed holds kept": (
+        "            if any(b.account == x for b in self.account_wide_set()):\n                del st.holds[x]",
+        "            if False:\n                del st.holds[x]"),
+    "cancelled holds kept": ("elif cand & st.revoked:", "elif False:"),
     "first use for known accounts": ("        if not self._knew(x):\n", "        if True:\n"),
     "approvals need an unrevoked signer": (
         "if (ap.signer in st.accepted and ap.target not in st.accepted",

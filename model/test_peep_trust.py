@@ -76,6 +76,22 @@ class LeftoverApprovals(Base):
         self.assertTrue(existing.accepted(bob, COMMUNITY))
         self.assertTrue(self.meet(bob, COMMUNITY))
 
+    def test_deleted_attacker_cycle_does_not_block_new_contacts(self):
+        (bob,) = self.account("bob", "b0")
+        m1, m2 = self.w.add_device(B("bob", "m1")), self.w.add_device(B("bob", "m2"))
+        self.w.approve(m1, m2)
+        self.w.approve(m2, m1)
+        self.w.approve(m1, bob)
+        self.w.delete_device(m1)
+        self.w.delete_device(m2)
+        self.assertTrue(self.meet(bob, COMMUNITY))
+
+    def test_lost_root_that_approved_several_survivors(self):
+        r, b1, b2 = self.account("bob", "r", "b1", "b2")
+        self.w.delete_device(r)
+        self.assertTrue(self.meet(b1, COMMUNITY))
+        self.assertTrue(self.meet(b2, COMMUNITY))
+
     def test_recordless_approvals_do_not_block_new_contacts(self):
         (bob,) = self.account("bob", "b0")
         self.w.approve(B("bob", "x1"), bob)  # keys that never had a record
@@ -168,6 +184,18 @@ class Holds(Base):
         self.w.now += REENROLL_HOLD
         self.assertTrue(self.meet(m2, COMMUNITY))
 
+    def test_growing_candidate_restarts_hold(self):
+        m1 = self.w.add_device(B("bob", "m1"))
+        self.meet(m1, COMMUNITY)
+        self.w.now += REENROLL_HOLD - 1
+        m2 = self.w.add_device(B("bob", "m2"))
+        self.w.approve(m1, m2)  # no revocation; the candidate grows
+        self.assertFalse(self.meet(m2, COMMUNITY))
+        self.w.now += 1
+        self.assertFalse(self.meet(m1, COMMUNITY))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(m2, COMMUNITY))
+
     def test_resurrected_record_neither_blocks_nor_joins_candidate(self):
         n = self.w.add_device(B("bob", "n"))
         self.assertFalse(self.meet(n, COMMUNITY))
@@ -192,6 +220,32 @@ class Holds(Base):
         self.assertFalse(fresh.accepted(m2, COMMUNITY))
         self.w.now = REENROLL_HOLD + 10
         self.assertTrue(fresh.accepted(m2, COMMUNITY))
+
+    def test_import_cannot_resurrect_completed_hold(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.meet(m, COMMUNITY)
+        backup = self.client.export_state()
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(m, COMMUNITY))
+        self.client.import_state(backup)
+        self.assertFalse(self.client.hold_pending("bob", COMMUNITY))
+        self.assertTrue(self.meet(m, COMMUNITY))
+
+    def test_deleting_candidate_cancels_hold(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.meet(m, COMMUNITY)
+        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
+        self.w.delete_device(m)
+        self.assertFalse(self.client.hold_pending("bob", COMMUNITY))
+
+    def test_import_cannot_resurrect_cancelled_hold(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.meet(m, COMMUNITY)
+        backup = self.client.export_state()
+        self.w.delete_device(m)
+        self.client.sync()
+        self.client.import_state(backup)
+        self.assertFalse(self.client.hold_pending("bob", COMMUNITY))
 
     def test_import_never_compares_clocks_across_domains(self):
         m = self.w.add_device(B("bob", "m"))
