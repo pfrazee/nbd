@@ -239,6 +239,8 @@ class Holds(Base):
         self.assertTrue(laptop.accepted(b1, COMMUNITY))
         backup = laptop.export_state()
         self.w.delete_device(b1)
+        self.w.approvals["bob"].clear()  # its approval goes too: only the
+                                         # import tells this client about b1
         m = self.w.add_device(B("bob", "m"))
         self.assertFalse(self.meet(m, COMMUNITY))
         self.w.now += REENROLL_HOLD - 1
@@ -390,6 +392,19 @@ class RevocationAndReset(Base):
         self.assertIn("removed alice/l", other.state.alarms)
         other.sync()
         self.assertEqual(other.state.alarms.count("removed alice/l"), 1)
+
+    def test_path_through_deleted_device_reaches_descendant(self):
+        # Alice was offline while Bob linked b0 -> b1 -> b2 and removed b1.
+        (b0,) = self.account("bob", "b0")
+        self.assertTrue(self.meet(b0, COMMUNITY))
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        b2 = self.w.add_device(B("bob", "b2"))
+        self.w.approve(b1, b2)
+        self.w.delete_device(b1)
+        self.assertTrue(self.meet(b2, COMMUNITY))
+        self.assertNotIn(b1, self.client.account_wide_set())  # revoked at once
+        self.assertFalse(self.meet(b1, COMMUNITY))
 
     def test_approval_survives_approver_revocation(self):
         a, b = self.account("bob", "a", "b")

@@ -48,6 +48,12 @@ MUTATIONS = {
     "imports keep earliest checkpoint": (
         "(cand, max(credited, mine[1]), now)", "(cand, max(credited, mine[1]), min(_theirs, mine[2]))"),
     "imports credit storage time": ("st.holds[x] = (cand, credited, now)", "st.holds[x] = (cand, credited, _theirs)"),
+    "paths stop at deleted devices": (
+        "                            and ap.target not in st.revoked):",
+        "                            and self._usable(ap.target)):"),
+    "deleted path targets stay usable": (
+        "                        if not self.world.present(ap.target):\n                            st.revoked.add(ap.target)\n",
+        ""),
     "revoked stays usable": (
         "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),

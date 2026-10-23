@@ -536,15 +536,20 @@ class SpecClient:
 
     def _approvals(self) -> None:
         """Accept targets of present approvals whose signer this client has
-        accepted (even if since revoked). Acceptance then persists."""
+        accepted (even if since revoked). Acceptance then persists. A target
+        whose record is absent was deleted (records are created with their
+        first approval), so it is accepted already revoked: it gets no keys,
+        but its own approvals still connect the devices it added."""
         st = self.state
         while True:
             added = False
             for x in self.world.accounts():
                 for ap in self.world.account_approvals(x):
                     if (ap.signer in st.accepted and ap.target not in st.accepted
-                            and self._usable(ap.target)):
+                            and ap.target not in st.revoked):
                         st.accepted[ap.target] = f"approved by {ap.signer}"
+                        if not self.world.present(ap.target):
+                            st.revoked.add(ap.target)
                         added = True
             if not added:
                 return
