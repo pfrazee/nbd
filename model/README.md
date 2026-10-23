@@ -9,7 +9,7 @@ An executable model of [local trust](../device-enrollment.md#local-trust) in Dev
 - **Membership.** The host's current eligible accounts per space.
 - **`SpecClient`,** the specified design: trust on first use under the single-root rule, approvals afterwards with acceptance persisted alongside its evidence, revocation by observed absence, and a re-enrollment hold bound to its exact candidate for clients that knew the account.
 
-There is no cryptography. A record signed by a binding is valid exactly when its creator held that binding's key, and tests create only records the creating party could sign. The model assumes one shared, current view of every repo; partial views and delayed observations are left to the prototype in [TODO-18](../TODOs.md#todo-18).
+There is no cryptography. A record signed by a binding is valid exactly when its creator held that binding's key, and tests create only records the creating party could sign. The model assumes one shared, current view of every repo, though each client keeps its own clock (`clock_offset`); partial views and delayed observations are left to the prototype in [TODO-18](../TODOs.md#todo-18).
 
 ## Running
 
@@ -29,9 +29,11 @@ python3 -I model/mutation_check.py
 
 - **Single-root rule.** The prose required exactly one binding with no incoming approval. Approval records outlive deleted devices, so an honest reset that kept old approvals had two roots and could never complete. The rule now ignores roots that reach only deleted devices.
 - **Durable approvals.** An earlier client recomputed acceptance from the approvals currently published, so deleting an approval record removed an accepted device. Acceptance is now persisted with its evidence, as the specification requires.
-- **Holds bound to candidates.** An earlier client keyed holds by account, so a replacement candidate inherited an almost-expired hold. Holds now bind to the exact candidate, a replaced candidate's members are revoked, and imports merge start times only for identical candidates.
+- **Holds bound to candidates.** An earlier client keyed holds by account, so a replacement candidate inherited an almost-expired hold. Holds now bind to the exact candidate, a replaced candidate's members are revoked, and imports merge holds only for identical candidates.
 - **Anchors and witnesses.** Protecting newcomers with anchors drew repeated findings; the last showed one malicious PDS can manufacture its own witness. PEEP accepted first-contact exposure instead; see below.
-- **Takeover alarm.** The client revoked its own binding when its record disappeared but raised no alarm, despite the [required alarm](../device-enrollment.md#re-enrollment). It now alarms.
+- **Takeover alarm.** The client revoked its own binding when its record disappeared but raised no alarm, despite the [required alarm](../device-enrollment.md#re-enrollment). It now alarms, including when the revocation arrives by import rather than direct observation.
+- **Leftover approvals.** An attacker with create access could publish approvals from two of its own devices to an honest one; after the user deleted those devices, both deleted roots still reached the honest device, and new contacts declined it forever. Bindings without a present record now carry no authority of their own.
+- **Hold clocks.** Imports kept the earliest hold start time, comparing timestamps across installations whose clocks differ, so a clock 72 hours ahead finished a hold at once. Holds now carry credited elapsed time and never compare clocks.
 
 ## Rejected designs
 

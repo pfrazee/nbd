@@ -60,6 +60,46 @@ class GenuineFirstContact(Base):
         self.assertTrue(self.meet(m, COMMUNITY))
 
 
+class LeftoverApprovals(Base):
+    """Approvals signed by bindings without a present record carry no
+    authority of their own and cannot block first use."""
+
+    def test_deleted_attacker_roots_do_not_block_new_contacts(self):
+        (bob,) = self.account("bob", "b0")
+        existing = self.CLIENT(self.w, self.w.add_device(B("dave", "d0")))
+        self.assertTrue(existing.accepted(bob, COMMUNITY))
+        m1, m2 = self.w.add_device(B("bob", "m1")), self.w.add_device(B("bob", "m2"))
+        self.w.approve(m1, bob)
+        self.w.approve(m2, bob)
+        self.w.delete_device(m1)  # Bob removes the attacker's devices;
+        self.w.delete_device(m2)  # their approvals stay as evidence
+        self.assertTrue(existing.accepted(bob, COMMUNITY))
+        self.assertTrue(self.meet(bob, COMMUNITY))
+
+    def test_recordless_approvals_do_not_block_new_contacts(self):
+        (bob,) = self.account("bob", "b0")
+        self.w.approve(B("bob", "x1"), bob)  # keys that never had a record
+        self.w.approve(B("bob", "x2"), bob)
+        self.assertTrue(self.meet(bob, COMMUNITY))
+
+    def test_present_root_must_reach_every_device(self):
+        r, a = self.account("bob", "r", "a")
+        m = self.w.add_device(B("bob", "m"))
+        self.w.approve(B("bob", "x"), m)  # recordless signer covers m, r does not
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.assertFalse(self.meet(r, COMMUNITY))
+
+    def test_limitation_recordless_signer_can_root_attacker_device(self):
+        # Documented first-contact exposure, as under the earlier rule by
+        # approving the honest root: create access chooses the graph.
+        (bob,) = self.account("bob", "b0")
+        m = self.w.add_device(B("bob", "m"))
+        x = B("bob", "x")
+        self.w.approve(x, bob)
+        self.w.approve(x, m)
+        self.assertTrue(self.meet(m, COMMUNITY))
+
+
 class TakeoverAfterFirstContact(Base):
     """Goal 2: after first contact, takeover cannot silently add a device."""
 
@@ -153,6 +193,45 @@ class Holds(Base):
         self.w.now = REENROLL_HOLD + 10
         self.assertTrue(fresh.accepted(m2, COMMUNITY))
 
+    def test_import_never_compares_clocks_across_domains(self):
+        m = self.w.add_device(B("bob", "m"))
+        ahead = self.CLIENT(self.w, self.w.add_device(B("alice", "l")),
+                            clock_offset=REENROLL_HOLD)
+        ahead.pair(self.bob)
+        ahead.sync()
+        self.assertFalse(self.meet(m, COMMUNITY))  # both observe at once
+        self.assertFalse(ahead.accepted(m, COMMUNITY))
+        mine, theirs = self.client.export_state(), ahead.export_state()
+        self.client.import_state(theirs)
+        ahead.import_state(mine)
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.assertFalse(ahead.accepted(m, COMMUNITY))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(m, COMMUNITY))
+        self.assertTrue(ahead.accepted(m, COMMUNITY))
+
+    def test_import_credits_elapsed_time_for_identical_candidate(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.meet(m, COMMUNITY)
+        self.w.now += 50
+        saved = self.client.export_state()
+        fresh = self.CLIENT(self.w, self.alice, clock_offset=-1000)
+        fresh.pair(self.bob)
+        fresh.import_state(saved)
+        self.w.now += REENROLL_HOLD - 50 - 1
+        self.assertFalse(fresh.accepted(m, COMMUNITY))
+        self.w.now += 1
+        self.assertTrue(fresh.accepted(m, COMMUNITY))
+
+    def test_backup_storage_time_is_not_credited(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.meet(m, COMMUNITY)
+        backup = self.client.export_state()
+        self.w.now += REENROLL_HOLD
+        restored = self.CLIENT(self.w, self.alice)
+        restored.import_state(backup)
+        self.assertFalse(restored.accepted(m, COMMUNITY))
+
 
 class FirstContactExposure(Base):
     """Documented non-goals: first contact, including just after takeover."""
@@ -229,6 +308,19 @@ class RevocationAndReset(Base):
         self.client.sync()
         self.assertIn(self.alice, self.client.state.revoked)
         self.assertIn("removed alice/a0", self.client.state.alarms)
+
+    def test_imported_own_removal_alarms_once(self):
+        laptop = self.w.add_device(B("alice", "l"))
+        self.client.pair(laptop)
+        other = self.CLIENT(self.w, laptop)
+        other.pair(self.alice)
+        self.w.delete_device(laptop)
+        self.client.sync()  # the phone observes the deletion
+        self.w.add_device(laptop)  # laptop never sees the absence itself
+        other.import_state(self.client.export_state())
+        self.assertIn("removed alice/l", other.state.alarms)
+        other.sync()
+        self.assertEqual(other.state.alarms.count("removed alice/l"), 1)
 
     def test_approval_survives_approver_revocation(self):
         a, b = self.account("bob", "a", "b")

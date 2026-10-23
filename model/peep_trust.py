@@ -421,7 +421,8 @@ class SpecState:
 
     accepted: Dict[Binding, str] = field(default_factory=dict)  # binding -> evidence
     revoked: Set[Binding] = field(default_factory=set)
-    holds: Dict[str, Tuple[FrozenSet[Binding], float]] = field(default_factory=dict)
+    # account -> (candidate, credited hours, local-clock checkpoint)
+    holds: Dict[str, Tuple[FrozenSet[Binding], float, float]] = field(default_factory=dict)
     candidates_seen: Set[Binding] = field(default_factory=set)
     alarms: List[str] = field(default_factory=list)
 
@@ -436,10 +437,14 @@ class SpecClient:
     exact candidate for clients that knew the account. Acceptance is
     persisted with its evidence, independent of the current repo graph."""
 
-    def __init__(self, world: World, own: Binding):
+    def __init__(self, world: World, own: Binding, clock_offset: float = 0.0):
         self.world = world
         self.own = own
+        self.clock_offset = clock_offset  # this installation's clock domain
         self.state = SpecState(accepted={own: "own"})
+
+    def local_now(self) -> float:
+        return self.world.now + self.clock_offset
 
     # ---- public API ------------------------------------------------------
 
@@ -466,13 +471,13 @@ class SpecClient:
         for b in set(st.accepted) | st.candidates_seen:
             if b not in st.revoked and not self.world.present(b):
                 st.revoked.add(b)
-                if b == self.own:
-                    st.alarms.append(f"removed {b}")  # takeover alarm
         for b in st.revoked:
             if self.world.present(b) and f"resurrected {b}" not in st.alarms:
                 st.alarms.append(f"resurrected {b}")
+        self._own_removal_alarm()
 
     def export_state(self) -> SpecState:
+        self._tick()
         return self.state.copy()
 
     def import_state(self, other: SpecState) -> None:
@@ -481,15 +486,34 @@ class SpecClient:
             st.accepted.setdefault(b, ev)
         st.revoked |= other.revoked
         st.candidates_seen |= other.candidates_seen
-        for x, (cand, t) in other.holds.items():
+        self._tick()
+        now = self.local_now()
+        # Holds transfer as credited elapsed time; the source's checkpoint
+        # is in another clock domain and is never compared with ours.
+        for x, (cand, credited, _theirs) in other.holds.items():
             mine = st.holds.get(x)
             if mine is None:
-                st.holds[x] = (cand, t)
+                st.holds[x] = (cand, credited, now)
             elif mine[0] == cand:
-                st.holds[x] = (cand, min(t, mine[1]))
+                st.holds[x] = (cand, max(credited, mine[1]), now)
             # A different candidate: keep this client's own observation.
+        self._own_removal_alarm()
 
     # ---- rules -----------------------------------------------------------
+
+    def _own_removal_alarm(self) -> None:
+        """Takeover alarm, whether this client observed its own record's
+        absence or imported that revocation."""
+        msg = f"removed {self.own}"
+        if self.own in self.state.revoked and msg not in self.state.alarms:
+            self.state.alarms.append(msg)
+
+    def _tick(self) -> None:
+        """Credit elapsed local time to each hold; a clock that moved back
+        credits nothing."""
+        now = self.local_now()
+        for x, (cand, credited, checkpoint) in list(self.state.holds.items()):
+            self.state.holds[x] = (cand, credited + max(0.0, now - checkpoint), now)
 
     def _usable(self, b: Binding) -> bool:
         return b not in self.state.revoked and self.world.present(b)
@@ -532,9 +556,14 @@ class SpecClient:
         nodes = set(present) | {a.signer for a in aps} | {a.target for a in aps}
         incoming = {a.target for a in aps}
         live_roots = [r for r in nodes if r not in incoming and self._reach(x, [r]) & present]
-        if len(live_roots) != 1:
+        # Bindings without a present record have no authority of their own:
+        # a present root must be the only one and reach everything; without
+        # one, the roots lacking records together must.
+        present_roots = [r for r in live_roots if r in present]
+        if len(present_roots) > 1:
             return None
-        return present if present <= self._reach(x, live_roots) else None
+        starts = present_roots or live_roots
+        return present if starts and present <= self._reach(x, starts) else None
 
     def _first_use(self, x: str) -> None:
         st = self.state
@@ -553,12 +582,13 @@ class SpecClient:
         if cand is None:
             return
         key = frozenset(cand)
+        self._tick()
         held = st.holds.get(x)
         if held is None or held[0] != key:
             st.candidates_seen |= key
-            st.holds[x] = (key, self.world.now)  # new or changed candidate restarts
+            st.holds[x] = (key, 0.0, self.local_now())  # new or changed candidate restarts
             held = st.holds[x]
-        if self.world.now - held[1] >= REENROLL_HOLD:
+        if held[1] >= REENROLL_HOLD:
             for b in key:
                 st.accepted[b] = "re-enrolled"
             del st.holds[x]
