@@ -540,11 +540,15 @@ class SpecClient:
         whose record is absent was deleted (records are created with their
         first approval), so it is accepted already revoked: it gets no keys,
         but its own approvals still connect the devices it added. The same
-        holds for a target this client had already revoked."""
+        holds for a target this client had already revoked. While every
+        binding this client accepted for an account is revoked, approvals
+        accept nothing for it, so a removed device's key cannot end a hold."""
         st = self.state
         while True:
             added = False
             for x in self.world.accounts():
+                if not any(b.account == x for b in self.account_wide_set()):
+                    continue  # re-enrollment: only the hold accepts
                 for ap in self.world.account_approvals(x):
                     if ap.signer in st.accepted and ap.target not in st.accepted:
                         st.accepted[ap.target] = f"approved by {ap.signer}"

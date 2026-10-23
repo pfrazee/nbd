@@ -35,6 +35,7 @@ Alice adds Bob.
 2. **Phone:** scan, then one confirmation: "Link *Windows PC* to your account? It will be able to read all your spaces. Only link devices you own." The name is reported by the laptop and is not proof of anything; the warning is what counters tricks to scan an attacker's code. The laptop can read every space; it requests keys as Alice opens them, and the phone grants in the background.
 3. **Alice's other devices:** "New device: *Windows PC*. Added from iPhone. Not you?" with **Remove it** and **It was me**. This notice and its removal action are required; they are how Alice catches a compromised device adding an attacker's. **Remove it** sends her to sign the device out at her provider, then asks her to approve removal there and deletes the device, which revokes it, checks that it stays deleted, and suggests changing her password.
 4. **Other members:** nothing.
+5. **Replacing a phone:** the app doesn't suggest removing the old device afterwards; wiping it is enough. Removing it right away would show a reset to members whose apps haven't caught up ([replacement](../device-enrollment.md#replacement)).
 
 ![Adding a device: the laptop shows a linking code, the phone scans it and confirms once with an ownership warning, Alice's iPad gets a new-device notice with Remove it, and other members see nothing](images/relaxed-tofu-adding-a-device.webp)
 
@@ -52,7 +53,7 @@ Alice adds Bob.
 
 ### Removing a member or device
 
-Removal and **I lost a device** stop new keys at once, with nothing held back, and existing access expires within minutes ([ending access](../core.md#ending-access)). **I lost a device** sends the user to sign the device out at their provider, then asks them to approve removal there and deletes the device, which revokes it, checks that it stays deleted, and suggests changing their password. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The notice does not suggest moving to a new space.
+Removal and **I lost a device** stop new keys at once, with nothing held back, and existing access expires within minutes ([ending access](../core.md#ending-access)). **I lost a device** sends the user to sign the device out at their provider, then asks them to approve removal there and deletes the device, which revokes it, checks that it stays deleted, and suggests changing their password: until they do, whoever kept the lost device's keys can add more devices. The timeline says "Carol was removed," and space info adds that her devices still hold the space's key ([no rotation](../core.md#no-rotation)). The notice does not suggest moving to a new space.
 
 ### Alarms
 

@@ -1,5 +1,5 @@
 """Mutation check: break one rule of SpecClient at a time and confirm a
-test in test_peep_trust.py fails.
+test in test_peep_trust.py or test_walks.py fails.
 
 Run: python3 -I model/mutation_check.py
 MISSED means no test notices that rule being broken.
@@ -57,6 +57,9 @@ MUTATIONS = {
     "deleted path targets stay usable": (
         "                        if not self.world.present(ap.target):\n                            st.revoked.add(ap.target)\n",
         ""),
+    "approvals apply during re-enrollment": (
+        "                if not any(b.account == x for b in self.account_wide_set()):\n                    continue",
+        "                if False:\n                    continue"),
     "revoked stays usable": (
         "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),
@@ -69,7 +72,8 @@ def main():
     for name, (old, new) in MUTATIONS.items():
         assert old in spec, name
         d = tempfile.mkdtemp()
-        shutil.copy(os.path.join(SRC, "test_peep_trust.py"), d)
+        for t in ("test_peep_trust.py", "test_walks.py"):
+            shutil.copy(os.path.join(SRC, t), d)
         with open(os.path.join(d, "peep_trust.py"), "w") as f:
             f.write(head + SPEC + spec.replace(old, new, 1))
         r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d],

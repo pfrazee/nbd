@@ -226,11 +226,32 @@ class Holds(Base):
         self.meet(b1, COMMUNITY)  # observed as a candidate...
         self.w.delete_device(b1)
         self.client.sync()  # ...then revoked
+        c = self.w.add_device(B("bob", "c"))
+        self.meet(c, COMMUNITY)
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(c, COMMUNITY))  # Bob has a live device again
         b2 = self.w.add_device(B("bob", "b2"))
         self.w.approve(self.bob, b1)  # an authenticated path appears later
         self.w.approve(b1, b2)
         self.assertTrue(self.meet(b2, COMMUNITY))
         self.assertNotIn(b1, self.client.account_wide_set())
+
+    def test_removed_device_key_cannot_end_hold(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.w.approve(self.bob, m)  # signed with b0's key after its removal
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(m, COMMUNITY))
+
+    def test_removed_device_path_cannot_end_hold(self):
+        m = self.w.add_device(B("bob", "m"))
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.w.approve(self.bob, B("bob", "k"))  # through a key with no record
+        self.w.approve(B("bob", "k"), m)
+        self.assertFalse(self.meet(m, COMMUNITY))
+        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
 
     def test_import_cannot_resurrect_completed_hold(self):
         m = self.w.add_device(B("bob", "m"))
@@ -244,10 +265,9 @@ class Holds(Base):
 
     def test_import_of_unseen_deleted_binding_keeps_hold_credit(self):
         laptop = self.CLIENT(self.w, self.w.add_device(B("alice", "l")))
-        laptop.pair(self.bob)
         b1 = self.w.add_device(B("bob", "b1"))
-        self.w.approve(self.bob, b1)  # still approved by the deleted b0
-        self.assertTrue(laptop.accepted(b1, COMMUNITY))
+        self.w.approve(self.bob, b1)
+        self.assertTrue(laptop.accepted(b1, COMMUNITY))  # the laptop's first contact
         backup = laptop.export_state()
         self.w.delete_device(b1)
         self.w.approvals["bob"].clear()  # its approval goes too: only the
@@ -424,9 +444,10 @@ class RevocationAndReset(Base):
         self.w.delete_device(a)
         self.assertTrue(self.meet(b, COMMUNITY))
 
-    def test_limitation_revoked_approver_with_session_can_still_add(self):
-        # Documented: removal must end the session first; a revoked device
-        # that can still write publishes approvals clients accept.
+    def test_limitation_revoked_key_adds_beside_live_device(self):
+        # Documented: while the account keeps a live device, whoever holds a
+        # removed device's key and can write to the repo adds devices that
+        # clients accept; own-account notices surface them.
         a, b = self.account("bob", "a", "b")
         self.w.admit(COMMUNITY, "alice", "bob")
         self.assertTrue(self.meet(b, COMMUNITY))
@@ -436,6 +457,27 @@ class RevocationAndReset(Base):
         self.w.approve(a, c)
         self.assertTrue(self.meet(c, COMMUNITY))
 
+    def test_replacement_seen_before_removal_needs_no_hold(self):
+        (old,) = self.account("bob", "old")
+        self.assertTrue(self.meet(old, COMMUNITY))
+        new = self.w.add_device(B("bob", "new"))
+        self.w.approve(old, new)
+        self.assertTrue(self.meet(new, COMMUNITY))  # Alice sees the link
+        self.w.delete_device(old)
+        self.assertTrue(self.meet(new, COMMUNITY))
+
+    def test_replacement_missed_before_removal_is_held(self):
+        # Alice was offline while Bob linked a new phone and removed the old
+        # one: indistinguishable from an attacker holding the old key.
+        (old,) = self.account("bob", "old")
+        self.assertTrue(self.meet(old, COMMUNITY))
+        new = self.w.add_device(B("bob", "new"))
+        self.w.approve(old, new)
+        self.w.delete_device(old)
+        self.assertFalse(self.meet(new, COMMUNITY))
+        self.assertTrue(self.client.hold_pending("bob", COMMUNITY))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.meet(new, COMMUNITY))
 
 
 if __name__ == "__main__":

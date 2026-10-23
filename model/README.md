@@ -23,7 +23,11 @@ python3 -I -m unittest discover -s model -v
 python3 -I model/mutation_check.py
 ```
 
-`test_peep_trust.py` tests `SpecClient` against the [security goals](../security-goals.md). Tests prefixed `test_limitation_` assert documented non-goals, such as root theft at first contact and a new contact meeting an account just after a takeover. The mutation check breaks one `SpecClient` rule at a time and reports whether any test notices; every mutation should be caught.
+```bash
+PEEP_WALKS=5000 PEEP_STEPS=80 python3 -I -m unittest discover -s model -p test_walks.py
+```
+
+`test_peep_trust.py` tests `SpecClient` against the [security goals](../security-goals.md). Tests prefixed `test_limitation_` assert documented non-goals, such as root theft at first contact and a new contact meeting an account just after a takeover. `test_walks.py` runs seeded random walks, 1,500 by default: repo writes of every kind, elapsed time, queries, and backups exchanged between two of Alice's installations with different clocks, checking invariants after every step and shrinking any failure to a minimal trace. Walks may write any record with any key, as an attacker holding every key could, so their invariants are structural: acceptance only through approval paths, imports, or an elapsed hold; first use matching the single-root rule; holds credited no faster than real time and ending only for a stated reason; revocation, takeover alarms, and re-enrollment once their conditions hold. The docstring lists them. The mutation check breaks one `SpecClient` rule at a time and reports whether any test notices; every mutation should be caught, and the walks alone catch all of them.
 
 ## What it found
 
@@ -35,6 +39,7 @@ python3 -I model/mutation_check.py
 - **Leftover approvals.** An attacker with create access could publish approvals from two of its own devices to an honest one; after the user deleted those devices, both deleted roots still reached the honest device, and new contacts declined it forever. Bindings without a present record now carry no authority of their own. A later review showed that leftover cycles (`M1 → M2 → M1 → Bob`) still left no root, so only present records can be roots now, and without one every record-less binding is a starting point.
 - **Deleted intermediates.** Approval validation required each target's record to be present, so a contact offline while an account linked `B0 → B1 → B2` and removed `B1` never accepted `B2`. A target proven absent, or one the client had already revoked, is now accepted as an approval signer while staying revoked for grants; records must be published with their first approval so absence means deletion.
 - **Stale holds.** Importing a backup taken during a hold brought the hold back after enrollment completed, and deleting the candidate left its hold pending. Holds now end on completion or cancellation and stay ended. The fix first ended holds before checking imported bindings against the repo, so an older backup's deleted device restarted an active hold; imports now sync first.
+- **Removed keys ended holds.** Random walks found that once every device of an account was revoked, an approval signed afterwards with a removed device's key, directly or through a key with no record, accepted the new device and ended the hold, so an attacker holding an old device's key skipped it. While every accepted binding of an account is revoked, approvals now accept nothing for it. A contact that missed an honest replacement before the old device's removal holds the new device too; linking flows therefore never prompt removing the replaced device.
 - **Hold clocks.** Imports kept the earliest hold start time, comparing timestamps across installations whose clocks differ, so a clock 72 hours ahead finished a hold at once. Holds now carry credited elapsed time and never compare clocks.
 
 ## Rejected designs
