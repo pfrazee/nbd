@@ -262,7 +262,7 @@ Blob readers MUST NOT release plaintext before whole-file authentication. Any te
 
 ### Key generation
 
-The creator generates the space key: a fresh independent random 256-bit key and a `RandomId` key ID. Its commitment is `SHA-256(CBOR(["peep/key", 1, spaceURI, keyId, keyBytes]))`. The creator MUST durably store the key before creating the space and supplies `keyId` and `commitment` in the creating [configuration](#trusted-host-state). The commitment checks agreement; it does not give the host usable key material. The host stores them unchanged for the life of the space.
+The creator generates the space key: a fresh independent random 256-bit key and a `RandomId` key ID. Its commitment is `SHA-256(CBOR(["peep/key", 1, spaceURI, keyId, keyBytes]))`. The creator MUST durably store the key before creating the space and supplies `keyId` and `commitment` in the creating [configuration](#trusted-host-state). The commitment binds the space URI, so the creator MUST know the exact canonical URI before creation; the Spaces revision must let it choose or reserve the URI first ([TODO-03](TODOs.md#todo-03)). The commitment checks agreement; it does not give the host usable key material. The host stores them unchanged for the life of the space.
 
 Writers encrypt all content under the space key. A writer without the key cannot publish content and SHOULD [request a grant](#key-requests). Offline reads and protected local drafts remain available; pending publications MUST be retained until the key is obtained. [Private state and restore](device-enrollment.md#recovery) preserve keys and pending operations.
 
