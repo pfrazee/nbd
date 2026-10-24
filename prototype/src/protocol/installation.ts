@@ -195,6 +195,31 @@ export class Installation {
     return space;
   }
 
+  /** This device lost its saved trust state (a reinstall without restore):
+   * it keeps its own keys, pins everyone again on first use, and must report
+   * the loss (device-enrollment.md#local-trust). */
+  /** Start over after total device loss: no history for this account, so its
+   * other devices become a list to remove (device-enrollment.md#total-device-loss). */
+  beginStartOver(): void {
+    this.trust.state.startOver = { list: null, done: false };
+  }
+
+  finishStartOver(): void {
+    if (this.trust.state.startOver) this.trust.state.startOver.done = true;
+  }
+
+  lostState = false;
+  resetLocalState(): void {
+    const own = bindingId(this.binding);
+    const st = this.trust.state;
+    for (const id of [...st.accepted.keys()]) if (id !== own) st.accepted.delete(id);
+    st.revoked.clear();
+    st.holds.clear();
+    st.candidatesSeen.clear();
+    st.views.clear();
+    this.lostState = true;
+  }
+
   /** Lose this device's copy of a space key (a wiped cache, a key-less
    * restore). It requests a grant again. */
   forgetKey(space: string): void {
@@ -305,13 +330,17 @@ export class Installation {
     const tampered = sp.host.firstKeyId !== cfg.keyId || ref(sp.host.firstCommitment!) !== ref(cfg.commitment);
     if (tampered) this.trust.raise(`host-integrity:${sp.uri}`, "host-integrity", `The host changed ${this.net.host.spaceName(sp.uri)}'s key commitment`);
     else if (!sp.host.config || cfg.revision >= sp.host.config.revision) sp.host.config = { ...cfg };
+    // Surface admissions, removals, and readmissions learned after this
+    // device first looked at the space (core.md#trusted-host-state).
+    const first = sp.host.memberships.size === 0;
     for (const d of this.net.host.knownAccounts(sp.uri)) {
       const m = this.net.host.membership(sp.uri, d);
       const prev = sp.host.memberships.get(d);
       if (m && (!prev || m.revision > prev.revision)) {
         sp.host.memberships.set(d, m);
-        if (prev && prev.eligible !== m.eligible)
-          this.trust.notice(`member:${sp.uri}:${d}:${m.revision}`, "membership", `${d} was ${m.eligible ? "added to" : "removed from"} ${this.net.host.spaceName(sp.uri)}`);
+        const change = prev ? prev.eligible !== m.eligible : !first && m.eligible;
+        if (change)
+          this.trust.notice(`member:${sp.uri}:${d}:${m.revision}`, "membership", `${d} was ${m.eligible ? "added to" : "removed from"} ${this.net.host.spaceName(sp.uri)}`, { account: d });
       }
     }
   }
@@ -376,7 +405,7 @@ export class Installation {
     for (const [, g, e] of grants) {
       if (g.recipient.account !== this.did) continue;
       const rb = e?.blocks.find((b) => ref(b) === g.authorization.recipientBinding) as Binding | undefined;
-      if (rb && !this.trust.state.accepted.has(bindingId(rb)))
+      if (rb && !this.trust.state.accepted.has(bindingId(rb)) && !this.trust.startOverHistory(rb))
         this.trust.raise(`grant-unapproved:${ref(asCbor(g))}`, "unapproved-grant",
           `A device you don't recognise (${label(rb)}) may have access to ${this.net.host.spaceName(sp.uri)}.`);
     }

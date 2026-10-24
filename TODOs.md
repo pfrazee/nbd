@@ -44,11 +44,6 @@ An executable model of [local trust](device-enrollment.md#local-trust) is in [`m
 
 Build a prototype that demonstrates first join, takeover detection, device removal, and recovery under delayed or conflicting observations, against large accounts and many spaces, including background issuance on phones. Measure verified repo enumeration, public-repo tracking, evidence retention, and private history growth against mobile resource budgets, and exercise partial views, delayed observations, and divergent installations, which the shared-world model cannot. Do this early: first contact needs a verified enumeration of a possibly large public repo and auditing needs indefinite retention and background catch-up, and clients that cannot sustain that work weaken the main defense against substitution. Validate collection-range enumeration proofs and incremental sync from verified commits as part of it ([TODO-16](#todo-16)). A browser prototype in [`prototype/`](prototype/README.md) now covers partial views, delayed observations, divergent installations, and malicious-PDS views against emulated repos and host; resource budgets, real repos, and background issuance on phones remain.
 
-<a id="todo-19"></a>
-### 19: UX illustrations
-
-Several mockups predate the current baseline and were removed from the flows because they show verification badges, per-space device selection, epochs, or accepted key changes: `tofu-adding-a-member.png`, `tofu-adding-a-device.png`, `tofu-creating-a-space.png`, `tofu-creating-from-existing.png`, `relaxed-tofu-adding-a-member-2.webp`, and `relaxed-tofu-settings.png`. Redraw them for the current flows, including removal with sign-out first and the per-space recovery status.
-
 <a id="todo-15"></a>
 ### 15: Background issuance
 

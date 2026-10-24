@@ -26,6 +26,18 @@ To run every check instead:
 npm test
 ```
 
+### The UX app
+
+A second app, Lantern, shows the [TOFU](../ux-flows/tofu.md) and [Relaxed TOFU](../ux-flows/relaxed-tofu.md) flows as a user would see them, drawn from the same simulation. With `npm run dev` running, open <http://localhost:5199/ux.html> for the device wall: one framed device per installation, each with its own inbox, spaces, device lists, notices, and alarms. Tap through them to post, join, invite, link and remove devices; the controls under each device and in the top bar take devices offline, add people and unlinked devices, and advance time, and the bar switches between Relaxed and TOFU copy. In development, `window.nbdWorld` is the wall's live world.
+
+<http://localhost:5199/ux.html?figures> lists the storyboard figures used in the flow documents, and `?figure=<id>` opens one. Each figure is a script of world actions with panels that show one device at one point in it, so a panel can only show a hold, notice, or lock state the protocol actually produced; `npm test` checks every panel's expectations. To regenerate the images in `ux-flows/images/` after changing a figure or the protocol (the first time, run `npx playwright install chromium`):
+
+```bash
+npm run capture
+```
+
+Pass figure ids, such as `npm run capture tofu-adding-a-device`, to capture only those.
+
 ### Goals and where to see them
 
 Each [security goal](../security-goals.md) and non-goal maps to the scenarios or tests that exercise it. Scenarios are in the UI's menu; tests are under `test/`.
@@ -67,7 +79,7 @@ Both run around every scenario step and every random-walk step. `test/disclosure
 
 ## Running the checks
 
-`npm test` runs the crypto vectors, the twelve scenarios, random walks in two modes, focused tests (publication, archive reading and key loss, host integrity and membership, multiple spaces, backends, key rotation and migration, imports, network lag, the disclosure check), and a check that the trace fixtures still regenerate. Longer walks: `NBD_WALKS=300 NBD_STEPS=40 npx vitest run test/fuzz.test.ts`. `node test/mutate.mjs --all` breaks one trust rule at a time and reports whether any test notices; every mutation should be caught. `npm run build` produces a static site in `dist/`.
+`npm test` runs the crypto vectors, the twelve scenarios, random walks in two modes, focused tests (publication, archive reading and key loss, host integrity and membership, multiple spaces, backends, key rotation and migration, imports, network lag, the disclosure check, starting over after total device loss), a check that the trace fixtures still regenerate, and every UX figure's panel expectations. Longer walks: `NBD_WALKS=300 NBD_STEPS=40 npx vitest run test/fuzz.test.ts`. `node test/mutate.mjs --all` breaks one trust rule at a time and reports whether any test notices; every mutation should be caught. `npm run build` produces a static site in `dist/`.
 
 ## Layout
 
@@ -75,6 +87,7 @@ Both run around every scenario step and every random-walk step. `test/disclosure
 - `src/world/`: the emulated PDS (signed, timestamped commits, create-only app sessions, one-off delete authorizations, key rotation, migration), Spaces host (membership, configuration, short-lived credentials, and tampering for tests), `adversary.ts` (a malicious PDS withholding commits from, or signing forged snapshots for, chosen installations), and `World`, which adds the clock, per-installation network lag, write faults, backups, provenance for the goal check, and user and attacker actions.
 - `src/sim/`: narrated scenarios with expectations; the invariant monitor; the goal-level disclosure check; and `fuzz.ts`, random walks with shrinking over two spaces and user, attacker (takeover, devices added with the password, copied keys, recreated records), network (lag, offline, write faults), clock (backward moves), host (tampering, membership changes), infrastructure (key rotation, migration), and malicious-PDS (substitution, hidden reset, forks, rollback) actions.
 - `traces/`: shared-view walks recorded as public-repo operations plus the viewer's decisions after each step. `model/test_traces.py` replays them through `SpecClient`, so the prototype and the model must agree exactly. Regenerate with `NBD_WRITE_TRACES=1 npx vitest run test/traces.test.ts`.
+- `src/ux/`: the UX app. `model.ts` turns an installation's state into screen models, `screens.tsx` and `frames.tsx` draw them, `copy.ts` quotes the flow documents, `figures/` holds the storyboard scripts, and `wall.tsx` is the device wall. `scripts/capture.mjs` screenshots the figures with Playwright.
 - `src/ui/`: a store over one simulation (`sim.ts`), node cards that each render one installation's own state with the [TOFU flow](../ux-flows/tofu.md) copy, and the inspector (trust matrix, key holders, repos, log).
 
 ## Simplifications

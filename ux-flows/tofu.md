@@ -22,6 +22,8 @@ There is no device verification. Members share one key, so one member verifying 
 
 **Sole-holder indicator:** whenever this device is the only known holder of the space key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
+![Creating a space in TOFU: the new space form, the opened space with the sole-holder note and its Add a device link, space info saying devices aren't verified and members read the full history, and the note gone once Alice's iPad has the key](images/tofu-creating-a-space.png)
+
 
 ## Adding a member
 
@@ -38,11 +40,15 @@ Admin Alice adds Bob.
 4. **Brief locked state: "Waiting for a member's device…"** His app publishes a [key request](../core.md#key-requests). Bob can write drafts locally. Members' devices grant [in the background](#keeping-spaces-available), usually within seconds.
 5. **Unlock.** Carol's device pins Bob's device on first sight and grants; Bob's device pins Carol's device and accepts. One grant unlocks all reachable history.
 
+![Adding a member in TOFU, steps 1–3: the invite confirmation says Bob will be able to read everything already posted, Carol sees "Alice added Bob", and Bob taps Join](images/tofu-adding-a-member-1.png)
+
 **Afterwards:**
 
 6. **Device lists:** each sees the other's devices, with no badges or Verify action.
 7. **Unlinked devices:** if a new Bob device appears without a link from a Bob device already pinned, members' apps don't share keys with it, and there is no override. Device lists show "Bob has a device that isn't linked to his others," which can mean Bob skipped linking or someone is impersonating him.
 8. **Alarms:** Bob's client alarms if it finds a grant to a device he never approved, or records in his repo for devices he doesn't recognise ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to *Book club*." These are the main defense against substitution, so they are prominent.
+
+![Adding a member in TOFU, steps 4–8: Bob waits for a member's device, Carol's grant unlocks the history, Carol's list of Bob's devices shows his unlinked tablet getting no keys, and Bob's own app raises the unrecognised-device alarm](images/tofu-adding-a-member-2.png)
 
 
 ## Adding a device
@@ -58,14 +64,20 @@ Alice gets a new laptop.
 
 7. **Replacing a phone.** If the laptop replaces an old device, the app does not offer to remove the old one afterwards. Wiping or trading it in is fine. Removing it from her account right away would make members' apps that haven't caught up see a reset and wait 3 days ([replacement](../device-enrollment.md#replacement)), so if Alice removes it, the app suggests waiting a few days first.
 
+![Adding a device in TOFU: the laptop's linking code says members won't share until it's linked, the phone confirms "Link Alice's Laptop?", the iPad gets a new-device notice with Remove it, and Bob's list of Alice's devices shows three, each with the device that linked it](images/tofu-adding-a-device.png)
+
+![Replacing a phone in TOFU: the old phone links the new one, the new phone gets every key, removing the old phone asks to wait a few days first, and Bob accepts the new phone with no hold](images/tofu-replacing-a-phone.png)
+
 ## Losing every device
 
 1. **"Restore from backup"** (same keys and state) is instant. Without a backup, the app offers **Start over on this device** ([total device loss](../device-enrollment.md#total-device-loss)).
-2. **Remove the old devices.** The app asks Alice to approve removal at her provider and deletes every lost device from her account. The new device can't be linked, so this is the only way in.
+2. **Remove the old devices.** The app lists every other device on Alice's account, with its name and when it was added, and asks whether she recognises them all. If she still has one, it sends her to link from it instead, which needs no wait. If she doesn't recognise one, it says her account may have been compromised and to change her password first. It then asks her to approve removal at her provider and deletes them all. The new device can't be linked, so this is the only way in. It doesn't raise "A device you don't recognise" for her old devices, since it can't tell them from anyone else's; the list is where she checks them. Keys her old devices received appear in member access as received before she started over. A device still on her account after the removal, or added later, raises the alarm ([auditing](../audit.md#direct-sync)).
 3. **People who knew Alice wait at least 72 hours.** Once no old devices remain, the app says: "People who already know you will wait at least 3 days before sharing with this device. This gives you time to stop someone who got into your account." It can't promise a time, or that nobody shares sooner: each member's app starts its own wait when it first sees the new device, so an app that was offline starts later, and a member whose app never knew Alice sees an ordinary first contact, doesn't wait, and can unlock a space for her at once ([security goals](../security-goals.md)). Each space shows its own status ("Waiting for members", then "Unlocked"). Members who knew Alice see "Alice reset her devices. This device will share with her new device from Friday," with the time their own app computed; their app can't shorten its own wait.
 4. **History mostly returns** after the hold: members re-grant keys they hold. Messages only Alice's lost devices held are gone.
 5. **If Alice didn't do this,** any old device of hers that is still running alarms as soon as it sees itself removed: "This device was removed from your account. If this wasn't you, change your password at your provider and remove devices you don't recognise." Removing the new device there cancels the hold ([re-enrollment](../device-enrollment.md#re-enrollment)).
 6. **Prevention still matters.** The app prompts users with one device to add a second device or turn on backup, so recovery doesn't need the wait.
+
+![Losing every device in TOFU: the new phone lists her old devices, with when each was added, and asks whether she recognises them all before removing them, then explains the 3-day wait with each space's status, Bob sees the reset line with the day his app computed, and Alice's old iPad alarms when it sees itself removed](images/tofu-losing-every-device.png)
 
 ## Creating a space from an existing space
 
@@ -81,6 +93,8 @@ NBD has no parent/child relationship; each space is cryptographically independen
 2. **Creator:** as in [creating a space](#creating-a-space).
 3. **Each member taps Join once;** existing pins carry over, so grants arrive as soon as their devices request them.
 
+![Creating a space from an existing space in TOFU: "New space from Book club…" in the space menu, a pre-filled form noting messages aren't copied, and Bob joining with one tap](images/tofu-creating-from-existing.png)
+
 
 ## Removing a member or device
 
@@ -88,6 +102,8 @@ NBD has no parent/child relationship; each space is cryptographically independen
 2. **Removing a device takes two steps, sign-out first.** "Remove device" sends Alice to her provider's settings to sign *Alice's Laptop* out, after which its access ends within minutes ([ending access](../core.md#ending-access)) and it can no longer write to her account. The app then asks her to approve removal at her provider and deletes the laptop from her account, which [revokes](../device-enrollment.md#device-revocations) it; new keys stop as soon as members' apps see the deletion. The app confirms the laptop stays deleted, and deletes it again with a warning if it comes back ([removal order](../device-enrollment.md#revocation-authority)). The confirmation adds: "If someone may know your password, change it." The app's everyday access can't delete devices, so a stolen device can't remove Alice's others without her password or a browser on it that is still signed in to her provider.
 3. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
 4. **No move offered.** Removing, plus signing a device out, is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
+
+![Removing a member or device in TOFU: "Carol was removed" in the timeline, space info saying her devices still hold the key, signing the lost iPad out at the provider, and the device list after removal suggesting a password change](images/tofu-removing.png)
 
 ## Keeping spaces available
 

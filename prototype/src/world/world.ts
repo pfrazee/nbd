@@ -158,7 +158,7 @@ export class World implements Network {
   /** Install the app. With `link`, the new device is approved by `link` and
    * pairs with it; without, it publishes its record alone (first device, or
    * an unlinked one). */
-  install(did: Did, deviceName: string, opts: { link?: Installation; clockOffset?: number; keys?: StolenKeys } = {}): Installation {
+  install(did: Did, deviceName: string, opts: { link?: Installation; clockOffset?: number; keys?: StolenKeys; startOver?: boolean } = {}): Installation {
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`), opts.clockOffset ?? 0, opts.keys);
     inst.sessionId = this.pdsOf.get(did)!.login(did, "app", id).id;
@@ -179,6 +179,7 @@ export class World implements Network {
       inst.pairFrom(opts.link);
       this.note(`${opts.link.id} linked ${id}`);
     } else {
+      if (opts.startOver) inst.beginStartOver();
       inst.publishOwnRecord();
       this.trace?.push({ op: "add", b: tb(inst.binding) });
       this.note(`${id} installed`);
@@ -189,6 +190,19 @@ export class World implements Network {
   }
 
   // ---- user and attacker actions ----------------------------------------------------
+
+  /** The user, starting over on `inst`, removes every device on its list at
+   * their PDS, then the app treats any that remain or appear as alarms
+   * (device-enrollment.md#total-device-loss). */
+  finishStartOver(inst: Installation): void {
+    for (const b of inst.trust.state.startOver?.list?.values() ?? []) {
+      const other = [...this.installations.values()].find((i) => i.binding.device.deviceId === b.device.deviceId);
+      this.removeDevice(other ?? b);
+    }
+    inst.finishStartOver();
+    this.note(`${inst.id} finished starting over`);
+    this.settle();
+  }
 
   /** The user removes a device at their PDS: end its session (unless they
    * can't identify it), then delete its record with a one-off delete

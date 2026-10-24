@@ -50,6 +50,6 @@ describe("membership", () => {
     expect(tablet.spaces.get(space)!.key).toBeTruthy();
     for (const [id, a] of pins) expect(alice.trust.state.accepted.get(id)).toEqual(a);
     expect(alice.trust.state.notices.filter((n) => n.kind === "membership").map((n) => n.text.replace(/did:plc:/g, "")))
-      .toEqual(["bob was removed from Club", "bob was added to Club"]);
+      .toEqual(["bob was added to Club", "bob was removed from Club", "bob was added to Club"]);
   });
 });

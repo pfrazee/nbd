@@ -15,7 +15,9 @@ export const REENROLL_HOLD = 72; // hours
 
 export type Hold = { candidate: string[]; bindings: Binding[]; credited: number; checkpoint: number };
 export type Alarm = { at: number; kind: string; text: string; subject?: Did };
-export type Notice = { at: number; kind: string; text: string };
+/** `about`, `by`, `account`, and `until` are structured details for
+ * interfaces; `text` is the same notice in words. */
+export type Notice = { at: number; kind: string; text: string; about?: Binding; by?: Binding; account?: Did; until?: number };
 
 /** What this installation last verified about one account's public repo. */
 export type AccountView = {
@@ -25,6 +27,11 @@ export type AccountView = {
   present: Map<string, Binding>; // deviceId -> binding
   approvals: Approval[];
 };
+
+/** Starting over after total device loss (device-enrollment.md#total-device-loss).
+ * The account's other bindings found on the first sync are the list the user
+ * checks and removes, not alarms; `done` once they have removed them. */
+export type StartOver = { list: Map<string, Binding> | null; done: boolean };
 
 export type TrustState = {
   /** `rev`: the repo revision at which the binding was known present; only
@@ -38,12 +45,13 @@ export type TrustState = {
   noticed: Set<string>;
   alarms: Alarm[];
   notices: Notice[];
+  startOver: StartOver | null;
 };
 
 export function emptyTrust(): TrustState {
   return {
     accepted: new Map(), revoked: new Map(), holds: new Map(), candidatesSeen: new Map(), views: new Map(),
-    approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [],
+    approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [], startOver: null,
   };
 }
 
@@ -58,6 +66,7 @@ export function cloneTrust(t: TrustState): TrustState {
     noticed: new Set(t.noticed),
     alarms: [...t.alarms],
     notices: [...t.notices],
+    startOver: t.startOver && { list: t.startOver.list && new Map(t.startOver.list), done: t.startOver.done },
   };
 }
 
@@ -255,7 +264,8 @@ export class Trust {
       held = { candidate: key, bindings: cand, credited: 0, checkpoint: this.localNow() };
       st.holds.set(account, held);
       this.notice(`hold:${account}:${key.join()}`, "reset",
-        `${account} reset their devices. This device will share with their new device from ${fmtHour(this.localNow() + REENROLL_HOLD)}.`);
+        `${account} reset their devices. This device will share with their new device from ${fmtHour(this.localNow() + REENROLL_HOLD)}.`,
+        { account, until: this.localNow() + REENROLL_HOLD, about: cand[0] });
     }
     if (held.credited >= REENROLL_HOLD) {
       for (const b of cand) st.accepted.set(bindingId(b), { binding: b, evidence: "re-enrolled" });
@@ -268,19 +278,32 @@ export class Trust {
   private ownAccount(account: Did): void {
     const st = this.state;
     const view = st.views.get(account)!;
+    const so = st.startOver;
+    if (so && !so.list) so.list = new Map([...view.present.values()].filter((b) => !sameBinding(b, this.own)).map((b) => [bindingId(b), b]));
     for (const b of view.present.values()) {
       const id = bindingId(b);
       if (sameBinding(b, this.own) || st.approvedByMe.has(id)) continue;
       if (this.isAccepted(b)) {
         const by = view.approvals.find((a) => sameBinding(a.target, b))?.signer;
-        this.notice(`added:${id}`, "own-added", `New device ${label(b)}${by ? `, added from ${label(by)}` : ""}. Not you? Remove it.`);
-      } else {
+        this.notice(`added:${id}`, "own-added", `New device ${label(b)}${by ? `, added from ${label(by)}` : ""}. Not you? Remove it.`, { about: b, by });
+      } else if (!(so && !so.done && so.list!.has(id))) {
+        // On a start-over list until the user has removed it; after that, or
+        // for anything not on the list, an unaccepted binding alarms.
         this.alarmOnce(`unapproved:${id}`, "unapproved-own", `A device you don't recognise (${label(b)}) is on your account.`);
       }
     }
     for (const [id, b] of st.revoked) {
-      if (b.account === account && !sameBinding(b, this.own)) this.notice(`removed:${id}`, "own-removed", `Device ${label(b)} was removed from your account.`);
+      if (b.account === account && !sameBinding(b, this.own)) this.notice(`removed:${id}`, "own-removed", `Device ${label(b)} was removed from your account.`, { about: b });
     }
+  }
+
+  /** Whether a grant to this own binding is start-over history rather than a
+   * detection (audit.md#direct-sync): the binding is on the removal list, and
+   * either the user hasn't finished removing or it is verified absent. */
+  startOverHistory(b: Binding): boolean {
+    const so = this.state.startOver;
+    if (!so?.list?.has(bindingId(b))) return false;
+    return !so.done || !this.state.views.get(b.account)?.present.has(b.device.deviceId);
   }
 
   reconcileHolds(): void {
@@ -336,10 +359,10 @@ export class Trust {
     this.alarm(kind, text, subject);
   }
 
-  notice(key: string, kind: string, text: string): void {
+  notice(key: string, kind: string, text: string, details: Omit<Notice, "at" | "kind" | "text"> = {}): void {
     if (this.state.noticed.has(key)) return;
     this.state.noticed.add(key);
-    this.state.notices.push({ at: this.localNow(), kind, text });
+    this.state.notices.push({ at: this.localNow(), kind, text, ...details });
   }
 
   raise(key: string, kind: string, text: string, subject?: Did): void {
