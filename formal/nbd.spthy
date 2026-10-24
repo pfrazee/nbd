@@ -1,8 +1,8 @@
-theory PEEP
+theory NBD
 begin
 
 /*
- * Symbolic model of PEEP's grants, device approvals, and key compromise.
+ * Symbolic model of NBD's grants, device approvals, and key compromise.
  * See README.md for the adversary, the abstractions, and how each lemma
  * maps to security-goals.md.
  *

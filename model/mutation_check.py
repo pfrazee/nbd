@@ -1,5 +1,5 @@
 """Mutation check: break one rule of SpecClient at a time and confirm a
-test in test_peep_trust.py or test_walks.py fails.
+test in test_nbd_trust.py or test_walks.py fails.
 
 Run: python3 -I model/mutation_check.py
 MISSED means no test notices that rule being broken.
@@ -67,14 +67,14 @@ MUTATIONS = {
 
 
 def main():
-    base = open(os.path.join(SRC, "peep_trust.py")).read()
+    base = open(os.path.join(SRC, "nbd_trust.py")).read()
     head, spec = base.split(SPEC, 1)
     for name, (old, new) in MUTATIONS.items():
         assert old in spec, name
         d = tempfile.mkdtemp()
-        for t in ("test_peep_trust.py", "test_walks.py"):
+        for t in ("test_nbd_trust.py", "test_walks.py"):
             shutil.copy(os.path.join(SRC, t), d)
-        with open(os.path.join(d, "peep_trust.py"), "w") as f:
+        with open(os.path.join(d, "nbd_trust.py"), "w") as f:
             f.write(head + SPEC + spec.replace(old, new, 1))
         r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d],
                            capture_output=True, text=True)

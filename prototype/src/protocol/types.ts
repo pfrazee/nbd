@@ -1,5 +1,5 @@
 // Protocol values (device-enrollment.md, core.md). Field names follow the
-// specification; collection names live under com.example.peep.
+// specification; collection names live under com.example.nbd.
 
 import { type Cbor, ref } from "./encoding";
 
@@ -24,7 +24,7 @@ export type Configuration = {
   kind: "configuration";
   space: string;
   revision: number;
-  grantProfile: "peep-hpke-v1";
+  grantProfile: "nbd-hpke-v1";
   keyId: string;
   commitment: Uint8Array;
   maxEncryptedBlobBytes: number;
@@ -53,7 +53,7 @@ export type SpaceKeyGrant = {
     issuerMembership: string;
     evidence: string;
   };
-  grantProfile: "peep-hpke-v1";
+  grantProfile: "nbd-hpke-v1";
   encapsulation: Uint8Array;
   ciphertext: Uint8Array;
   issuer: DeviceIdentity;
@@ -66,7 +66,7 @@ export type SpaceKeyGrant = {
 export type Evidence = { version: 1; space: string; blocks: Cbor[] };
 
 export type Envelope = {
-  $type: "com.example.peep.envelope";
+  $type: "com.example.nbd.envelope";
   format: 1;
   keyId: string;
   nonce: Uint8Array;
@@ -74,7 +74,7 @@ export type Envelope = {
   blobs: Cbor[];
 };
 
-export const NS = "com.example.peep";
+export const NS = "com.example.nbd";
 export const COL = {
   device: `${NS}.device`,
   approval: `${NS}.approval`,
@@ -94,7 +94,7 @@ const ids = new WeakMap<Binding, string>();
 export function bindingId(b: Binding): string {
   let id = ids.get(b);
   if (id === undefined) {
-    id = ref(["peep/device-binding", 1, asCbor(b)]);
+    id = ref(["nbd/device-binding", 1, asCbor(b)]);
     ids.set(b, id);
   }
   return id;

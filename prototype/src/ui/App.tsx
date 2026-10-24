@@ -35,7 +35,7 @@ function Toolbar() {
   const steps = run.scenario.steps.length;
   return (
     <header className="toolbar">
-      <h1>PEEP prototype</h1>
+      <h1>NBD prototype</h1>
       <select value={run.scenario.id} onChange={(e) => sim.load(e.target.value)}>
         {sim.scenarios.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
       </select>

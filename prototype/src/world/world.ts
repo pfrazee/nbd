@@ -14,7 +14,7 @@ import { Pds, type Session } from "./pds";
 
 export type LogEntry = { at: number; text: string };
 
-/** Public-repo operations in the Python model's terms (model/peep_trust.py
+/** Public-repo operations in the Python model's terms (model/nbd_trust.py
  * World): bindings are [account, deviceId]. */
 export type TraceBinding = [string, string];
 export type TraceOp =
@@ -71,7 +71,7 @@ export class World implements Network {
   trace: TraceOp[] | null = null;
   private counter = 0;
 
-  constructor(seed = "peep") {
+  constructor(seed = "nbd") {
     this.rng = Rng.fromLabel(seed);
   }
 
@@ -315,7 +315,7 @@ export class World implements Network {
   }
 
   /** Move an installation's clock. Forward jumps while it is not running
-   * shorten its holds, which PEEP's goals exclude; scenarios and the walker
+   * shorten its holds, which NBD's goals exclude; scenarios and the walker
    * move clocks backward or set distinct clock domains. */
   skew(inst: Installation, hours: number): void {
     inst.clockOffset += hours;

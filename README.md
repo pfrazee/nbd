@@ -1,4 +1,4 @@
-# PEEP: Paul's End-to-end Encryption Proposal
+# NBD: No Big Deal Encryption
 
 End-to-end encryption for atproto Spaces. **Discussion draft:** baseline decisions are specified; implementation and independent validation remain outstanding.
 
@@ -17,7 +17,7 @@ Read the specifications below:
 
 | Document | Defines |
 | --- | --- |
-| [Security goals](security-goals.md) | What PEEP guarantees, what it deliberately does not, and the bar for review. |
+| [Security goals](security-goals.md) | What NBD guarantees, what it deliberately does not, and the bar for review. |
 | [Core](core.md) | Trust boundaries, [protocol conventions](core.md#protocol-conventions), [key grants](core.md#key-grants), [content encryption](core.md#content-encryption), and the [space key lifecycle](core.md#space-key-lifecycle). |
 | [Device enrollment](device-enrollment.md) | Bindings, [trust on first use](device-enrollment.md#local-trust), [approvals](device-enrollment.md#approvals), [revocation](device-enrollment.md#revocation-and-freshness), [recovery](device-enrollment.md#recovery), and [platform notes](device-enrollment.md#platform-notes). |
 | [Auditing](audit.md) | Evidence, publication, retention, historical validation, and sync. |

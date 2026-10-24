@@ -1,4 +1,4 @@
-# PEEP: Grant Publication and Auditing
+# NBD: Grant Publication and Auditing
 
 The signed [grant](core.md#grant-format) is the audit record. Publishing it in the issuer's own space repo lets an affected account discover substitution through another PDS: if Bob grants to keys forged by Alice's PDS, Alice can obtain Bob's grant and compare its exact recipient binding with the devices she has approved.
 

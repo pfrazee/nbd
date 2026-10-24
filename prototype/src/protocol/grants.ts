@@ -1,5 +1,5 @@
 // Key grants (core.md#key-grants): AuthorizeExchange G1-G5, grant
-// construction under peep-hpke-v1, and AcceptGrant A1-A7. Evidence is
+// construction under nbd-hpke-v1, and AcceptGrant A1-A7. Evidence is
 // simplified to the exact blocks the grant references plus the approvals and
 // commits each side relied on.
 
@@ -28,7 +28,7 @@ export type HostView = {
 };
 
 export function commitment(space: string, keyId: string, key: Uint8Array): Uint8Array {
-  return digest(cbor(["peep/key", 1, space, keyId, key]));
+  return digest(cbor(["nbd/key", 1, space, keyId, key]));
 }
 
 function eq(a: Uint8Array, b: Uint8Array): boolean {
@@ -46,7 +46,7 @@ export function authorizeExchange(
   // G1: host evidence.
   const c = host.config;
   if (!c) return fail("INCOMPLETE", "no authenticated configuration");
-  if (c.space !== space || c.grantProfile !== "peep-hpke-v1") return fail("INVALID", "configuration mismatch");
+  if (c.space !== space || c.grantProfile !== "nbd-hpke-v1") return fail("INVALID", "configuration mismatch");
   const mi = host.memberships.get(issuer.account);
   const mr = host.memberships.get(recipient.account);
   if (!mi || !mr) return fail("INCOMPLETE", "membership decision unavailable");
@@ -92,16 +92,16 @@ export function buildGrant(opts: {
       issuerMembership: ref(asCbor(opts.issuerMembership)),
       evidence: ref(asCbor(evidence)),
     },
-    grantProfile: "peep-hpke-v1" as const,
+    grantProfile: "nbd-hpke-v1" as const,
     issuer: identity(issuer),
     issuerKeyId: fingerprint("Ed25519", issuer.device.authPubkey),
   };
   const H = grantHeader(header);
-  const info = cbor(["peep/grant-info", 1, H]);
-  const aad = cbor(["peep/grant-aad", 1, H]);
+  const info = cbor(["nbd/grant-info", 1, H]);
+  const aad = cbor(["nbd/grant-aad", 1, H]);
   const sealed = hpkeSealBase(recipient.device.encryptPubkey, info, aad, key, encryptionKeyPair(opts.rng));
   const unsigned = { ...header, encapsulation: sealed.enc, ciphertext: sealed.ciphertext };
-  const proof = sign(opts.issuerSign.secretKey, ["peep/grant-signature", 1, asCbor(unsigned)]);
+  const proof = sign(opts.issuerSign.secretKey, ["nbd/grant-signature", 1, asCbor(unsigned)]);
   return { grant: { ...unsigned, proof }, evidence };
 }
 
@@ -116,7 +116,7 @@ export function acceptGrant(opts: {
 }): Decision & { key?: Uint8Array; issuer?: Binding } {
   const { grant: g, evidence: e, own, trust, host } = opts;
   // A1: decode and match.
-  if (g.version !== 1 || g.grantProfile !== "peep-hpke-v1" || g.space !== opts.space) return fail("INVALID", "grant fields");
+  if (g.version !== 1 || g.grantProfile !== "nbd-hpke-v1" || g.space !== opts.space) return fail("INVALID", "grant fields");
   if (g.recipient.account !== own.account || g.recipient.deviceId !== own.device.deviceId
     || g.recipientKeyId !== fingerprint("X25519", own.device.encryptPubkey)) return fail("INVALID", "not addressed to this device");
   // A2: evidence and signature.
@@ -131,7 +131,7 @@ export function acceptGrant(opts: {
   if (!sameBinding(rb, own)) return fail("INVALID", "recipient binding mismatch");
   if (ib.account !== g.issuer.account || ib.device.deviceId !== g.issuer.deviceId
     || fingerprint("Ed25519", ib.device.authPubkey) !== g.issuerKeyId) return fail("INVALID", "issuer binding mismatch");
-  if (!verify(g.proof, ["peep/grant-signature", 1, asCbor(withoutProof(g))], ib.device.authPubkey)) return fail("INVALID", "bad issuer signature");
+  if (!verify(g.proof, ["nbd/grant-signature", 1, asCbor(withoutProof(g))], ib.device.authPubkey)) return fail("INVALID", "bad issuer signature");
   // A3: key ID against the authenticated configuration.
   if (!host.config || host.config.keyId !== g.keyId || cfg.keyId !== g.keyId) return fail("INVALID", "key ID mismatch");
   // A4: recorded basis, then current authorization.
@@ -147,8 +147,8 @@ export function acceptGrant(opts: {
   const { encapsulation, ciphertext, proof: _p, ...header } = g;
   let key: Uint8Array;
   try {
-    key = hpkeOpenBase(opts.ownEnc, encapsulation, cbor(["peep/grant-info", 1, asCbor(header)]),
-      cbor(["peep/grant-aad", 1, asCbor(header)]), ciphertext);
+    key = hpkeOpenBase(opts.ownEnc, encapsulation, cbor(["nbd/grant-info", 1, asCbor(header)]),
+      cbor(["nbd/grant-aad", 1, asCbor(header)]), ciphertext);
   } catch {
     return fail("INVALID", "HPKE open failed");
   }
@@ -158,5 +158,5 @@ export function acceptGrant(opts: {
 }
 
 export function keyRequestPayload(r: object): unknown[] {
-  return ["peep/key-request", 1, asCbor(r)];
+  return ["nbd/key-request", 1, asCbor(r)];
 }

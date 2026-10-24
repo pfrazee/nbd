@@ -1,4 +1,4 @@
-"""Executable model of PEEP device trust.
+"""Executable model of NBD device trust.
 
 `SpecClient` models the rules in device-enrollment.md: trust on first
 use, approvals afterwards, revocation by observed absence, and a

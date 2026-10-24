@@ -1,6 +1,6 @@
-# PEEP prototype
+# NBD prototype
 
-Several installations of several accounts running PEEP against an emulated PDS and Spaces host, in one deterministic in-memory simulation ([TODO-18](../TODOs.md#todo-18)). Unlike the [Python model](../model/README.md), each installation sees only what it verifies from repos when it syncs, so partial views and delayed observations are real. It is informative: where it and the specification disagree, one of them is wrong.
+Several installations of several accounts running NBD against an emulated PDS and Spaces host, in one deterministic in-memory simulation ([TODO-18](../TODOs.md#todo-18)). Unlike the [Python model](../model/README.md), each installation sees only what it verifies from repos when it syncs, so partial views and delayed observations are real. It is informative: where it and the specification disagree, one of them is wrong.
 
 ## For reviewers
 
@@ -67,14 +67,14 @@ Both run around every scenario step and every random-walk step. `test/disclosure
 
 ## Running the checks
 
-`npm test` runs the crypto vectors, the twelve scenarios, random walks in two modes, focused tests (publication, archive reading and key loss, host integrity and membership, multiple spaces, backends, key rotation and migration, imports, network lag, the disclosure check), and a check that the trace fixtures still regenerate. Longer walks: `PEEP_WALKS=300 PEEP_STEPS=40 npx vitest run test/fuzz.test.ts`. `node test/mutate.mjs --all` breaks one trust rule at a time and reports whether any test notices; every mutation should be caught. `npm run build` produces a static site in `dist/`.
+`npm test` runs the crypto vectors, the twelve scenarios, random walks in two modes, focused tests (publication, archive reading and key loss, host integrity and membership, multiple spaces, backends, key rotation and migration, imports, network lag, the disclosure check), and a check that the trace fixtures still regenerate. Longer walks: `NBD_WALKS=300 NBD_STEPS=40 npx vitest run test/fuzz.test.ts`. `node test/mutate.mjs --all` breaks one trust rule at a time and reports whether any test notices; every mutation should be caught. `npm run build` produces a static site in `dist/`.
 
 ## Layout
 
-- `src/protocol/`: the client, free of UI code. `crypto.ts` composes the `peep-hpke-v1` HPKE profile from noble primitives, checked against the RFC 9180 test vector for that suite; `trust.ts` ports `SpecClient` (first use, approvals with the live-binding rule, revocation, holds); `grants.ts` implements G1–G5 and A1–A7, including archive mode; `publish.ts` and `installation.ts` implement the publication state machine P1–P8; `installation.ts` runs the sync loop and pins every member of its spaces (a lazy mode exists only to show what eager pinning prevents).
+- `src/protocol/`: the client, free of UI code. `crypto.ts` composes the `nbd-hpke-v1` HPKE profile from noble primitives, checked against the RFC 9180 test vector for that suite; `trust.ts` ports `SpecClient` (first use, approvals with the live-binding rule, revocation, holds); `grants.ts` implements G1–G5 and A1–A7, including archive mode; `publish.ts` and `installation.ts` implement the publication state machine P1–P8; `installation.ts` runs the sync loop and pins every member of its spaces (a lazy mode exists only to show what eager pinning prevents).
 - `src/world/`: the emulated PDS (signed, timestamped commits, create-only app sessions, one-off delete authorizations, key rotation, migration), Spaces host (membership, configuration, short-lived credentials, and tampering for tests), `adversary.ts` (a malicious PDS withholding commits from, or signing forged snapshots for, chosen installations), and `World`, which adds the clock, per-installation network lag, write faults, backups, provenance for the goal check, and user and attacker actions.
 - `src/sim/`: narrated scenarios with expectations; the invariant monitor; the goal-level disclosure check; and `fuzz.ts`, random walks with shrinking over two spaces and user, attacker (takeover, devices added with the password, copied keys, recreated records), network (lag, offline, write faults), clock (backward moves), host (tampering, membership changes), infrastructure (key rotation, migration), and malicious-PDS (substitution, hidden reset, forks, rollback) actions.
-- `traces/`: shared-view walks recorded as public-repo operations plus the viewer's decisions after each step. `model/test_traces.py` replays them through `SpecClient`, so the prototype and the model must agree exactly. Regenerate with `PEEP_WRITE_TRACES=1 npx vitest run test/traces.test.ts`.
+- `traces/`: shared-view walks recorded as public-repo operations plus the viewer's decisions after each step. `model/test_traces.py` replays them through `SpecClient`, so the prototype and the model must agree exactly. Regenerate with `NBD_WRITE_TRACES=1 npx vitest run test/traces.test.ts`.
 - `src/ui/`: a store over one simulation (`sim.ts`), node cards that each render one installation's own state with the [TOFU flow](../ux-flows/tofu.md) copy, and the inspector (trust matrix, key holders, repos, log).
 
 ## Simplifications

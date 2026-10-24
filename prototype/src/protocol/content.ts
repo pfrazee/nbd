@@ -23,7 +23,7 @@ export function defaultPadding(n: number, limit = 1 << 20): number {
 }
 
 function recordAad(space: string, author: string, collection: string, rkey: string, keyId: string, blobs: Cbor[]): Uint8Array {
-  return cbor(["peep/record", 1, space, author, collection, rkey, keyId, blobs]);
+  return cbor(["nbd/record", 1, space, author, collection, rkey, keyId, blobs]);
 }
 
 export function encryptRecord(opts: {
@@ -33,14 +33,14 @@ export function encryptRecord(opts: {
   const frame = cbor([payload, new Uint8Array(defaultPadding(payload.length))]);
   const nonce = opts.rng.bytes(24);
   const ciphertext = xseal(opts.key, nonce, recordAad(opts.space, opts.author, opts.collection, opts.rkey, opts.keyId, []), frame);
-  return { $type: "com.example.peep.envelope", format: 1, keyId: opts.keyId, nonce, ciphertext, blobs: [] };
+  return { $type: "com.example.nbd.envelope", format: 1, keyId: opts.keyId, nonce, ciphertext, blobs: [] };
 }
 
 export function decryptRecord(opts: {
   key: Uint8Array; envelope: Envelope; space: string; author: string; collection: string; rkey: string;
 }): Cbor {
   const e = opts.envelope;
-  if (e.$type !== "com.example.peep.envelope" || e.format !== 1 || e.nonce.length !== 24 || e.ciphertext.length < 19)
+  if (e.$type !== "com.example.nbd.envelope" || e.format !== 1 || e.nonce.length !== 24 || e.ciphertext.length < 19)
     throw new Error("envelope: malformed");
   const frame = decodeCbor(xopen(opts.key, e.nonce, recordAad(opts.space, opts.author, opts.collection, opts.rkey, e.keyId, e.blobs), e.ciphertext));
   if (!Array.isArray(frame) || frame.length !== 2 || !(frame[0] instanceof Uint8Array) || !(frame[1] instanceof Uint8Array))

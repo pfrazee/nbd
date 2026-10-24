@@ -6,7 +6,7 @@ Run: python3 -I -m unittest discover -s model
 
 import unittest
 
-from peep_trust import REENROLL_HOLD, Binding, SpecClient, World
+from nbd_trust import REENROLL_HOLD, Binding, SpecClient, World
 
 COMMUNITY = "community"
 PRIVATE = "private"

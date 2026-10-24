@@ -2,7 +2,7 @@
 // actions, with the invariant monitor and extra checks after every step.
 // Actions are recorded concretely so a failing walk replays and shrinks.
 //
-// Shared-view walks restrict themselves to what model/peep_trust.py can
+// Shared-view walks restrict themselves to what model/nbd_trust.py can
 // express (public-repo writes and elapsed time, no lag or forged views) and
 // record a trace of the viewer's trust decisions for model/replay_traces.py.
 
@@ -94,13 +94,13 @@ export class Walk {
       case "forget":
         return ["forget", pick(insts).id, rng.int(this.spaces.length)];
       case "fault":
-        return ["fault", pick(insts).id, pick(["reject", "lost-ack"]), 1 + rng.int(3), pick(["com.example.peep.grant", "com.example.peep.evidence", "com.example.peep.keyRequest", ""])];
+        return ["fault", pick(insts).id, pick(["reject", "lost-ack"]), 1 + rng.int(3), pick(["com.example.nbd.grant", "com.example.nbd.evidence", "com.example.nbd.keyRequest", ""])];
       case "rotate":
         return ["rotate", acct];
       case "tamper":
         return ["tamper", rng.int(this.spaces.length)];
       case "migrate": {
-        const present = [...w.pdsOf.get(did(acct))!.repo(did(acct)).records.keys()].filter((k) => k.startsWith("com.example.peep.device/"));
+        const present = [...w.pdsOf.get(did(acct))!.repo(did(acct)).records.keys()].filter((k) => k.startsWith("com.example.nbd.device/"));
         const drop = rng.int(2) === 0 && present.length ? pick(present).split("/")[1] : "";
         return ["migrate", acct, `pds.m${this.name()}.example`, drop];
       }
@@ -116,7 +116,7 @@ export class Walk {
       }
       case "recreate": {
         // A removed device, or someone with the password, republishes its record.
-        const gone = insts.filter((i) => !w.pdsOf.get(i.did)!.repo(i.did).records.has(`com.example.peep.device/${i.binding.device.deviceId}`));
+        const gone = insts.filter((i) => !w.pdsOf.get(i.did)!.repo(i.did).records.has(`com.example.nbd.device/${i.binding.device.deviceId}`));
         return gone.length ? ["recreate", pick(gone).id] : ["wait", 1];
       }
       case "attackerAdd":

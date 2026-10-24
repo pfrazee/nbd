@@ -69,9 +69,9 @@ describe("encoding", () => {
 describe("signatures and rng", () => {
   it("signs domain-separated values", () => {
     const k = signingKeyPair(Rng.fromLabel("t"));
-    const sig = sign(k.secretKey, ["peep/test", 1, "hello"]);
-    expect(verify(sig, ["peep/test", 1, "hello"], k.publicKey)).toBe(true);
-    expect(verify(sig, ["peep/test", 1, "hellp"], k.publicKey)).toBe(false);
+    const sig = sign(k.secretKey, ["nbd/test", 1, "hello"]);
+    expect(verify(sig, ["nbd/test", 1, "hello"], k.publicKey)).toBe(true);
+    expect(verify(sig, ["nbd/test", 1, "hellp"], k.publicKey)).toBe(false);
   });
 
   it("replays from a seed", () => {

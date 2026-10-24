@@ -2,7 +2,7 @@
 // single-root rule, approvals D1-D3 with the live-binding rule, revocation
 // by verified absence, and re-enrollment holds credited in this
 // installation's own clock domain. A port of SpecClient in
-// model/peep_trust.py, driven by this installation's verified snapshots
+// model/nbd_trust.py, driven by this installation's verified snapshots
 // rather than a shared world.
 
 import { verify } from "./crypto";
@@ -62,7 +62,7 @@ export function cloneTrust(t: TrustState): TrustState {
 }
 
 export function approvalPayload(a: Omit<Approval, "proof">): unknown[] {
-  return ["peep/device-approval", 1, asCbor(a)];
+  return ["nbd/device-approval", 1, asCbor(a)];
 }
 
 function isBinding(x: unknown, account: Did): x is Binding {

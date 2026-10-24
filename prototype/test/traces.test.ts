@@ -1,5 +1,5 @@
 // Shared-view traces for the Python model (model/test_traces.py). With
-// PEEP_WRITE_TRACES=1 this writes fresh fixtures; otherwise it checks that
+// NBD_WRITE_TRACES=1 this writes fresh fixtures; otherwise it checks that
 // each committed fixture still regenerates identically from its seed, so
 // the fixtures cannot drift from the prototype.
 
@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type Trace, walk } from "../src/sim/fuzz";
 
 const DIR = join(__dirname, "..", "traces");
-const COUNT = Number(process.env.PEEP_TRACES ?? 40);
+const COUNT = Number(process.env.NBD_TRACES ?? 40);
 const STEPS = 30;
 
 function generate(seed: string): Trace {
@@ -18,7 +18,7 @@ function generate(seed: string): Trace {
 }
 
 describe("shared-view traces", () => {
-  if (process.env.PEEP_WRITE_TRACES) {
+  if (process.env.NBD_WRITE_TRACES) {
     it("writes fixtures", () => {
       if (!existsSync(DIR)) mkdirSync(DIR);
       for (let i = 0; i < COUNT; i++) {

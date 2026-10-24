@@ -1,7 +1,7 @@
 import { walk } from "../src/sim/fuzz";
 
-const WALKS = Number(process.env.PEEP_WALKS ?? 20);
-const STEPS = Number(process.env.PEEP_STEPS ?? 30);
+const WALKS = Number(process.env.NBD_WALKS ?? 20);
+const STEPS = Number(process.env.NBD_STEPS ?? 30);
 
 describe.each([
   ["shared view", true],

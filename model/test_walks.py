@@ -32,7 +32,7 @@ Invariants:
 - Approval order does not change the accepted set.
 
 Run: python3 -I -m unittest discover -s model
-More walks: PEEP_WALKS=5000 PEEP_STEPS=80 python3 -I -m unittest discover -s model -p test_walks.py
+More walks: NBD_WALKS=5000 NBD_STEPS=80 python3 -I -m unittest discover -s model -p test_walks.py
 """
 
 import os
@@ -40,11 +40,11 @@ import random
 import unittest
 from typing import Dict, List, Optional, Set
 
-from peep_trust import REENROLL_HOLD, Approval, Binding, SpecClient, World
+from nbd_trust import REENROLL_HOLD, Approval, Binding, SpecClient, World
 
 ACCOUNTS = ("alice", "bob", "carol")
-WALKS = int(os.environ.get("PEEP_WALKS", "1500"))
-STEPS = int(os.environ.get("PEEP_STEPS", "60"))
+WALKS = int(os.environ.get("NBD_WALKS", "1500"))
+STEPS = int(os.environ.get("NBD_STEPS", "60"))
 WAITS = (0.5, 1.0, 24.0, 48.0, 71.0, 72.0, 100.0)
 SLOTS = 3
 EPS = 1e-9

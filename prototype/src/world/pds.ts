@@ -2,7 +2,7 @@
 // monotonic revision. An enumeration is the whole record map at a signed
 // commit (no MST: presence and absence are proven by the signed snapshot).
 //
-// Sessions model OAuth scopes as PEEP requests them
+// Sessions model OAuth scopes as NBD requests them
 // (device-enrollment.md#revocation-authority): app sessions are create-only
 // for device and approval records; deleting a device record needs a
 // short-lived delete authorization or a broad credential.
@@ -146,7 +146,7 @@ export class Pds {
     return [...this.sessions.values()].filter((s) => s.did === did && s.alive);
   }
 
-  /** Apply operations in one commit. Permission checks follow PEEP's scopes. */
+  /** Apply operations in one commit. Permission checks follow NBD's scopes. */
   write(sessionId: string, ops: WriteOp[], space?: string): Snapshot {
     const s = this.sessions.get(sessionId);
     if (!s || !s.alive) throw new Error("pds: session ended");

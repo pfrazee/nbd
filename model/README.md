@@ -1,4 +1,4 @@
-# PEEP trust model
+# NBD trust model
 
 An executable model of [local trust](../device-enrollment.md#local-trust) in Device Enrollment ([TODO-17](../TODOs.md#todo-17)), with adversarial tests. It is informative: where the model and the prose disagree, one of them is wrong and should be fixed.
 
@@ -24,19 +24,19 @@ python3 -I model/mutation_check.py
 ```
 
 ```bash
-PEEP_WALKS=5000 PEEP_STEPS=80 python3 -I -m unittest discover -s model -p test_walks.py
+NBD_WALKS=5000 NBD_STEPS=80 python3 -I -m unittest discover -s model -p test_walks.py
 ```
 
 `test_traces.py` replays shared-view traces recorded by the TypeScript [prototype](../prototype/README.md), including recreated records and the viewer's clock moving back, through `SpecClient` and requires the same accepted bindings and holds after every step, so the two implementations cross-check each other.
 
-`test_peep_trust.py` tests `SpecClient` against the [security goals](../security-goals.md). Tests prefixed `test_limitation_` assert documented non-goals, such as root theft at first contact and a new contact meeting an account just after a takeover. `test_walks.py` runs seeded random walks, 1,500 by default: repo writes of every kind, elapsed time, queries, and backups exchanged between two of Alice's installations with different clocks, checking invariants after every step and shrinking any failure to a minimal trace. Walks may write any record with any key, as an attacker holding every key could, so their invariants are structural: acceptance only through approval paths, imports, or an elapsed hold; first use matching the single-root rule; holds credited no faster than real time and ending only for a stated reason; revocation, takeover alarms, and re-enrollment once their conditions hold. The docstring lists them. The mutation check breaks one `SpecClient` rule at a time and reports whether any test notices; every mutation should be caught, and the walks alone catch all of them.
+`test_nbd_trust.py` tests `SpecClient` against the [security goals](../security-goals.md). Tests prefixed `test_limitation_` assert documented non-goals, such as root theft at first contact and a new contact meeting an account just after a takeover. `test_walks.py` runs seeded random walks, 1,500 by default: repo writes of every kind, elapsed time, queries, and backups exchanged between two of Alice's installations with different clocks, checking invariants after every step and shrinking any failure to a minimal trace. Walks may write any record with any key, as an attacker holding every key could, so their invariants are structural: acceptance only through approval paths, imports, or an elapsed hold; first use matching the single-root rule; holds credited no faster than real time and ending only for a stated reason; revocation, takeover alarms, and re-enrollment once their conditions hold. The docstring lists them. The mutation check breaks one `SpecClient` rule at a time and reports whether any test notices; every mutation should be caught, and the walks alone catch all of them.
 
 ## What it found
 
 - **Single-root rule.** The prose required exactly one binding with no incoming approval. Approval records outlive deleted devices, so an honest reset that kept old approvals had two roots and could never complete. The rule now ignores roots that reach only deleted devices.
 - **Durable approvals.** An earlier client recomputed acceptance from the approvals currently published, so deleting an approval record removed an accepted device. Acceptance is now persisted with its evidence, as the specification requires.
 - **Holds bound to candidates.** An earlier client keyed holds by account, so a replacement candidate inherited an almost-expired hold. Holds now bind to the exact candidate, a replaced candidate's members are revoked, and imports merge holds only for identical candidates.
-- **Anchors and witnesses.** Protecting newcomers with anchors drew repeated findings; the last showed one malicious PDS can manufacture its own witness. PEEP accepted first-contact exposure instead; see below.
+- **Anchors and witnesses.** Protecting newcomers with anchors drew repeated findings; the last showed one malicious PDS can manufacture its own witness. NBD accepted first-contact exposure instead; see below.
 - **Takeover alarm.** The client revoked its own binding when its record disappeared but raised no alarm, despite the [required alarm](../device-enrollment.md#re-enrollment). It now alarms, including when the revocation arrives by import rather than direct observation.
 - **Leftover approvals.** An attacker with create access could publish approvals from two of its own devices to an honest one; after the user deleted those devices, both deleted roots still reached the honest device, and new contacts declined it forever. Bindings without a present record now carry no authority of their own. A later review showed that leftover cycles (`M1 → M2 → M1 → Bob`) still left no root, so only present records can be roots now, and without one every record-less binding is a starting point.
 - **Deleted intermediates.** Approval validation required each target's record to be present, so a contact offline while an account linked `B0 → B1 → B2` and removed `B1` never accepted `B2`. A target proven absent, or one the client had already revoked, is now accepted as an approval signer while staying revoked for grants; records must be published with their first approval so absence means deletion.
@@ -46,7 +46,7 @@ PEEP_WALKS=5000 PEEP_STEPS=80 python3 -I -m unittest discover -s model -p test_w
 
 ## Rejected designs
 
-`peep_trust.py` keeps three rejected designs for comparison: `WarnOnlyClient`, `AccountWideAnchorClient`, and `ScopedWitnessClient`, which also holds their shared machinery. `test_variants.py` tests them, and [COMPARISON.md](COMPARISON.md) runs all four designs against the same scenarios. Regenerate its table with:
+`nbd_trust.py` keeps three rejected designs for comparison: `WarnOnlyClient`, `AccountWideAnchorClient`, and `ScopedWitnessClient`, which also holds their shared machinery. `test_variants.py` tests them, and [COMPARISON.md](COMPARISON.md) runs all four designs against the same scenarios. Regenerate its table with:
 
 ```bash
 python3 -I model/compare.py

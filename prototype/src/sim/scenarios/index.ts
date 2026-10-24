@@ -514,7 +514,7 @@ const s12: Scenario = {
     },
     {
       title: "Bob removes it and changes his password",
-      narration: "Removal stops new grants, but the thief keeps Book club's key: PEEP never rotates a space's key. Because the thief had a path to ciphertext outside access control, the group decides to move.",
+      narration: "Removal stops new grants, but the thief keeps Book club's key: NBD never rotates a space's key. Because the thief had a path to ciphertext outside access control, the group decides to move.",
       run: (w, c) => {
         for (const s of w.pdsOf.get(c.did.bob)!.liveSessions(c.did.bob)) if (s.label !== c.inst.bobPhone.id) w.pdsOf.get(c.did.bob)!.endSession(s.id);
         w.removeDevice(c.inst.thief);

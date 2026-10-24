@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "peep-prototype",
+      "name": "nbd-prototype",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "prototype", "run", "dev"],
       "port": 5199

@@ -1,6 +1,6 @@
 # Trust designs compared
 
-PEEP tried several ways to protect a client meeting an account for the first time, then adopted the current [security goals](../security-goals.md): trust on first use, approvals afterwards, and a re-enrollment hold for clients that knew the account. [`compare.py`](compare.py) runs the adopted design and three rejected ones against the same scenarios, and [`test_compare.py`](test_compare.py) pins the results. Outcomes are from the viewing client's side: **compromised** means it accepts the attacker's device in the target space, **hold** means it waits out the re-enrollment hold, **declined** means it refuses an honest device, and **safe** means it accepts honest devices and refuses attackers.
+NBD tried several ways to protect a client meeting an account for the first time, then adopted the current [security goals](../security-goals.md): trust on first use, approvals afterwards, and a re-enrollment hold for clients that knew the account. [`compare.py`](compare.py) runs the adopted design and three rejected ones against the same scenarios, and [`test_compare.py`](test_compare.py) pins the results. Outcomes are from the viewing client's side: **compromised** means it accepts the attacker's device in the target space, **hold** means it waits out the re-enrollment hold, **declined** means it refuses an honest device, and **safe** means it accepts honest devices and refuses attackers.
 
 | Design | First use | Status |
 | --- | --- | --- |
@@ -27,11 +27,11 @@ PEEP tried several ways to protect a client meeting an account for the first tim
 
 ## Reading the table
 
-- **After first contact, every design is the same.** A takeover cannot add a device for a client that already pinned the account, and a reset waits out the hold. These are the guarantees PEEP keeps ([goals 2 and 3](../security-goals.md#goals)).
+- **After first contact, every design is the same.** A takeover cannot add a device for a client that already pinned the account, and a reset waits out the hold. These are the guarantees NBD keeps ([goals 2 and 3](../security-goals.md#goals)).
 - **Every compromise of the adopted design is at first contact,** which the goals list as a non-goal; `test_spec_is_compromised_only_at_first_contact` checks this. Signal has the same exposure for a new contact of a hijacked number.
 - **Anchors protected some first contacts but composed badly.** Without collusion they stopped root theft and newcomers' resets. But one malicious PDS hosting two accounts can substitute one account at first contact and use it as a witness for the other, which compromises every anchor design except per-space scope, and per-space scope needed live recomputation, scope inheritance, and per-space holds. Each version drew new review findings.
 - **Anchors also cost availability:** retiring the only witnessed branch, or a forged witness naming a missing binding, forced holds on honest accounts.
 
 ## Decision
 
-PEEP adopts TOFU + approvals. It gives up protecting first contact in exchange for a design whose guarantees hold as stated, with no witness machinery, and matches the threat model of established messengers. Independent device verification, deferred in the TODOs, is the path to protecting first contact without anchors.
+NBD adopts TOFU + approvals. It gives up protecting first contact in exchange for a design whose guarantees hold as stated, with no witness machinery, and matches the threat model of established messengers. Independent device verification, deferred in the TODOs, is the path to protecting first contact without anchors.

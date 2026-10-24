@@ -1,18 +1,18 @@
-# PEEP: Core
+# NBD: Core
 
 ## Scope
 
-Each space uses one symmetric content key for its whole life. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, device approvals, key requests, evidence, and encrypted grants. PEEP provides no forward secrecy, post-compromise security, cryptographic exclusion of removed participants, or general metadata-hiding guarantee. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes, repo hosts, and storage providers may be malicious.
+Each space uses one symmetric content key for its whole life. Usable keys, plaintext, caches, search, previews, and exports stay on clients; servers store ciphertext, device approvals, key requests, evidence, and encrypted grants. NBD provides no forward secrecy, post-compromise security, cryptographic exclusion of removed participants, or general metadata-hiding guarantee. Endpoints, software/updates, authorized key holders, and the space host are trusted; other PDSes, repo hosts, and storage providers may be malicious.
 
 The [space host](#trusted-host-state) determines account eligibility, configuration, and administration. Credentials and writer discovery do not establish membership or device trust. An account's devices are those its accepted devices have [approved](device-enrollment.md#approvals), minus those the account's PDS has [revoked](device-enrollment.md#device-revocations) by deleting their records, and each is eligible in every space the account is a member of. No enrollment registry, per-space device selection, creator-device approval, or issuer appointment is required.
 
-Any eligible participant's enrolled device may grant keys it holds. Current members' accepted devices are eligible for the space key, which reads all retained content, including pre-join content. Key possession grants no administrative or device-approval authority. PEEP never [rotates](#no-rotation) a space's key: removal stops new grants, and Spaces access control keeps later content from the removed party once its existing credentials expire; removing a device also requires the user to remove its access at their PDS ([ending access](#ending-access)). A [new space](#replacing-a-space) is only for a credible threat of ongoing compromise that access control cannot prevent. Reading a space requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
+Any eligible participant's enrolled device may grant keys it holds. Current members' accepted devices are eligible for the space key, which reads all retained content, including pre-join content. Key possession grants no administrative or device-approval authority. NBD never [rotates](#no-rotation) a space's key: removal stops new grants, and Spaces access control keeps later content from the removed party once its existing credentials expire; removing a device also requires the user to remove its access at their PDS ([ending access](#ending-access)). A [new space](#replacing-a-space) is only for a credible threat of ongoing compromise that access control cannot prevent. Reading a space requires a recoverable key; [device recovery](device-enrollment.md#recovery) cannot recreate lost secrets.
 
-PEEP does not protect confidentiality against malicious host decisions: the host can admit accounts to receive the space key and retained history, or serve ciphertext to removed participants who still hold the key. PEEP uses [trust on first use](#device-trust) at first contact with an account: a malicious PDS, whether the space host's, a member's, or the user's own, can substitute device keys before a client has pinned that account. A substituted device that any member accepts receives the space key and all retained history. That includes a client meeting an account for the first time just after it was taken over; a Signal-style messenger also trusts first contact, though PEEP's [goals](security-goals.md) omit Signal's forward secrecy, post-compromise recovery, and cryptographic exclusion. [Auditing](audit.md#direct-sync) detects first-contact substitution after that disclosure; it does not prevent or undo it. After first contact, new devices need a signed [approval](device-enrollment.md#approvals) from an accepted device of the same account. Devices are revoked by deleting their records from the account's repo, never by other devices. Whoever can do that, including the PDS or anyone with the account password, can revoke every device and [re-enroll](device-enrollment.md#re-enrollment) one, but only after a hold surfaced to members and the account's own installations. That hold stops takeover of an account at an honest PDS if the user notices in time; against a malicious PDS it gives only detection.
+NBD does not protect confidentiality against malicious host decisions: the host can admit accounts to receive the space key and retained history, or serve ciphertext to removed participants who still hold the key. NBD uses [trust on first use](#device-trust) at first contact with an account: a malicious PDS, whether the space host's, a member's, or the user's own, can substitute device keys before a client has pinned that account. A substituted device that any member accepts receives the space key and all retained history. That includes a client meeting an account for the first time just after it was taken over; a Signal-style messenger also trusts first contact, though NBD's [goals](security-goals.md) omit Signal's forward secrecy, post-compromise recovery, and cryptographic exclusion. [Auditing](audit.md#direct-sync) detects first-contact substitution after that disclosure; it does not prevent or undo it. After first contact, new devices need a signed [approval](device-enrollment.md#approvals) from an accepted device of the same account. Devices are revoked by deleting their records from the account's repo, never by other devices. Whoever can do that, including the PDS or anyone with the account password, can revoke every device and [re-enroll](device-enrollment.md#re-enrollment) one, but only after a hold surfaced to members and the account's own installations. That hold stops takeover of an account at an honest PDS if the user notices in time; against a malicious PDS it gives only detection.
 
 ## Protocol conventions
 
-Names under `com.example.peep` and host operations are proposed extensions. Production namespaces and concrete Spaces transport mapping remain [TODO-03](TODOs.md#todo-03).
+Names under `com.example.nbd` and host operations are proposed extensions. Production namespaces and concrete Spaces transport mapping remain [TODO-03](TODOs.md#todo-03).
 
 ### Conformance and validation results
 
@@ -39,7 +39,7 @@ Only `OK` permits the requested operation. Clients MUST NOT treat missing eviden
 
 Except for [public device records](device-enrollment.md#bindings-and-publication), protocol values are immutable, wrapped as `{ $type: collection, value }`. The record key is lowercase hexadecimal SHA-256 of `CBOR(value)`; references identify the inner value. Different bytes at an existing identity are an error.
 
-| Collection suffix under `com.example.peep` | Location |
+| Collection suffix under `com.example.nbd` | Location |
 | --- | --- |
 | `approval` | Account's public repo; counts only when [proven present](device-enrollment.md#repo-observations) there. |
 | `grant`, `evidence` | Issuer's space repo. |
@@ -49,14 +49,14 @@ All use the [retention/access rules](audit.md#retention-and-access).
 
 ### Trusted host state
 
-Clients MUST authenticate the host through the space authority's DID and deployed [Spaces protocol](https://github.com/bluesky-social/proposals/tree/main/0016-permissioned-data). Clients MUST obtain membership decisions from its management implementation; `listRepos` enumerates writers, not membership. Existing management authority controls configuration and membership updates. Applications creating a PEEP space MUST configure a read policy under which the space authority issues credentials only to authenticated users it considers members, which in Spaces means requiring a delegation token from the user's PDS. Under a public read policy anyone can fetch ciphertext, so removal would have no effect on former key holders. A host that later relaxes the read policy is a malicious host decision.
+Clients MUST authenticate the host through the space authority's DID and deployed [Spaces protocol](https://github.com/bluesky-social/proposals/tree/main/0016-permissioned-data). Clients MUST obtain membership decisions from its management implementation; `listRepos` enumerates writers, not membership. Existing management authority controls configuration and membership updates. Applications creating an NBD space MUST configure a read policy under which the space authority issues credentials only to authenticated users it considers members, which in Spaces means requiring a delegation token from the user's PDS. Under a public read policy anyone can fetch ciphertext, so removal would have no effect on former key holders. A host that later relaxes the read policy is a malicious host decision.
 
 Retain these authenticated values by content reference:
 
 | Value | Required fields |
 | --- | --- |
-| Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "peep-hpke-v1"`, `keyId: RandomId`, `commitment: Digest` ([space key](#key-generation)), positive `maxEncryptedBlobBytes` (default 16,777,216). `keyId` and `commitment` are fixed at creation. |
-| Membership decision | `version: 1`, `kind: "membership"`, `space`, `account`, positive per-account monotonic `revision`, `eligible: boolean`. Eligibility is the host's explicit PEEP participation decision under its management rules. |
+| Configuration | `version: 1`, `kind: "configuration"`, `space`, positive monotonic `revision`, `grantProfile: "nbd-hpke-v1"`, `keyId: RandomId`, `commitment: Digest` ([space key](#key-generation)), positive `maxEncryptedBlobBytes` (default 16,777,216). `keyId` and `commitment` are fixed at creation. |
+| Membership decision | `version: 1`, `kind: "membership"`, `space`, `account`, positive per-account monotonic `revision`, `eligible: boolean`. Eligibility is the host's explicit NBD participation decision under its management rules. |
 
 The host MUST expose authenticated reads of current configuration, per-account membership, and historical values by CID. The host MUST preserve exact history and monotonic revisions through restart/migration. Unknown history is unavailable, not reconstructed as current state. Defaults apply only to authenticated creation. Clients MUST retain their highest known revisions: lower revisions cannot replace them, and equal revisions with different bytes are errors. A later eligible membership decision may re-admit an account without resetting device trust/history.
 
@@ -70,7 +70,7 @@ When learned, clients MUST visibly surface authenticated member additions, remov
 
 ### Spaces dependency
 
-PEEP is written against the Atproto Spaces proposal 0016 at bluesky-social/proposals commit `75f5b5d` (October 22, 2026), which is a proposal rather than a final specification. Under that revision, space credentials are bound to a requester-held P-256 key named in the credential's `cnf.kid` and proven with HTTP Message Signatures (RFC 9421); credentials last 10 minutes by default and 60 at most. Implementations MUST state the Spaces revision they target, and PEEP terminology follows the pinned revision until [TODO-03](TODOs.md#todo-03) maps it to production Lexicons.
+NBD is written against the Atproto Spaces proposal 0016 at bluesky-social/proposals commit `75f5b5d` (October 22, 2026), which is a proposal rather than a final specification. Under that revision, space credentials are bound to a requester-held P-256 key named in the credential's `cnf.kid` and proven with HTTP Message Signatures (RFC 9421); credentials last 10 minutes by default and 60 at most. Implementations MUST state the Spaces revision they target, and NBD terminology follows the pinned revision until [TODO-03](TODOs.md#todo-03) maps it to production Lexicons.
 
 ## Device trust
 
@@ -102,9 +102,9 @@ Recipients MAY [request](#key-requests) another eligible issuer even when a gran
 
 ### Key requests
 
-Applications MUST support unencrypted `com.example.peep.keyRequest` records in the requesting account's space repo, under normal Spaces access controls. Publish and discover them through ordinary repo writes and [direct sync](audit.md#direct-sync), including notification catch-up and periodic reconciliation, without requiring any content key. Issuers answer through normal [grant publication](audit.md#publication) in their own space repos; no separate delivery service is required.
+Applications MUST support unencrypted `com.example.nbd.keyRequest` records in the requesting account's space repo, under normal Spaces access controls. Publish and discover them through ordinary repo writes and [direct sync](audit.md#direct-sync), including notification catch-up and periodic reconciliation, without requiring any content key. Issuers answer through normal [grant publication](audit.md#publication) in their own space repos; no separate delivery service is required.
 
-A request is `{ version: 1, space, recipient: Binding, issuer: DeviceIdentity | null, proof: bytes }`. `recipient` is the requester's [exact binding](device-enrollment.md#bindings-and-publication). `issuer` names a preferred issuer device or is `null` for any eligible holder. The recipient device signs `CBOR(["peep/key-request", 1, requestWithoutProof])` using [Ed25519](#mandatory-grant-profile). Apply the [immutable record rules](#records); retries MUST reuse exact signed bytes and record identity. A different preferred issuer requires a new request.
+A request is `{ version: 1, space, recipient: Binding, issuer: DeviceIdentity | null, proof: bytes }`. `recipient` is the requester's [exact binding](device-enrollment.md#bindings-and-publication). `issuer` names a preferred issuer device or is `null` for any eligible holder. The recipient device signs `CBOR(["nbd/key-request", 1, requestWithoutProof])` using [Ed25519](#mandatory-grant-profile). Apply the [immutable record rules](#records); retries MUST reuse exact signed bytes and record identity. A different preferred issuer requires a new request.
 
 Before acting, issuers MUST validate encoding and signature, match `space` and `recipient.account` to the authenticated repo location, and independently resolve the configuration, approvals, and all [grant authorization](#grant-authorization) checks. The signature proves possession of the stated signing key, not identity verification or authorization. Requests MUST NOT establish device trust, bypass local trust checks, authorize raw-key responses, or appear in evidence manifests. A preferred issuer is only a scheduling hint and grants no exclusive authority.
 
@@ -131,7 +131,7 @@ type SpaceKeyGrant = {
     issuerMembership: CID;
     evidence: CID;          // Manifest of exact retained evidence values.
   };
-  grantProfile: "peep-hpke-v1";
+  grantProfile: "nbd-hpke-v1";
   encapsulation: Uint8Array; // 32-byte HPKE enc value.
   ciphertext: Uint8Array;    // 32-byte content key plus 16-byte HPKE authentication tag.
   issuer: DeviceIdentity;
@@ -142,20 +142,20 @@ type SpaceKeyGrant = {
 
 ### Mandatory grant profile
 
-`peep-hpke-v1` uses [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html) Base mode (`0x00`), DHKEM(X25519, HKDF-SHA256) (`0x0020`), HKDF-SHA256 (`0x0001`), and ChaCha20Poly1305 (`0x0003`). Signatures use [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html) pure Ed25519 without an additional prehash. Clients MUST generate signing and encryption keypairs independently and MUST NOT convert one into the other or reuse short-lived DPoP keys.
+`nbd-hpke-v1` uses [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html) Base mode (`0x00`), DHKEM(X25519, HKDF-SHA256) (`0x0020`), HKDF-SHA256 (`0x0001`), and ChaCha20Poly1305 (`0x0003`). Signatures use [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html) pure Ed25519 without an additional prehash. Clients MUST generate signing and encryption keypairs independently and MUST NOT convert one into the other or reuse short-lived DPoP keys.
 
 X25519 public keys/encapsulations use RFC 9180's 32-byte encodings; Ed25519 public keys and signatures use RFC 8032's 32-byte and 64-byte `R || S` encodings. Implementations MUST require canonical encodings, reject malformed points/noncanonical signatures, and apply HPKE's KEM input and all-zero shared-secret checks.
 
-A key fingerprint is lowercase hexadecimal SHA-256 of `CBOR(["peep/public-key", 1, algorithm, publicKeyBytes])`, with `algorithm` exactly `X25519` or `Ed25519`. Mutable discovery cannot redirect it to another key.
+A key fingerprint is lowercase hexadecimal SHA-256 of `CBOR(["nbd/public-key", 1, algorithm, publicKeyBytes])`, with `algorithm` exactly `X25519` or `Ed25519`. Mutable discovery cannot redirect it to another key.
 
 Let `H` be the grant map without `encapsulation`, `ciphertext`, and `proof`. Issuers MUST seal the raw 32-byte content key in a fresh single-shot HPKE context:
 
 ```text
-info = CBOR(["peep/grant-info", 1, H])
-aad  = CBOR(["peep/grant-aad", 1, H])
+info = CBOR(["nbd/grant-info", 1, H])
+aad  = CBOR(["nbd/grant-aad", 1, H])
 (encapsulation, ciphertext) = SealBase(recipientPublicKey, info, aad, spaceKey)
 proof = Ed25519.Sign(issuerPrivateKey,
-  CBOR(["peep/grant-signature", 1, grantWithoutProof]))
+  CBOR(["nbd/grant-signature", 1, grantWithoutProof]))
 ```
 
 HPKE Base mode does not authenticate the sender; the issuer signature is REQUIRED. Verification failure MUST NOT trigger suite fallback. Profile changes require authenticated configuration updates. Content uses the separate [record/blob encryption format](#content-encryption).
@@ -180,7 +180,7 @@ Records and blobs share this envelope:
 
 ```typescript
 {
-  $type: "com.example.peep.envelope"
+  $type: "com.example.nbd.envelope"
   format: 1
   keyId: string // "71329bda9cf34bf7a8f68f475e166981"
   nonce: bytes // exactly 24 bytes
@@ -220,7 +220,7 @@ const plaintext = CBOR([CBOR(content), padding]); // Zero bytes chosen under the
 {
   $type: "app.example.message",
   envelope: {
-    $type: "com.example.peep.envelope",
+    $type: "com.example.nbd.envelope",
     format: 1,
     keyId: "71329bda9cf34bf7a8f68f475e166981",
     nonce: Uint8(...),
@@ -233,21 +233,21 @@ const plaintext = CBOR([CBOR(content), padding]); // Zero bytes chosen under the
 Blob references MUST appear in the envelope for PDS retention, even when also included in content. After authentication and schema validation, receivers MUST check every blob reference throughout the decoded content, including nested maps/arrays, for an identical entry in the authenticated envelope `blobs` list. Receivers MUST compare the complete normalized CBOR reference, including CID, MIME type, and size; reject missing or mismatched entries before rendering, indexing, or using the references. Ordinary CID links are not blob references; extra envelope entries are allowed for retention. Record associated data is:
 
 ```text
-["peep/record", 1, spaceURI, authorDID, collection, recordKey, keyId, blobs]
+["nbd/record", 1, spaceURI, authorDID, collection, recordKey, keyId, blobs]
 ```
 
 `blobs` is the complete envelope reference array in stored order, with CIDs as CBOR links. Allocate `recordKey` before encryption. Receivers reconstruct the context from the expected record location and envelope.
 
 This binding prevents relocation by someone without the key. It neither establishes authorship against another key holder nor prevents replay at the same location. Applications MUST verify Spaces repository/sync authentication for the expected author, space, revision, and contents; enforce write permissions; and retain sync checkpoints to reject known rollback. Successful decryption or an inner `author` field is not proof of authorship.
 
-PEEP introduces no independent message-authorship proofs. A content-key holder colluding with the claimed author's PDS can forge messages, but can also export the content key directly to that PDS. Such collusion is outside PEEP's confidentiality guarantees because authorized key holders are trusted. Enrollment and grant signatures authenticate protocol statements, not message authorship.
+NBD introduces no independent message-authorship proofs. A content-key holder colluding with the claimed author's PDS can forge messages, but can also export the content key directly to that PDS. Such collusion is outside NBD's confidentiality guarantees because authorized key holders are trusted. Enrollment and grant signatures authenticate protocol statements, not message authorship.
 
 ### Encrypted blobs
 
 Blob writers MUST frame the original file bytes as `payload`, then encrypt the frame as one envelope with `blobs: []`. Upload its normalized CBOR encoding as `application/octet-stream`. Blob associated data is:
 
 ```text
-["peep/blob", 1, spaceURI, keyId]
+["nbd/blob", 1, spaceURI, keyId]
 ```
 
 Omitting the blob CID and containing record location permits reuse within the same space. Following the [ATProto blob format](https://atproto.com/specs/blob), the reference uses CIDv1 with the raw codec and SHA-256 of the entire uploaded envelope; `size` counts all those envelope bytes, including framing, padding, and the authentication tag. Store the original MIME type, filename, and other metadata in the encrypted record. Record authentication binds the resulting reference. A reused blob retains its original `keyId`.
@@ -262,23 +262,23 @@ Blob readers MUST NOT release plaintext before whole-file authentication. Any te
 
 ### Key generation
 
-The creator generates the space key: a fresh independent random 256-bit key and a `RandomId` key ID. Its commitment is `SHA-256(CBOR(["peep/key", 1, spaceURI, keyId, keyBytes]))`. The creator MUST durably store the key before creating the space and supplies `keyId` and `commitment` in the creating [configuration](#trusted-host-state). The commitment binds the space URI, so the creator MUST know the exact canonical URI before creation; the Spaces revision must let it choose or reserve the URI first ([TODO-03](TODOs.md#todo-03)). The commitment checks agreement; it does not give the host usable key material. The host stores them unchanged for the life of the space.
+The creator generates the space key: a fresh independent random 256-bit key and a `RandomId` key ID. Its commitment is `SHA-256(CBOR(["nbd/key", 1, spaceURI, keyId, keyBytes]))`. The creator MUST durably store the key before creating the space and supplies `keyId` and `commitment` in the creating [configuration](#trusted-host-state). The commitment binds the space URI, so the creator MUST know the exact canonical URI before creation; the Spaces revision must let it choose or reserve the URI first ([TODO-03](TODOs.md#todo-03)). The commitment checks agreement; it does not give the host usable key material. The host stores them unchanged for the life of the space.
 
 Writers encrypt all content under the space key. A writer without the key cannot publish content and SHOULD [request a grant](#key-requests). Offline reads and protected local drafts remain available; pending publications MUST be retained until the key is obtained. [Private state and restore](device-enrollment.md#recovery) preserve keys and pending operations.
 
 ### No rotation
 
-PEEP never replaces a space's key. Removing an account or [revoking a device](device-enrollment.md#device-revocations) blocks new grants to and from that party under [grant authorization](#grant-authorization), but the party keeps any key and plaintext it already holds. Afterwards, keeping later content from it depends on Spaces access control denying it ciphertext, which takes the [steps below](#ending-access): a malicious or breached host, a colluding PDS storing members' records, or a member who passes on ciphertext can expose that content to it. A known or suspected key compromise has the same effect for whoever obtained the key.
+NBD never replaces a space's key. Removing an account or [revoking a device](device-enrollment.md#device-revocations) blocks new grants to and from that party under [grant authorization](#grant-authorization), but the party keeps any key and plaintext it already holds. Afterwards, keeping later content from it depends on Spaces access control denying it ciphertext, which takes the [steps below](#ending-access): a malicious or breached host, a colluding PDS storing members' records, or a member who passes on ciphertext can expose that content to it. A known or suspected key compromise has the same effect for whoever obtained the key.
 
 Applications MUST NOT describe a removal, revocation, or suspected compromise as excluding the affected party from later content. Removal and revocation, with the [access steps](#ending-access) they require, are nonetheless complete responses; [replacing the space](#replacing-a-space) is reserved for a credible threat of ongoing compromise that access control cannot prevent.
 
 ### Ending access
 
-PEEP controls key grants; Spaces controls who can fetch ciphertext. Space credentials are short-lived, and the space authority issues them only to members whose PDS supplies a delegation token for the requesting application, under the [read policy](#trusted-host-state) PEEP requires. Credentials already issued stay valid until they expire: 10 minutes by default and 60 at most under the current Spaces proposal, sooner if the authority sends `notifyCredentialRevoked` to repo hosts.
+NBD controls key grants; Spaces controls who can fetch ciphertext. Space credentials are short-lived, and the space authority issues them only to members whose PDS supplies a delegation token for the requesting application, under the [read policy](#trusted-host-state) NBD requires. Credentials already issued stay valid until they expire: 10 minutes by default and 60 at most under the current Spaces proposal, sooner if the authority sends `notifyCredentialRevoked` to repo hosts.
 
 - **Removing a member.** The authority stops issuing credentials to that account, so its access ends within one credential lifetime.
-- **Removing a device.** This takes two separate steps: deleting the device record, through a separate delete authorization at the user's PDS, [revokes](device-enrollment.md#device-revocations) the binding, and ending the device's session at the PDS ends its access. Revocation is invisible to the space authority, which issues credentials to accounts, not devices. A revoked device that still holds an OAuth session with the account's PDS keeps obtaining delegation tokens and credentials indefinitely, and can still publish approvals. The user MUST end the device's session at their PDS; its access then ends within one credential lifetime. PEEP does not map device bindings to PDS sessions, and no PDS interface combines the two steps. Applications MUST tell the user to end the session whenever they remove a device, and MAY offer to take it for them where the PDS allows ([TODO-16](TODOs.md#todo-16)). If the device, or whoever holds it, knows the account's login, it can sign in again, so applications SHOULD also advise changing the password when a device is lost or unrecognized.
-- **Shared application backends.** An application can obtain credentials through any of its users' sessions, so removing one user's session does not stop a backend that serves other members of the space. A backend that passes ciphertext to a removed party is colluding with it, which is outside PEEP's guarantees.
+- **Removing a device.** This takes two separate steps: deleting the device record, through a separate delete authorization at the user's PDS, [revokes](device-enrollment.md#device-revocations) the binding, and ending the device's session at the PDS ends its access. Revocation is invisible to the space authority, which issues credentials to accounts, not devices. A revoked device that still holds an OAuth session with the account's PDS keeps obtaining delegation tokens and credentials indefinitely, and can still publish approvals. The user MUST end the device's session at their PDS; its access then ends within one credential lifetime. NBD does not map device bindings to PDS sessions, and no PDS interface combines the two steps. Applications MUST tell the user to end the session whenever they remove a device, and MAY offer to take it for them where the PDS allows ([TODO-16](TODOs.md#todo-16)). If the device, or whoever holds it, knows the account's login, it can sign in again, so applications SHOULD also advise changing the password when a device is lost or unrecognized.
+- **Shared application backends.** An application can obtain credentials through any of its users' sessions, so removing one user's session does not stop a backend that serves other members of the space. A backend that passes ciphertext to a removed party is colluding with it, which is outside NBD's guarantees.
 
 Applications MUST NOT describe removal as immediately ending a party's ability to read. New grants stop when the removal is learned; ciphertext access ends only as described here.
 

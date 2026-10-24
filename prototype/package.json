@@ -1,9 +1,9 @@
 {
-  "name": "peep-prototype",
+  "name": "nbd-prototype",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Multi-node PEEP prototype against an emulated PDS and Spaces host.",
+  "description": "Multi-node NBD prototype against an emulated PDS and Spaces host.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

@@ -7,7 +7,7 @@ clock moving back) from a random walk in
 the TypeScript prototype, and what the prototype's viewer installation then
 accepted and held. Trust depends only on those observations and time, so the
 two implementations must agree exactly. Regenerate fixtures with
-PEEP_WRITE_TRACES=1 npm test -- traces in prototype/.
+NBD_WRITE_TRACES=1 npm test -- traces in prototype/.
 
 Run: python3 -I -m unittest discover -s model
 """
@@ -16,7 +16,7 @@ import json
 import os
 import unittest
 
-from peep_trust import Binding, SpecClient, World
+from nbd_trust import Binding, SpecClient, World
 
 TRACES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prototype", "traces")
 ACCOUNTS = ("alice", "bob", "carol")

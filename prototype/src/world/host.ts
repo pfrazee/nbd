@@ -1,7 +1,7 @@
 // Emulated Spaces host (core.md#trusted-host-state). It decides membership,
 // keeps configuration and membership histories by reference, and issues
 // short-lived read credentials only to eligible accounts with a live PDS
-// session (the delegation-token read policy PEEP requires, simplified).
+// session (the delegation-token read policy NBD requires, simplified).
 
 import { ref } from "../protocol/encoding";
 import { type Configuration, type Did, type Membership, asCbor } from "../protocol/types";
@@ -31,7 +31,7 @@ export class Host {
   createSpace(admin: Did, uri: string, name: string, keyId: string, commitment: Uint8Array): string {
     if (this.spaces.has(uri)) throw new Error(`host: ${uri} exists`);
     const config: Configuration = {
-      version: 1, kind: "configuration", space: uri, revision: 1, grantProfile: "peep-hpke-v1",
+      version: 1, kind: "configuration", space: uri, revision: 1, grantProfile: "nbd-hpke-v1",
       keyId, commitment, maxEncryptedBlobBytes: 16_777_216,
     };
     const st: SpaceState = { uri, name, admin, config, members: new Map(), history: new Map() };

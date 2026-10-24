@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prove each lemma of peep.spthy, one at a time, and check every result.
+# Prove each lemma of nbd.spthy, one at a time, and check every result.
 # Exits non-zero unless all are verified.
 #
 # Run from the repository root:  formal/check.sh
@@ -8,7 +8,7 @@
 set -uo pipefail
 
 cd "$(dirname "$0")"
-THEORY=peep.spthy
+THEORY=nbd.spthy
 CAP=${CAP:-1800}
 ORACLE="--heuristic=o --oraclename=oracle.py"
 

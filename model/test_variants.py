@@ -1,12 +1,12 @@
 """Tests for the anchor and witness variants kept for comparison.
 
-AccountWideAnchorClient and ScopedWitnessClient are designs PEEP tried and
+AccountWideAnchorClient and ScopedWitnessClient are designs NBD tried and
 rejected; see COMPARISON.md. Run: python3 -I -m unittest discover -s model
 """
 
 import unittest
 
-from peep_trust import (REENROLL_HOLD, AccountWideAnchorClient, Binding,
+from nbd_trust import (REENROLL_HOLD, AccountWideAnchorClient, Binding,
                         ScopedWitnessClient, World)
 
 COMMUNITY = "community"

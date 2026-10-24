@@ -93,7 +93,7 @@ export function verify(sig: Uint8Array, domain: unknown[], publicKey: Uint8Array
 }
 
 export function fingerprint(algorithm: "X25519" | "Ed25519", publicKey: Uint8Array): string {
-  return bytesToHex(sha256(cbor(["peep/public-key", 1, algorithm, publicKey])));
+  return bytesToHex(sha256(cbor(["nbd/public-key", 1, algorithm, publicKey])));
 }
 
 // ---- HPKE (RFC 9180) --------------------------------------------------------

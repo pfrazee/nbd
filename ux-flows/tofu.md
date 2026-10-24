@@ -1,6 +1,6 @@
-# PEEP UX Flows: TOFU
+# NBD UX Flows: TOFU
 
-Informative. User-facing flows for PEEP spaces, which all use [trust on first use](../core.md#device-trust). See also [Relaxed TOFU](relaxed-tofu.md), which presents the same protocol with minimal security UI. A "device" is an app installation.
+Informative. User-facing flows for NBD spaces, which all use [trust on first use](../core.md#device-trust). See also [Relaxed TOFU](relaxed-tofu.md), which presents the same protocol with minimal security UI. A "device" is an app installation.
 
 ## What protects these spaces
 
@@ -16,7 +16,7 @@ There is no device verification. Members share one key, so one member verifying 
 
 1. **"New space" form:** name and optional members. No security choices.
 2. **No device choice.** Every device on the account can read every space the account belongs to ([approvals](../device-enrollment.md#approvals)), so creating asks nothing about devices.
-   - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first PEEP use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication).
+   - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first NBD use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication).
 3. **No extra wait.** The space key is generated on this device before the space is created, and its [commitment](../core.md#key-generation) is part of the creating configuration, so posting can start as soon as creation succeeds.
 4. **Space opens.** The creator's other devices get the key when they open it; installations of the same app get it right away.
 
@@ -69,7 +69,7 @@ Alice gets a new laptop.
 
 ## Creating a space from an existing space
 
-PEEP has no parent/child relationship; each space is cryptographically independent. This is also how a group leaves a space it credibly believes is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)); it is not a response to [removing a member](#removing-a-member-or-device).
+NBD has no parent/child relationship; each space is cryptographically independent. This is also how a group leaves a space it credibly believes is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)); it is not a response to [removing a member](#removing-a-member-or-device).
 
 | Carries over | Doesn't carry over |
 | --- | --- |

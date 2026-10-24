@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Goal-ranking oracle for peep.spthy (tamarin-prover --heuristic=o).
+"""Goal-ranking oracle for nbd.spthy (tamarin-prover --heuristic=o).
 
 Tamarin passes the lemma name as the first argument and the open goals on
 stdin, one per line as "N: goal". We print goal indices, best first.

@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from peep_trust import (AccountWideAnchorClient, Binding,  # noqa: E402
+from nbd_trust import (AccountWideAnchorClient, Binding,  # noqa: E402
                         ScopedWitnessClient, SpecClient, WarnOnlyClient, World)
 
 VARIANTS = [("TOFU + approvals (spec)", SpecClient), ("Warnings only", WarnOnlyClient),

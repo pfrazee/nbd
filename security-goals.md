@@ -1,10 +1,10 @@
-# PEEP: Security Goals and Non-Goals
+# NBD: Security Goals and Non-Goals
 
-Informative. This page states the bar the rest of the specification is meant to meet, so that review can check the design against it. PEEP provides TOFU enrollment with signed device approvals for retained shared spaces: first contact is trusted, and afterwards devices change only through visible, user-controlled steps. That matches a Signal-style messenger at first contact only. PEEP has no forward secrecy, no post-compromise recovery, and no cryptographic exclusion after removal ([non-goals](#non-goals)), so a compromised key costs far more than it would in Signal. Where the specification and this page disagree, one of them is wrong.
+Informative. This page states the bar the rest of the specification is meant to meet, so that review can check the design against it. NBD provides TOFU enrollment with signed device approvals for retained shared spaces: first contact is trusted, and afterwards devices change only through visible, user-controlled steps. That matches a Signal-style messenger at first contact only. NBD has no forward secrecy, no post-compromise recovery, and no cryptographic exclusion after removal ([non-goals](#non-goals)), so a compromised key costs far more than it would in Signal. Where the specification and this page disagree, one of them is wrong.
 
 ## Goals
 
-PEEP aims to guarantee, against the stated adversaries:
+NBD aims to guarantee, against the stated adversaries:
 
 1. **Confidentiality from outsiders.** Content is readable only by holders of the space key. The space host, PDSes, relays, and network observers learn metadata but not content ([content encryption](core.md#content-encryption)).
 2. **No silent device addition after first contact.** Once a client has pinned an account, a new device of that account is accepted only through an approval signed by a device the client already accepted, or after a [re-enrollment hold](device-enrollment.md#re-enrollment). A PDS, or someone who takes over the account, cannot add a device for existing contacts without one of those ([local trust](device-enrollment.md#local-trust)). A device the client accepted and the account later removed still counts while the account keeps another device: whoever holds its key and can write to the repo can add devices, which goal 6 surfaces to the account holder ([revoked signers](device-enrollment.md#approval-validation)).
@@ -16,13 +16,13 @@ PEEP aims to guarantee, against the stated adversaries:
 
 ## Non-goals
 
-PEEP explicitly does not protect against the following. Each is a deliberate trade-off, not an oversight.
+NBD explicitly does not protect against the following. Each is a deliberate trade-off, not an oversight.
 
 1. **First contact.** Whoever controls an account's repo when a client first meets it, a malicious PDS or a takeover, can choose the devices that client accepts. This includes a new contact meeting an account just after it was hijacked: that contact gets no hold, and if it is a member of a space, it can grant that space's key to the new device while existing contacts are still holding. Signal has the same exposure for a new contact of a hijacked number. Independent device verification is deferred ([TODO](TODOs.md#deferred-extensions)).
 2. **A malicious PDS hiding a reset from its own user.** The hold protects only if the account holder can learn of the reset; a PDS that hides the deletions from the user's installations is detected only by auditing, after disclosure.
 3. **Malicious host decisions.** The space host decides membership; an admitted account receives the key and retained history ([trusted host state](core.md#trusted-host-state)).
-4. **Members.** Any member can leak content or the key. Removed members keep the key and anything they already read; PEEP never [rotates](core.md#no-rotation) a space's key and relies on Spaces access control to deny them later ciphertext.
-5. **Forward secrecy and post-compromise security.** A copied device key or space key reads the whole space for as long as its holder can obtain ciphertext ([rationale](rationale.md#what-peep-gives-up)).
+4. **Members.** Any member can leak content or the key. Removed members keep the key and anything they already read; NBD never [rotates](core.md#no-rotation) a space's key and relies on Spaces access control to deny them later ciphertext.
+5. **Forward secrecy and post-compromise security.** A copied device key or space key reads the whole space for as long as its holder can obtain ciphertext ([rationale](rationale.md#what-nbd-gives-up)).
 6. **Malicious application code.** Applications, browser origins, and updates are trusted with installation keys ([platform notes](device-enrollment.md#platform-notes)).
 7. **Bounded freshness.** Revocations take effect when learned; withheld updates can leave stale state usable ([freshness](device-enrollment.md#freshness)).
 8. **Total key loss.** Losing every copy of a space key loses the space ([key loss](core.md#key-loss)).

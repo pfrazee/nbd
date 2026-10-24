@@ -1,4 +1,4 @@
-# PEEP UX Flows: Relaxed TOFU
+# NBD UX Flows: Relaxed TOFU
 
 Informative. A presentation of [TOFU](tofu.md) spaces with the minimum user-facing security process the specification allows. The protocol is unchanged: relaxed and full TOFU clients interoperate in the same spaces. A "device" is an app installation.
 
