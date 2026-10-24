@@ -1,5 +1,5 @@
 // One installation as a small phone-sized app, using the copy from
-// ux-flows/tofu.md. Everything shown comes from this installation's own
+// ux-flows/paranoid.md. Everything shown comes from this installation's own
 // state, so cards disagree exactly where installations do.
 
 import { useState } from "react";

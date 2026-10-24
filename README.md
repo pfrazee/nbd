@@ -8,8 +8,8 @@ Users publish device keys publicly and add devices to their account through sign
 
 To get a quick understanding of these specs, see the user experience documentation:
 
-- **[Relaxed](ux-flows/relaxed-tofu.md)** - How applications work when they're not overly paranoid.
-- **[Trust on First Use](ux-flows/tofu.md)** - A more security-minded experience.
+- **[Relaxed](ux-flows/relaxed.md)** - How applications work when they're not overly paranoid.
+- **[Paranoid](ux-flows/paranoid.md)** - A more security-minded experience.
 
 ## Specs
 

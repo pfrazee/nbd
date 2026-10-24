@@ -1,4 +1,4 @@
-// Figures for ux-flows/relaxed-tofu.md, in the order of its sections.
+// Figures for ux-flows/relaxed.md, in the order of its sections.
 
 import { check } from "../../sim/scenario";
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
@@ -17,7 +17,7 @@ const scanConfirm = (device: string) => scanConfirmFor("relaxed", device);
 // ---- 1. Creating a space ----------------------------------------------------
 
 const creatingASpace: Figure = {
-  id: "relaxed-tofu-creating-a-space",
+  id: "relaxed-creating-a-space",
   mode: "relaxed",
   number: 1,
   title: "Creating a space",
@@ -63,7 +63,7 @@ const creatingASpace: Figure = {
 // ---- 2. Adding a member -------------------------------------------------------
 
 const addingAMember1: Figure = {
-  id: "relaxed-tofu-adding-a-member-1",
+  id: "relaxed-adding-a-member-1",
   mode: "relaxed",
   number: 2,
   title: "Adding a member (1 of 2)",
@@ -105,7 +105,7 @@ const addingAMember1: Figure = {
 };
 
 const addingAMember2: Figure = {
-  id: "relaxed-tofu-adding-a-member-2",
+  id: "relaxed-adding-a-member-2",
   mode: "relaxed",
   number: 2,
   title: "Adding a member (2 of 2)",
@@ -171,7 +171,7 @@ const addingAMember2: Figure = {
 // ---- 3. Adding a device, and replacing a phone ------------------------------------
 
 const addingADevice: Figure = {
-  id: "relaxed-tofu-adding-a-device",
+  id: "relaxed-adding-a-device",
   mode: "relaxed",
   number: 3,
   title: "Adding a device",
@@ -224,7 +224,7 @@ const addingADevice: Figure = {
 };
 
 const replacingAPhone: Figure = {
-  id: "relaxed-tofu-replacing-a-phone",
+  id: "relaxed-replacing-a-phone",
   mode: "relaxed",
   number: "3b",
   title: "Replacing a phone",
@@ -267,7 +267,7 @@ const replacingAPhone: Figure = {
 // ---- 4. Losing every device ------------------------------------------------------
 
 const losingEveryDevice: Figure = {
-  id: "relaxed-tofu-losing-every-device",
+  id: "relaxed-losing-every-device",
   mode: "relaxed",
   number: 4,
   title: "Losing every device",
@@ -324,7 +324,7 @@ const losingEveryDevice: Figure = {
 // ---- 5. Creating a space from an existing space -----------------------------------------
 
 export const creatingFromExisting: Figure = {
-  id: "relaxed-tofu-creating-from-existing",
+  id: "relaxed-creating-from-existing",
   mode: "relaxed",
   number: 5,
   title: "Creating a space from an existing space",
@@ -362,7 +362,7 @@ export const creatingFromExisting: Figure = {
 // ---- 6. Removing a member or device -------------------------------------------------------
 
 export const removing: Figure = {
-  id: "relaxed-tofu-removing",
+  id: "relaxed-removing",
   mode: "relaxed",
   number: 6,
   title: "Removing a member or device",
@@ -414,7 +414,7 @@ export const removing: Figure = {
 // ---- 7. Alarms ------------------------------------------------------------------------------
 
 const alarms: Figure = {
-  id: "relaxed-tofu-alarms",
+  id: "relaxed-alarms",
   mode: "relaxed",
   number: 7,
   title: "Alarms",
@@ -456,7 +456,7 @@ const alarms: Figure = {
 // ---- 8. Settings ---------------------------------------------------------------------------------
 
 const settings: Figure = {
-  id: "relaxed-tofu-settings",
+  id: "relaxed-settings",
   mode: "relaxed",
   number: 8,
   title: "Settings",

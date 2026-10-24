@@ -1,9 +1,9 @@
-// Figures for ux-flows/tofu.md, in the order of its sections. The cast and
+// Figures for ux-flows/paranoid.md, in the order of its sections. The cast and
 // setups are the Relaxed figures'; the copy and the security detail differ.
 
 import { check } from "../../sim/scenario";
 import type { World } from "../../world/world";
-import { COPY, TOFU } from "../copy";
+import { COPY, PARANOID } from "../copy";
 import type { Figure, FigureCtx } from "../figure";
 import { Laptop, Phone, Tablet } from "../frames";
 import { alarmsOf, deviceName, devices, inbox, latestNotice, memberAccess, person, recovery, soleHolder, timeline, waiting } from "../model";
@@ -14,11 +14,11 @@ import {
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
 import { creatingFromExisting, removing } from "./relaxed";
 
-const T = COPY.tofu;
+const T = COPY.paranoid;
 type C = FigureCtx;
-const scanConfirm = (device: string) => scanConfirmFor("tofu", device);
+const scanConfirm = (device: string) => scanConfirmFor("paranoid", device);
 
-/** Device lists say how each device was added, with no badges (tofu.md#ui-vocabulary). */
+/** Device lists say how each device was added, with no badges (paranoid.md#ui-vocabulary). */
 const added = (r: DeviceRow) =>
   r.status === "accepted" ? (r.linkedFrom ? `Linked from ${r.linkedFrom}` : "First seen")
     : r.status === "unlinked" ? "Not linked: no keys shared with it" : undefined;
@@ -31,8 +31,8 @@ const accountDevices = (w: World, me: C["i"][string], account: string) => {
 // ---- 1. Creating a space ----------------------------------------------------
 
 const creatingASpace: Figure = {
-  id: "tofu-creating-a-space",
-  mode: "tofu",
+  id: "paranoid-creating-a-space",
+  mode: "paranoid",
   number: 1,
   title: "Creating a space",
   description: "A name and optional members, with no security or device choices. Until another device holds the key, the space says so.",
@@ -54,7 +54,7 @@ const creatingASpace: Figure = {
     },
     {
       label: "Sole holder", device: "Alice's phone", at: 1,
-      view: (w, c) => <Phone>{club(w, c, c.i.iphone, { note: <>{TOFU.soleHolder} <b>{TOFU.addADevice}</b></> })}</Phone>,
+      view: (w, c) => <Phone>{club(w, c, c.i.iphone, { note: <>{PARANOID.soleHolder} <b>{PARANOID.addADevice}</b></> })}</Phone>,
       caption: "Posting starts at once. While **no other device has the key**, a quiet note says so and links to adding a device.",
       expect: (w, c) => [
         check("Alice holds the key at once", !!c.i.iphone.spaces.get(c.space.club)?.key),
@@ -67,7 +67,7 @@ const creatingASpace: Figure = {
         <Phone>
           <InfoScreen title="Book club" sections={[
             { heading: "Members", lines: w.host.members(c.space.club).map((d) => (d === c.i.iphone.did ? "You" : person(d))) },
-            { heading: "Devices", lines: [TOFU.unverified] },
+            { heading: "Devices", lines: [PARANOID.unverified] },
             { heading: "History", lines: ["Everyone in this space can read its full history."] },
           ]} />
         </Phone>
@@ -89,8 +89,8 @@ const creatingASpace: Figure = {
 // ---- 2. Adding a member -------------------------------------------------------
 
 const addingAMember1: Figure = {
-  id: "tofu-adding-a-member-1",
-  mode: "tofu",
+  id: "paranoid-adding-a-member-1",
+  mode: "paranoid",
   number: 2,
   title: "Adding a member (1 of 2)",
   description: "Alice adds Bob. The confirmation says he'll read the history; every member sees the change; Bob joins with one tap.",
@@ -104,7 +104,7 @@ const addingAMember1: Figure = {
           {club(w, c, c.i.iphone)}
           <Sheet>
             <h3>Add Bob to Book club?</h3>
-            <p>{TOFU.inviteHistory("Bob")}</p>
+            <p>{PARANOID.inviteHistory("Bob")}</p>
             <button className="primary">Add</button>
             <button className="plain">{T.cancel}</button>
           </Sheet>
@@ -131,8 +131,8 @@ const addingAMember1: Figure = {
 };
 
 const addingAMember2: Figure = {
-  id: "tofu-adding-a-member-2",
-  mode: "tofu",
+  id: "paranoid-adding-a-member-2",
+  mode: "paranoid",
   number: 2,
   title: "Adding a member (2 of 2)",
   description: "Bob waits briefly for a member's device, then reads the whole history. Members see his devices; a device he never linked gets nothing, and his own app alarms.",
@@ -153,7 +153,7 @@ const addingAMember2: Figure = {
   panels: [
     {
       label: "Brief locked state", device: "Bob", at: 1,
-      view: (w, c) => <Phone>{club(w, c, c.i.bob, { locked: TOFU.waitingForDevice, composer: "Draft (sends when unlocked)" })}</Phone>,
+      view: (w, c) => <Phone>{club(w, c, c.i.bob, { locked: PARANOID.waitingForDevice, composer: "Draft (sends when unlocked)" })}</Phone>,
       caption: "His app publishes a key request. Members' devices grant **in the background**, usually within seconds.",
       expect: (w, c) => [
         check("Bob has no key yet", !c.i.bob.spaces.get(c.space.club)?.key),
@@ -174,7 +174,7 @@ const addingAMember2: Figure = {
       label: "Device lists", device: "Carol", at: 3,
       view: (w, c) => {
         const rows = devices(w, c.i.carol, c.i.bob.did);
-        return <Phone><DeviceList title={`Bob · ${rows.length} devices`} rows={rows} detail={added} note={rows.some((r) => r.status === "unlinked") ? TOFU.unlinkedNote("Bob") : undefined} /></Phone>;
+        return <Phone><DeviceList title={`Bob · ${rows.length} devices`} rows={rows} detail={added} note={rows.some((r) => r.status === "unlinked") ? PARANOID.unlinkedNote("Bob") : undefined} /></Phone>;
       },
       caption: "**No badges, no Verify.** A Bob device no Bob device linked gets no keys, with no override, and the list says so.",
       expect: (w, c) => [
@@ -186,7 +186,7 @@ const addingAMember2: Figure = {
       label: "Bob's alarm", device: "Bob", at: 3,
       view: () => (
         <Phone>
-          <FullAlarm title={TOFU.unrecognised("Book club")} body="None of your devices linked it. If you didn't add it, someone may be signed in to your account." action="Review devices" />
+          <FullAlarm title={PARANOID.unrecognised("Book club")} body="None of your devices linked it. If you didn't add it, someone may be signed in to your account." action="Review devices" />
         </Phone>
       ),
       caption: "Bob's own app audits his account. **Alarms are the main defense** against substitution, so they're prominent.",
@@ -198,8 +198,8 @@ const addingAMember2: Figure = {
 // ---- 3. Adding a device, and replacing a phone ------------------------------------
 
 const addingADevice: Figure = {
-  id: "tofu-adding-a-device",
-  mode: "tofu",
+  id: "paranoid-adding-a-device",
+  mode: "paranoid",
   number: 3,
   title: "Adding a device",
   description: "Alice links her laptop from her phone. Her other devices notify her; members accept the laptop through the link, with no timeline notice.",
@@ -253,8 +253,8 @@ const addingADevice: Figure = {
 };
 
 const replacingAPhone: Figure = {
-  id: "tofu-replacing-a-phone",
-  mode: "tofu",
+  id: "paranoid-replacing-a-phone",
+  mode: "paranoid",
   number: "3b",
   title: "Replacing a phone",
   description: "Alice links her new phone from the old one. The app doesn't offer to remove the old phone, and if she does, it suggests waiting a few days.",
@@ -284,7 +284,7 @@ const replacingAPhone: Figure = {
             overlay={
               <Sheet>
                 <h3>Remove iPhone now?</h3>
-                <p>{TOFU.replaceWait}</p>
+                <p>{PARANOID.replaceWait}</p>
                 <button className="primary">Wait</button>
                 <button className="plain danger">Remove anyway</button>
               </Sheet>
@@ -308,11 +308,11 @@ const replacingAPhone: Figure = {
 // ---- 4. Losing every device ------------------------------------------------------
 
 const losingEveryDevice: Figure = {
-  id: "tofu-losing-every-device",
-  mode: "tofu",
+  id: "paranoid-losing-every-device",
+  mode: "paranoid",
   number: 4,
   title: "Losing every device",
-  description: `Alice loses her phone and iPad with no backup and taps ${TOFU.startOver}. She checks and removes her old devices; people who knew her wait at least 72 hours.`,
+  description: `Alice loses her phone and iPad with no backup and taps ${PARANOID.startOver}. She checks and removes her old devices; people who knew her wait at least 72 hours.`,
   setup: bookClub,
   steps: [
     (w, c) => {
@@ -328,7 +328,7 @@ const losingEveryDevice: Figure = {
     checkOldDevices(1),
     {
       label: "Waiting", device: "Alice's new phone", at: 2,
-      view: (w, c) => <Phone><Recovery title="Getting your spaces back" body={TOFU.holdBody} spaces={recovery(w, c.i.fresh)} /></Phone>,
+      view: (w, c) => <Phone><Recovery title="Getting your spaces back" body={PARANOID.holdBody} spaces={recovery(w, c.i.fresh)} /></Phone>,
       caption: "Each space shows its own status. **No promised time:** each member's app starts its own wait, and one that never knew Alice may share at once.",
       expect: (_w, c) => [
         check("Both spaces are still locked", [c.space.club, c.space.family].every((s) => !c.i.fresh.spaces.get(s)?.key)),
@@ -346,7 +346,7 @@ const losingEveryDevice: Figure = {
     },
     {
       label: "If it wasn't Alice", device: "Alice's old iPad", at: 3,
-      view: () => <Tablet><FullAlarm title={TOFU.removedAlarm} body={TOFU.removedAlarmBody} action="Review devices" /></Tablet>,
+      view: () => <Tablet><FullAlarm title={PARANOID.removedAlarm} body={PARANOID.removedAlarmBody} action="Review devices" /></Tablet>,
       caption: "A surviving old device **alarms as soon as it sees itself removed**. Removing the new device there cancels the hold.",
       expect: (_w, c) => [check("The iPad raises the alarm", alarmsOf(c.i.ipad, "own-removed").length > 0)],
     },
@@ -356,14 +356,14 @@ const losingEveryDevice: Figure = {
 // ---- 5. Creating a space from an existing space, 6. Removing ------------------------------
 // The same flows and copy as Relaxed.
 
-const tofuCreatingFromExisting: Figure = { ...creatingFromExisting, id: "tofu-creating-from-existing", mode: "tofu" };
-const tofuRemoving: Figure = { ...removing, id: "tofu-removing", mode: "tofu" };
+const paranoidCreatingFromExisting: Figure = { ...creatingFromExisting, id: "paranoid-creating-from-existing", mode: "paranoid" };
+const paranoidRemoving: Figure = { ...removing, id: "paranoid-removing", mode: "paranoid" };
 
 // ---- 7. Keeping spaces available ------------------------------------------------------------
 
 const keepingSpacesAvailable: Figure = {
-  id: "tofu-keeping-spaces-available",
-  mode: "tofu",
+  id: "paranoid-keeping-spaces-available",
+  mode: "paranoid",
   number: 7,
   title: "Keeping spaces available",
   description: "Joining only works if someone grants. Three layers make that reliable: background issuing, a visible prompt, and always-on devices.",
@@ -401,7 +401,7 @@ const keepingSpacesAvailable: Figure = {
       label: "Visible prompt", device: "Carol, if no grant lands", at: 2,
       view: (w, c) => (
         <Phone>
-          <NoticeBanner title={TOFU.waitingToJoin("Mum", "Book club")} body={TOFU.openToShare} actions={[]} />
+          <NoticeBanner title={PARANOID.waitingToJoin("Mum", "Book club")} body={PARANOID.openToShare} actions={[]} />
           <div className="under-banner"><Inbox rows={inbox(w, c.i.carol)} /></div>
         </Phone>
       ),
@@ -416,7 +416,7 @@ const keepingSpacesAvailable: Figure = {
       view: () => (
         <Laptop>
           <Availability title="Availability" rows={[
-            { label: TOFU.keepAvailable, detail: TOFU.keepAvailableBody, on: true },
+            { label: PARANOID.keepAvailable, detail: PARANOID.keepAvailableBody, on: true },
             { label: "Haven agent", badge: "hosted", detail: "Operated by haven.example. It holds keys to your enabled spaces.", status: "Connected" },
           ]} />
         </Laptop>
@@ -430,6 +430,6 @@ const keepingSpacesAvailable: Figure = {
   ],
 };
 
-export const tofuFigures: Figure[] = [
-  creatingASpace, addingAMember1, addingAMember2, addingADevice, replacingAPhone, losingEveryDevice, tofuCreatingFromExisting, tofuRemoving, keepingSpacesAvailable,
+export const paranoidFigures: Figure[] = [
+  creatingASpace, addingAMember1, addingAMember2, addingADevice, replacingAPhone, losingEveryDevice, paranoidCreatingFromExisting, paranoidRemoving, keepingSpacesAvailable,
 ];

@@ -1,8 +1,8 @@
-// User-facing strings, quoted from ux-flows/relaxed-tofu.md and
-// ux-flows/tofu.md. Screens take every string from here, so the figures say
+// User-facing strings, quoted from ux-flows/relaxed.md and
+// ux-flows/paranoid.md. Screens take every string from here, so the figures say
 // what the docs say. Keyed by presentation where the two differ.
 
-export type Mode = "relaxed" | "tofu";
+export type Mode = "relaxed" | "paranoid";
 
 export const APP = "Lantern";
 
@@ -38,7 +38,7 @@ const shared: Strings = {
 
 export const COPY: Record<Mode, Strings> = {
   relaxed: shared,
-  tofu: {
+  paranoid: {
     ...shared,
     linkConfirmTitle: (d) => `Link ${d}?`,
     linkThisDeviceBody: `${shared.linkThisDeviceBody} Until then, people in your spaces won't share keys with it.`,
@@ -46,8 +46,8 @@ export const COPY: Record<Mode, Strings> = {
   },
 };
 
-/** Strings only the TOFU flows use (ux-flows/tofu.md). */
-export const TOFU = {
+/** Strings only the Paranoid flows use (ux-flows/paranoid.md). */
+export const PARANOID = {
   soleHolder: "Only this device can currently read this space.",
   addADevice: "Add a device",
   unverified: "Devices in this space aren't verified. Changes are shown, but not blocked.",

@@ -152,7 +152,7 @@ export function linkedFrom(w: World, b: Binding): string | undefined {
   return undefined;
 }
 
-/** Whether this device is the only known holder of the space key (tofu.md). */
+/** Whether this device is the only known holder of the space key (paranoid.md). */
 export const soleHolder = (w: World, me: Installation, uri: string) => spaceStatus(w, me, uri).sole;
 
 export type StartOverRow = { name: string; detail: string };

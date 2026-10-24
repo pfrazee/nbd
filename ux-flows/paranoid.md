@@ -1,6 +1,6 @@
-# NBD UX Flows: TOFU
+# NBD UX Flows: Paranoid
 
-Informative. User-facing flows for NBD spaces, which all use [trust on first use](../core.md#device-trust). See also [Relaxed TOFU](relaxed-tofu.md), which presents the same protocol with minimal security UI. A "device" is an app installation.
+Informative. User-facing flows for NBD spaces, which all use [trust on first use](../core.md#device-trust). See also [Relaxed](relaxed.md), which presents the same protocol with minimal security UI. A "device" is an app installation.
 
 ## What protects these spaces
 
@@ -22,7 +22,7 @@ There is no device verification. Members share one key, so one member verifying 
 
 **Sole-holder indicator:** whenever this device is the only known holder of the space key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
-![Creating a space in TOFU: the new space form, the opened space with the sole-holder note and its Add a device link, space info saying devices aren't verified and members read the full history, and the note gone once Alice's iPad has the key](images/tofu-creating-a-space.png)
+![Creating a space (Paranoid): the new space form, the opened space with the sole-holder note and its Add a device link, space info saying devices aren't verified and members read the full history, and the note gone once Alice's iPad has the key](images/paranoid-creating-a-space.png)
 
 
 ## Adding a member
@@ -40,7 +40,7 @@ Admin Alice adds Bob.
 4. **Brief locked state: "Waiting for a member's device…"** His app publishes a [key request](../core.md#key-requests). Bob can write drafts locally. Members' devices grant [in the background](#keeping-spaces-available), usually within seconds.
 5. **Unlock.** Carol's device pins Bob's device on first sight and grants; Bob's device pins Carol's device and accepts. One grant unlocks all reachable history.
 
-![Adding a member in TOFU, steps 1–3: the invite confirmation says Bob will be able to read everything already posted, Carol sees "Alice added Bob", and Bob taps Join](images/tofu-adding-a-member-1.png)
+![Adding a member (Paranoid), steps 1–3: the invite confirmation says Bob will be able to read everything already posted, Carol sees "Alice added Bob", and Bob taps Join](images/paranoid-adding-a-member-1.png)
 
 **Afterwards:**
 
@@ -48,7 +48,7 @@ Admin Alice adds Bob.
 7. **Unlinked devices:** if a new Bob device appears without a link from a Bob device already pinned, members' apps don't share keys with it, and there is no override. Device lists show "Bob has a device that isn't linked to his others," which can mean Bob skipped linking or someone is impersonating him.
 8. **Alarms:** Bob's client alarms if it finds a grant to a device he never approved, or records in his repo for devices he doesn't recognise ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to *Book club*." These are the main defense against substitution, so they are prominent.
 
-![Adding a member in TOFU, steps 4–8: Bob waits for a member's device, Carol's grant unlocks the history, Carol's list of Bob's devices shows his unlinked tablet getting no keys, and Bob's own app raises the unrecognised-device alarm](images/tofu-adding-a-member-2.png)
+![Adding a member (Paranoid), steps 4–8: Bob waits for a member's device, Carol's grant unlocks the history, Carol's list of Bob's devices shows his unlinked tablet getting no keys, and Bob's own app raises the unrecognised-device alarm](images/paranoid-adding-a-member-2.png)
 
 
 ## Adding a device
@@ -64,9 +64,9 @@ Alice gets a new laptop.
 
 7. **Replacing a phone.** If the laptop replaces an old device, the app does not offer to remove the old one afterwards. Wiping or trading it in is fine. Removing it from her account right away would make members' apps that haven't caught up see a reset and wait 3 days ([replacement](../device-enrollment.md#replacement)), so if Alice removes it, the app suggests waiting a few days first.
 
-![Adding a device in TOFU: the laptop's linking code says members won't share until it's linked, the phone confirms "Link Alice's Laptop?", the iPad gets a new-device notice with Remove it, and Bob's list of Alice's devices shows three, each with the device that linked it](images/tofu-adding-a-device.png)
+![Adding a device (Paranoid): the laptop's linking code says members won't share until it's linked, the phone confirms "Link Alice's Laptop?", the iPad gets a new-device notice with Remove it, and Bob's list of Alice's devices shows three, each with the device that linked it](images/paranoid-adding-a-device.png)
 
-![Replacing a phone in TOFU: the old phone links the new one, the new phone gets every key, removing the old phone asks to wait a few days first, and Bob accepts the new phone with no hold](images/tofu-replacing-a-phone.png)
+![Replacing a phone (Paranoid): the old phone links the new one, the new phone gets every key, removing the old phone asks to wait a few days first, and Bob accepts the new phone with no hold](images/paranoid-replacing-a-phone.png)
 
 ## Losing every device
 
@@ -77,7 +77,7 @@ Alice gets a new laptop.
 5. **If Alice didn't do this,** any old device of hers that is still running alarms as soon as it sees itself removed: "This device was removed from your account. If this wasn't you, change your password at your provider and remove devices you don't recognise." Removing the new device there cancels the hold ([re-enrollment](../device-enrollment.md#re-enrollment)).
 6. **Prevention still matters.** The app prompts users with one device to add a second device or turn on backup, so recovery doesn't need the wait.
 
-![Losing every device in TOFU: the new phone lists her old devices, with when each was added, and asks whether she recognises them all before removing them, then explains the 3-day wait with each space's status, Bob sees the reset line with the day his app computed, and Alice's old iPad alarms when it sees itself removed](images/tofu-losing-every-device.png)
+![Losing every device (Paranoid): the new phone lists her old devices, with when each was added, and asks whether she recognises them all before removing them, then explains the 3-day wait with each space's status, Bob sees the reset line with the day his app computed, and Alice's old iPad alarms when it sees itself removed](images/paranoid-losing-every-device.png)
 
 ## Creating a space from an existing space
 
@@ -93,7 +93,7 @@ NBD has no parent/child relationship; each space is cryptographically independen
 2. **Creator:** as in [creating a space](#creating-a-space).
 3. **Each member taps Join once;** existing pins carry over, so grants arrive as soon as their devices request them.
 
-![Creating a space from an existing space in TOFU: "New space from Book club…" in the space menu, a pre-filled form noting messages aren't copied, and Bob joining with one tap](images/tofu-creating-from-existing.png)
+![Creating a space from an existing space (Paranoid): "New space from Book club…" in the space menu, a pre-filled form noting messages aren't copied, and Bob joining with one tap](images/paranoid-creating-from-existing.png)
 
 
 ## Removing a member or device
@@ -103,7 +103,7 @@ NBD has no parent/child relationship; each space is cryptographically independen
 3. **Copy is honest.** The timeline says "Carol was removed," never that new messages are protected from her. Space info explains: "Carol's devices still hold this space's key. If she got new messages some other way, she could read them" ([no rotation](../core.md#no-rotation)).
 4. **No move offered.** Removing, plus signing a device out, is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
 
-![Removing a member or device in TOFU: "Carol was removed" in the timeline, space info saying her devices still hold the key, signing the lost iPad out at the provider, and the device list after removal suggesting a password change](images/tofu-removing.png)
+![Removing a member or device (Paranoid): "Carol was removed" in the timeline, space info saying her devices still hold the key, signing the lost iPad out at the provider, and the device list after removal suggesting a password change](images/paranoid-removing.png)
 
 ## Keeping spaces available
 
@@ -111,4 +111,4 @@ NBD has no parent/child relationship; each space is cryptographically independen
 2. **Visible prompts.** If no grant arrives within a short window, the requester's app asks members to open the space: "Bob is waiting to join Book club. Open to share access."
 3. **Always-on devices.** A desktop, home server, or hosted agent linked as an ordinary device grants whenever it is running. Settings copy: "Keep your spaces available from this computer." Hosted agents say who operates them, because they hold keys.
 
-![Keeping spaces available in TOFU: background issuing behind a lock-screen notification, the visible prompt to open the space, and always-on device settings](images/tofu-keeping-spaces-available.png)
+![Keeping spaces available (Paranoid): background issuing behind a lock-screen notification, the visible prompt to open the space, and always-on device settings](images/paranoid-keeping-spaces-available.png)

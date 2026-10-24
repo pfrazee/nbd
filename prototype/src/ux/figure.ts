@@ -22,7 +22,7 @@ export type Panel = {
 };
 
 export type Figure = {
-  id: string; // image file name, e.g. "relaxed-tofu-adding-a-device"
+  id: string; // image file name, e.g. "relaxed-adding-a-device"
   mode: Mode;
   number: number | string;
   title: string;

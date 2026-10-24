@@ -14,7 +14,7 @@ function App() {
     <div className="index">
       <h1>Lantern: NBD UX flows</h1>
       <a href="?">Device wall</a>
-      {figures.map((x) => <a key={x.id} href={`?figure=${x.id}`}>{x.mode === "tofu" ? "TOFU" : "Relaxed"} · {x.number}. {x.title}</a>)}
+      {figures.map((x) => <a key={x.id} href={`?figure=${x.id}`}>{x.mode === "paranoid" ? "Paranoid" : "Relaxed"} · {x.number}. {x.title}</a>)}
     </div>
   );
 }

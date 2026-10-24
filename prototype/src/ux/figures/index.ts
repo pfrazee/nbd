@@ -1,5 +1,5 @@
 import type { Figure } from "../figure";
 import { relaxedFigures } from "./relaxed";
-import { tofuFigures } from "./tofu";
+import { paranoidFigures } from "./paranoid";
 
-export const figures: Figure[] = [...relaxedFigures, ...tofuFigures];
+export const figures: Figure[] = [...relaxedFigures, ...paranoidFigures];

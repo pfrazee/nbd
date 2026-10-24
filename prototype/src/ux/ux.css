@@ -185,7 +185,7 @@ h1, h2, h3, p { margin: 0; }
 .lock-time { text-align: center; font-size: 64px; font-weight: 300; margin-bottom: 30px; }
 .lock-screen .notice-banner { position: static; margin-top: 12px; }
 
-/* ---- TOFU additions ---- */
+/* ---- Paranoid additions ---- */
 .space-note { margin: 0 14px 10px; padding: 10px 14px; border-radius: 12px; background: #f3f4f7; color: var(--muted); font-size: 13px; line-height: 1.45; }
 .space-note b { color: var(--accent); font-weight: 600; }
 .info { position: relative; }
