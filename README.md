@@ -24,4 +24,5 @@ Read the specifications below:
 | [Rationale](rationale.md) | Design choices and comparison with MLS, Megolm, Signal sender keys, and Keybase team keys (informative). |
 | [Remaining work](TODOs.md) | Implementation, [validation cases](TODOs.md#validation-cases), and deferred extensions. |
 | [Executable model](model/README.md) | Local trust in Python, with adversarial cases, random walks, and mutation testing (informative). |
+| [Tamarin model](formal/README.md) | Symbolic proofs of secrecy and authentication under compromise and a malicious PDS (informative). |
 | [Prototype](prototype/README.md) | Multi-device simulation with a playable UI; start with its [reviewer guide](prototype/README.md#for-reviewers) (informative). |

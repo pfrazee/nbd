@@ -22,7 +22,7 @@ Implement and test [grant publication and auditing](audit.md), creator-first sch
 <a id="todo-10"></a>
 ### 10: Interoperability and security
 
-Publish byte-exact positive/negative vectors, cross-check independent implementations, and obtain independent protocol/cryptographic review. Track coverage in [validation cases](#validation-cases).
+Publish byte-exact positive/negative vectors, cross-check independent implementations, and obtain independent protocol/cryptographic review. A [Tamarin model](formal/README.md) of grants, approvals, and key compromise is a starting point for that review, not a substitute. Track coverage in [validation cases](#validation-cases).
 
 <a id="todo-12"></a>
 ### 12: Platforms

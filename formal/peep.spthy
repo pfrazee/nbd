@@ -1,0 +1,317 @@
+theory PEEP
+begin
+
+/*
+ * Symbolic model of PEEP's grants, device approvals, and key compromise.
+ * See README.md for the adversary, the abstractions, and how each lemma
+ * maps to security-goals.md.
+ *
+ * The adversary controls the network and plays every PDS: clients read
+ * device records, approvals, deletions, and grants from it. It can
+ * compromise any device and create devices of its own. The Spaces host's
+ * membership and configuration decisions are trusted, as in the spec.
+ *
+ * Build the pre-fix variant, where an approval could accept a device while
+ * every accepted binding of its account was revoked, with -D=NOLIVEGUARD.
+ */
+
+builtins: signing, asymmetric-encryption, hashing
+
+// Live-binding counts: z, s(z), s(s(z)), ... (a free function, so cheap to unify).
+functions: s/1
+
+/* ---- Devices and compromise ------------------------------------------- */
+
+// A device: independent signing and encryption keys, published as the
+// binding <account, pk(sign), pk(enc)>.
+rule NewDevice:
+    [ Fr(~sk), Fr(~ek) ]
+  --[ HonestSign(pk(~sk)), HonestEnc(pk(~ek)), Device($A, pk(~sk), pk(~ek)) ]->
+    [ !Dev($A, ~sk, ~ek), Out(<$A, pk(~sk), pk(~ek)>) ]
+
+// Compromise reveals a device's keys.
+rule Compromise:
+    [ !Dev(A, sk, ek) ]
+  --[ Compromised(pk(sk)), CompromisedEnc(pk(ek)) ]->
+    [ Out(<sk, ek>) ]
+
+// ... and every space key it holds.
+rule LeakHeld:
+    [ !Holds(pk(sk), S, k), !Dev(A, sk, ek) ]
+  --[ Compromised(pk(sk)), CompromisedEnc(pk(ek)), LeakHeld(S, k) ]->
+    [ Out(k) ]
+
+/* ---- Trusted host ----------------------------------------------------- */
+
+// A device creates a space: a fresh key, and a configuration committing to
+// it, which the host fixes for the life of the space.
+rule CreateSpace:
+    [ !Dev(A, sk, ek), Fr(~S), Fr(~kid), Fr(~k) ]
+  --[ SpaceKey(~S, ~k), Admitted(~S, A) ]->
+    [ !Config(~S, ~kid, h(<~S, ~kid, ~k>)), !Member(~S, A), !Holds(pk(sk), ~S, ~k), Out(<~S, ~kid>) ]
+
+// The host admits accounts by its own decision.
+rule Admit:
+    [ !Config(S, kid, c) ]
+  --[ Admitted(S, $B) ]->
+    [ !Member(S, $B) ]
+
+/* ---- Approvals and key requests (honest devices) ---------------------- */
+
+// Pairing authenticates the target, so honest devices approve only honest
+// devices of their own account.
+rule Approve:
+    let s = <A, pk(sk), pk(ek)>
+        t = <A, pk(sk2), pk(ek2)>
+    in
+    [ !Dev(A, sk, ek), !Dev(A, sk2, ek2) ]
+  --[ Neq(sk, sk2), Approved(pk(sk), t) ]->
+    [ Out(<'approve', A, s, t, sign(<'approve', A, s, t>, sk)>) ]
+
+// Key requests are signed with the same key under a different tag.
+rule KeyRequest:
+    let b = <A, pk(sk), pk(ek)> in
+    [ !Dev(A, sk, ek), !Config(S, kid, c) ]
+  --[ KeyRequested(pk(sk), S) ]->
+    [ Out(<'keyreq', S, b, sign(<'keyreq', S, b>, sk)>) ]
+
+/* ---- Client trust: one honest device's view of another account -------- */
+
+// First use: a client that never knew account A accepts what its PDS shows.
+// LiveN counts this client's live accepted bindings of A.
+rule FirstUse:
+    let c = pk(sk)
+        t = <A, pt, pet>
+    in
+    [ !Dev(CA, sk, ek), In(t) ]
+  --[ Neq(CA, A), FirstUse(c, A), Knew(c, A), Accept(c, A, t), AcceptFirstUse(c, A, t) ]->
+    [ !Acc(c, t), LiveN(c, A, s('z')) ]
+
+// Approval by a binding the client accepted, revoked or not, but only while
+// the account has a live accepted binding at this client (D2).
+rule AcceptApproval:
+    let s = <A, ps, pes>
+        t = <A, pt, pet>
+    in
+    [ !Acc(c, s), LiveN(c, A, s(n)), In(<'approve', A, s, t, sig>) ]
+  --[ Eq(verify(sig, <'approve', A, s, t>, ps), true), Accept(c, A, t), ApprovalAccept(c, A, ps, t) ]->
+    [ !Acc(c, t), LiveN(c, A, s(s(n))) ]
+
+#ifdef NOLIVEGUARD
+// The pre-fix rule: an approval accepts a device even while every accepted
+// binding of the account is revoked, ending re-enrollment without a hold.
+rule AcceptApprovalDuringReset:
+    let s = <A, ps, pes>
+        t = <A, pt, pet>
+    in
+    [ !Acc(c, s), LiveN(c, A, 'z'), In(<'approve', A, s, t, sig>) ]
+  --[ Eq(verify(sig, <'approve', A, s, t>, ps), true), Accept(c, A, t), ApprovalAccept(c, A, ps, t), AcceptWhileReset(c, A, t) ]->
+    [ !Acc(c, t), LiveN(c, A, s('z')) ]
+#endif
+
+// Revocation: the adversary, as PDS, can delete any record for any client.
+// Each accepted binding is revoked at most once (a restriction).
+rule Revoke:
+    let t = <A, pt, pet> in
+    [ !Acc(c, t), LiveN(c, A, s(n)), In(<'deleted', t>) ]
+  --[ Revoke(c, t) ]->
+    [ LiveN(c, A, n) ]
+
+// Re-enrollment: with every accepted binding revoked, a candidate is held.
+// The hold consumes the count, so nothing else accepts for A meanwhile.
+rule HoldStart:
+    let t = <A, pt, pet> in
+    [ LiveN(c, A, 'z'), In(t) ]
+  --[ HoldStart(c, A, t) ]->
+    [ Hold(c, A, t) ]
+
+rule HoldComplete:
+    [ Hold(c, A, t) ]
+  --[ HoldDone(c, A, t), Accept(c, A, t), AcceptWhileReset(c, A, t) ]->
+    [ !Acc(c, t), LiveN(c, A, s('z')) ]
+
+rule HoldCancel:
+    [ Hold(c, A, t), In(<'deleted', t>) ]
+  --[ Revoke(c, t) ]->
+    [ LiveN(c, A, 'z') ]
+
+/* ---- Grants ----------------------------------------------------------- */
+
+// An issuer grants a key it holds to a binding it accepted and that is live,
+// for members of the space. HPKE is abstracted as public-key encryption of
+// the key bound to the header; the issuer signature is required.
+rule IssueGrant:
+    let me  = <A, pk(sk), pk(ek)>
+        t   = <B, pr, per>
+        hdr = <'hdr', S, kid, t, me>
+        ct  = aenc(<k, hdr>, per)
+    in
+    [ !Dev(A, sk, ek), !Holds(pk(sk), S, k), !Config(S, kid, cm), !Member(S, A), !Member(S, B),
+      !Acc(pk(sk), t) ]
+  --[ Grant(pk(sk), S, k, t), UsesLive(pk(sk), t) ]->
+    [ Out(<hdr, ct, sign(<'grant', hdr, ct>, sk)>) ]
+
+// The recipient checks the signature, that it is the recipient, decryption,
+// the commitment, that it accepts the issuer, and membership (A1-A6).
+rule AcceptGrant:
+    let me  = <B, pk(sk), pk(ek)>
+        i   = <A, ps, pes>
+        hdr = <'hdr', S, kid, me, i>
+    in
+    [ !Dev(B, sk, ek), In(<hdr, aenc(<k, hdr>, pk(ek)), sig>), !Config(S, kid, h(<S, kid, k>)),
+      !Member(S, A), !Member(S, B), !Acc(pk(sk), i) ]
+  --[ Eq(verify(sig, <'grant', hdr, aenc(<k, hdr>, pk(ek))>, ps), true), AcceptKey(me, S, k, ps), UsesLive(pk(sk), i) ]->
+    [ !Holds(pk(sk), S, k) ]
+
+/* ---- Restrictions ----------------------------------------------------- */
+
+restriction Equality:
+  "All x y #i. Eq(x, y) @ i ==> x = y"
+
+restriction Inequality:
+  "All x #i. Neq(x, x) @ i ==> F"
+
+// First use happens once, and never for an account the client already knew.
+restriction FirstUseOnlyOnce:
+  "All c A #i #j. FirstUse(c, A) @ i & Knew(c, A) @ j & j < i ==> F"
+
+// A revoked binding is never accepted again, nor used for a grant.
+restriction RevokedStaysRevoked:
+  "All c A t #i #j. Revoke(c, t) @ i & Accept(c, A, t) @ j & i < j ==> F"
+
+restriction RevokedNotUsed:
+  "All c t #i #j. Revoke(c, t) @ i & UsesLive(c, t) @ j & i < j ==> F"
+
+// Each binding is accepted, and revoked, at most once per client, so the
+// live count counts bindings.
+restriction AcceptOnce:
+  "All c A B t #i #j. Accept(c, A, t) @ i & Accept(c, B, t) @ j ==> #i = #j"
+
+restriction RevokeOnce:
+  "All c t #i #j. Revoke(c, t) @ i & Revoke(c, t) @ j ==> #i = #j"
+
+/* ---- Lemmas ----------------------------------------------------------- */
+
+// 1. An honest member's device receives the key from an honest creator,
+// with both sides meeting on first contact. (The negated clauses only prune
+// the search for a witness.)
+lemma executable_grant:
+  exists-trace
+  "Ex r S k ps #i. AcceptKey(r, S, k, ps) @ i
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+
+// 1b. A client accepts a second device of an account through a genuine
+// approval by the first, so the approval lemmas are not vacuous.
+lemma executable_approval:
+  exists-trace
+  "Ex c A ps pes pt pet #f #x #a.
+       AcceptFirstUse(c, A, <A, ps, pes>) @ f
+     & Approved(ps, <A, pt, pet>) @ x
+     & ApprovalAccept(c, A, ps, <A, pt, pet>) @ a
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex a1 b1 x1 #x2. HoldStart(a1, b1, x1) @ x2)
+     & not (Ex a1 x1 #x2. Revoke(a1, x1) @ x2)"
+
+// 1c. End to end: that device then receives the key from the same client.
+lemma executable_approved_device:
+  exists-trace
+  "Ex c A ps pes pt pet S k IA ce #f #x #a #h #g.
+       AcceptFirstUse(c, A, <A, ps, pes>) @ f
+     & Approved(ps, <A, pt, pet>) @ x
+     & ApprovalAccept(c, A, ps, <A, pt, pet>) @ a
+     & AcceptFirstUse(pt, IA, <IA, c, ce>) @ h
+     & AcceptKey(<A, pt, pet>, S, k, c) @ g
+     & (All c2 A2 x2 t2 #y. ApprovalAccept(c2, A2, x2, t2) @ y ==> #y = #a)
+     & (All c2 A2 t2 #y. AcceptFirstUse(c2, A2, t2) @ y ==> (#y = #f | #y = #h))
+     & (All r2 S2 k2 i2 #y. AcceptKey(r2, S2, k2, i2) @ y ==> #y = #g)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex a1 b1 x1 #x2. HoldStart(a1, b1, x1) @ x2)
+     & not (Ex a1 x1 #x2. Revoke(a1, x1) @ x2)"
+
+// 4. Every accepted key is the key the creator committed to.
+lemma key_agreement:
+  "All r S k ps #i. AcceptKey(r, S, k, ps) @ i ==> Ex #j. SpaceKey(S, k) @ j"
+
+// 3. An accepted grant was issued by its issuer for this recipient, unless
+// the issuer's signing key is compromised or the adversary's own.
+lemma grant_authentication:
+  "All r S k ps #i. AcceptKey(r, S, k, ps) @ i ==>
+       (Ex #j. Grant(ps, S, k, r) @ j & j < i)
+     | (Ex #c. Compromised(ps) @ c & c < i)
+     | not (Ex #h. HonestSign(ps) @ h)"
+
+// 5. An approval signed by an honest device was really made by it, unless
+// its key is compromised; key-request signatures never stand in for one.
+lemma approval_authenticity:
+  "All c A ps t #i #h. ApprovalAccept(c, A, ps, t) @ i & HonestSign(ps) @ h ==>
+       (Ex #a. Approved(ps, t) @ a & a < i)
+     | (Ex #r. Compromised(ps) @ r & r < i)"
+
+// 6. After first contact, a device the adversary created is accepted only
+// after a hold, or through an approval by a compromised or adversary key.
+lemma no_silent_addition:
+  "All c A pt pet #i #j. Accept(c, A, <A, pt, pet>) @ i & Knew(c, A) @ j & j < i
+       & not (Ex #h. HonestSign(pt) @ h) ==>
+       HoldDone(c, A, <A, pt, pet>) @ i
+     | (Ex ps. ApprovalAccept(c, A, ps, <A, pt, pet>) @ i
+          & ((not (Ex #h. HonestSign(ps) @ h)) | (Ex #r. Compromised(ps) @ r & r < i)))"
+
+// 7. While every accepted binding of an account is revoked, only a completed
+// hold accepts anything. Falsified with -D=NOLIVEGUARD.
+lemma reset_acceptance_needs_hold:
+  "All c A t #i. AcceptWhileReset(c, A, t) @ i ==> HoldDone(c, A, t) @ i"
+
+#ifdef NOLIVEGUARD
+// 7b. Without the live-binding rule, the analysis finds the bypass fixed in
+// commit 60edc67: after every accepted binding of an account is revoked, an
+// approval signed by a revoked key accepts a new device with no hold.
+lemma revoked_signer_bypass:
+  exists-trace
+  "Ex c A ps pes t #f #r #a.
+       AcceptFirstUse(c, A, <A, ps, pes>) @ f
+     & Revoke(c, <A, ps, pes>) @ r
+     & ApprovalAccept(c, A, ps, t) @ a & AcceptWhileReset(c, A, t) @ a
+     & (All c2 A2 x2 t2 #y. ApprovalAccept(c2, A2, x2, t2) @ y ==> #y = #a)
+     & not (Ex x1 x2 x3 #x4. HoldStart(x1, x2, x3) @ x4)"
+#endif
+
+// 2. Space-key secrecy, proved in two halves whose conjunction is the full
+// claim: the adversary learns a space key only from a compromised holder, a
+// grant to a compromised encryption key, or a grant to its own key that the
+// issuer accepted by first use, after a hold, or through an approval by a
+// compromised or adversary signing key. As one lemma the search does not
+// terminate; 2a and 2b each do.
+
+// 2a. How a space key can leak: from a compromised holder, or through a
+// grant to an encryption key the adversary can decrypt.
+lemma key_leaks_only_via_holders_or_grants:
+  "All S k #i #j. SpaceKey(S, k) @ i & K(k) @ j ==>
+       (Ex #l. LeakHeld(S, k) @ l)
+     | (Ex iss B pr pe #g #r. Grant(iss, S, k, <B, pr, pe>) @ g & CompromisedEnc(pe) @ r)
+     | (Ex iss B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h))"
+
+// 2b. Why an issuer grants to an encryption key the adversary created: it
+// accepted that binding by first use, after a hold, or through an approval
+// by a compromised or adversary signing key.
+lemma adversary_grant_targets_justified:
+  "All iss S k B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h) ==>
+       (Ex #a. AcceptFirstUse(iss, B, <B, pr, pe>) @ a)
+     | (Ex #a. HoldDone(iss, B, <B, pr, pe>) @ a)
+     | (Ex ps #a. ApprovalAccept(iss, B, ps, <B, pr, pe>) @ a
+          & ((not (Ex #h. HonestSign(ps) @ h)) | (Ex #r. Compromised(ps) @ r)))"
+
+// 8. Non-goal 1 is a real attack, not an omission: first-use substitution
+// discloses a space key with no compromise at all.
+lemma first_contact_substitution:
+  exists-trace
+  "Ex S k iss B pr pe #i #j #a. SpaceKey(S, k) @ i & K(k) @ j
+     & AcceptFirstUse(iss, B, <B, pr, pe>) @ a & not (Ex #h. HonestEnc(pe) @ h)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+
+end
