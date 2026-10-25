@@ -1,6 +1,6 @@
 # NBD: Remaining Work
 
-The baseline is drafted against the [security goals](security-goals.md), TOFU enrollment with signed device approvals: trust on first use, approvals afterwards, and a hold for clients that knew an account before its reset. The goals and the design still need independent review. Implementation, interoperability, and independent security validation also remain outstanding. IDs are retained for existing references.
+The baseline is drafted against the [security goals](README.md#goals), TOFU enrollment with signed device approvals: trust on first use, approvals afterwards, and a hold for clients that knew an account before its reset. The goals and the design still need independent review. Implementation, interoperability, and independent security validation also remain outstanding. IDs are retained for existing references.
 
 ## Implementation and validation
 

@@ -4,7 +4,7 @@ begin
 /*
  * Symbolic model of NBD's grants, device approvals, and key compromise.
  * See README.md for the adversary, the abstractions, and how each lemma
- * maps to security-goals.md.
+ * maps to the goals in the top-level README.md.
  *
  * The adversary controls the network and plays every PDS: clients read
  * device records, approvals, deletions, and grants from it. It can

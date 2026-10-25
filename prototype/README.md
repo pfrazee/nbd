@@ -40,7 +40,7 @@ Pass figure ids, such as `npm run capture paranoid-adding-a-device`, to capture 
 
 ### Goals and where to see them
 
-Each [security goal](../security-goals.md) and non-goal maps to the scenarios or tests that exercise it. Scenarios are in the UI's menu; tests are under `test/`.
+Each [security goal](../README.md#goals) and non-goal maps to the scenarios or tests that exercise it. Scenarios are in the UI's menu; tests are under `test/`.
 
 | Goal | Scenarios | Tests |
 | --- | --- | --- |

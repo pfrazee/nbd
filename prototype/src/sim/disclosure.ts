@@ -1,4 +1,4 @@
-// Goal-level check (security-goals.md): every grant from an honest
+// Goal-level check (goals in the top-level README.md): every grant from an honest
 // installation to a device an attacker controls must be explained by a path
 // the goals permit. It judges against the world's ground truth (who controls
 // each device, when it appeared, which keys were copied), not the clients'
