@@ -1,7 +1,8 @@
-"""Cases for InviterClient, the inviters proposal (proposal-inviters.md):
-grant standing, vouches scoped to the invited space, and the first-contact
-hold. Each test matches a case in the proposal's "What it protects" table or
-its "Before changing the baseline" list.
+"""Cases for InviterClient's grant standing and invites
+(device-enrollment.md#grant-standing, core.md#invites): authorizations
+scoped to invited spaces, the first-contact hold, pending and durable
+invites, and transfers between a user's installations, including each case
+Astra's reviews reproduced (rationale.md#inviters-and-grant-standing).
 
 Run: python3 -I -m unittest discover -s model
 """

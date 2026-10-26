@@ -19,6 +19,11 @@ type Strings = {
   removeIt: string;
   itWasMe: string;
   message: string;
+  // Invites under grant standing (device-enrollment.md#grant-standing).
+  shareFrom: (who: string, day: string) => string;
+  waitingForInviter: (who: string) => string;
+  inviteUnsent: string;
+  invitedBy: (who: string) => string;
 };
 
 const shared: Strings = {
@@ -34,6 +39,10 @@ const shared: Strings = {
   removeIt: "Remove it",
   itWasMe: "It was me",
   message: "Message",
+  shareFrom: (who, day) => `Your device will share with ${who} from ${day}.`,
+  waitingForInviter: (who) => `Waiting for ${who}'s device.`,
+  inviteUnsent: "Invite pending, will send when you're back online",
+  invitedBy: (who) => `Invited by ${who}`,
 };
 
 export const COPY: Record<Mode, Strings> = {
@@ -65,6 +74,8 @@ export const PARANOID = {
   keepAvailable: "Keep your spaces available from this computer",
   keepAvailableBody: "While it's running, it shares access with members and your other devices.",
   passwordHint: "If someone may know your password, change it.",
+  inviteDevices: (who: string, names: string[]) => `${who}'s devices: ${names.join(", ")}`,
+  pendingWindow: (who: string, day: string) => `If ${who} joins after ${day}, they'll get access when members' apps finish their checks.`,
 };
 
 /** Starting over after total device loss, in both presentations

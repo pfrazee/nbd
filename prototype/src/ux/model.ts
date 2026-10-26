@@ -4,7 +4,7 @@
 import type { Installation } from "../protocol/installation";
 import { recordsIn } from "../protocol/repo";
 import type { Notice } from "../protocol/trust";
-import { type Approval, type Binding, COL, type KeyRequest, type SpaceKeyGrant, bindingId } from "../protocol/types";
+import { type Approval, type Binding, COL, type Invite, type KeyRequest, type SpaceKeyGrant, bindingId } from "../protocol/types";
 import type { World } from "../world/world";
 import { spaceStatus, trustStatus } from "../ui/views";
 
@@ -164,4 +164,47 @@ export function startOverList(w: World, me: Installation): StartOverRow[] {
     const from = linkedFrom(w, b);
     return { name: deviceName(w, b), detail: `Added ${weekday(w.provenance.publishedAt.get(b.device.deviceId) ?? 0)}${from ? `, linked from ${from}` : ""}` };
   });
+}
+
+// ---- invites under grant standing (device-enrollment.md#grant-standing) ----------
+
+/** Who invited each member of a space, from the invite records in its repos. */
+export function inviters(w: World, uri: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [did, s] of spaceSnapshots(w, uri))
+    for (const [, v] of recordsIn(s, COL.invite)) {
+      const r = (v as { value: Invite }).value;
+      if (!r.captures && !out.has(r.account)) out.set(r.account, did);
+    }
+  return out;
+}
+
+/** The day this installation will share `uri`'s key with `account`, if it
+ * is holding some of the account's live devices on first contact there. */
+export function shareDay(me: Installation, uri: string, account: string): string | undefined {
+  const left = me.trust.live(account).filter((b) => !me.trust.standing(b, uri))
+    .map((b) => me.trust.firstContactRemaining(b)).filter((x): x is number => x !== null);
+  if (!left.length) return undefined;
+  return weekday(me.localNow() + Math.min(...left) - me.clockOffset);
+}
+
+export type MemberRow = { name: string; invitedBy?: string; shareFrom?: string };
+
+/** A space's members as this installation sees them: who invited each, and
+ * when this device will share with them if it is still waiting. */
+export function memberList(w: World, me: Installation, uri: string): MemberRow[] {
+  const by = inviters(w, uri);
+  return w.host.members(uri).filter((d) => d !== me.did).map((d) => {
+    const inviter = by.get(d);
+    return { name: person(d), invitedBy: inviter && (inviter === me.did ? "you" : person(inviter)), shareFrom: me.spaces.get(uri)?.key ? shareDay(me, uri, d) : undefined };
+  });
+}
+
+/** This installation's invites to a space that are saved but not yet
+ * published, and the accounts it has a pending invite for there. */
+export function inviteStatus(me: Installation, uri: string): { unsent: string[]; pending: string[] } {
+  return {
+    unsent: me.inviteOutbox.filter((e) => e.space === uri && !e.record.captures).map((e) => e.account),
+    pending: [...me.trust.state.pending.values()].filter((p) => p.space === uri && !p.done).map((p) => p.account),
+  };
 }

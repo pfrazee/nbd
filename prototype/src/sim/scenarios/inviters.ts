@@ -1,4 +1,4 @@
-// Scenarios for the inviters proposal (proposal-inviters.md), run under the
+// Scenarios for the inviters rule (device-enrollment.md#grant-standing, core.md#invites), run under the
 // "inviters" policy: only the member who invited an account may grant to its
 // devices on first contact, and only in spaces they invited it to. Every
 // other member holds first-contact devices for 72 hours of its own time.

@@ -7,7 +7,7 @@
 //
 // Permitted paths, for issuer I, attacker device X of account A:
 // - First contact: I first knew A no earlier than X appeared (non-goal 1).
-//   Under the inviters policy (proposal-inviters.md) only one first contact
+//   Under the inviters policy (device-enrollment.md#grant-standing) only one first contact
 //   excuses a grant: an invite or capture record of I's account for this
 //   space authorizes X or an approval ancestor D of X; D was first met
 //   through a record of I's account (an invite or capture, published or

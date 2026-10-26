@@ -11,12 +11,19 @@ begin
  * compromise any device and create devices of its own. The Spaces host's
  * membership and configuration decisions are trusted, as in the spec.
  *
- * Build the pre-fix variant, where an approval could accept a device while
- * every accepted binding of its account was revoked, with -D=NOLIVEGUARD.
+ * Issuing a grant needs grant standing (device-enrollment.md, "Grant
+ * standing"; core.md, "Invites"): a vouch authorized by an invite to the
+ * space, a completed first-contact or re-enrollment hold, or approval by a
+ * binding with standing.
  *
- * Build the inviters proposal (proposal-inviters.md) with -D=INVITERS:
- * issuing a grant then also needs grant standing. Add -D=UNSCOPED for the
- * rejected form in which a vouch gives standing in every space.
+ * Variants, each built with one flag:
+ *   -D=PREINVITERS  the rule before grant standing: any accepted binding may
+ *                   receive a grant.
+ *   -D=NOLIVEGUARD  the pre-fix rule that let an approval accept a device
+ *                   while every accepted binding of its account was revoked.
+ *   -D=UNSCOPED     rejected: a vouch gives standing in every space.
+ *   -D=REINVITE     rejected: an invite of an account already a member counts.
+ *   -D=RETRO        rejected: a vouch combines with invites made before it.
  */
 
 builtins: signing, asymmetric-encryption, hashing
@@ -55,15 +62,16 @@ rule CreateSpace:
     [ !Config(~S, ~kid, h(<~S, ~kid, ~k>)), !Member(~S, A), !Holds(pk(sk), ~S, ~k), Out(<~S, ~kid>) ]
 
 // The host admits accounts by its own decision.
-#ifdef INVITERS
-// Under INVITERS, an admission also names the account whose invite record
-// admitted the account, if any: one with no devices stands for a host
-// console or an application without NBD support.
+// An admission also names the account whose invite record admitted the
+// account, if any: one with no devices stands for a host console or an
+// application without NBD support.
+#ifdef not PREINVITERS
 rule Admit:
     [ !Config(S, kid, c) ]
   --[ Admitted(S, $B), AdmittedBy(S, $B, $X) ]->
     [ !Member(S, $B), !AdmittedVia(S, $B, $X) ]
 #else
+// PREINVITERS: there are no invites.
 rule Admit:
     [ !Config(S, kid, c) ]
   --[ Admitted(S, $B) ]->
@@ -103,9 +111,9 @@ rule FirstUse:
 
 // Approval by a binding the client accepted, revoked or not, but only while
 // the account has a live accepted binding at this client (D2).
-#ifdef INVITERS
-// Under INVITERS, the client also records the signer, whose grant standing
-// the target inherits.
+// The client also records the signer, whose grant standing the target
+// inherits.
+#ifdef not PREINVITERS
 rule AcceptApproval:
     let s = <A, ps, pes>
         t = <A, pt, pet>
@@ -122,6 +130,7 @@ rule AcceptApproval:
   --[ Eq(verify(sig, <'approve', A, s, t>, ps), true), Accept(c, A, t), ApprovalAccept(c, A, ps, t) ]->
     [ !Acc(c, t), LiveN(c, A, s(s(n))) ]
 #endif
+// (PREINVITERS has no grant standing to inherit.)
 
 #ifdef NOLIVEGUARD
 // The pre-fix rule: an approval accepts a device even while every accepted
@@ -151,9 +160,9 @@ rule HoldStart:
   --[ HoldStart(c, A, t) ]->
     [ Hold(c, A, t) ]
 
-#ifdef INVITERS
-// Under INVITERS, a re-enrolled binding has grant standing in every space.
-// (Written with t's shape, which HoldStart fixes, so proofs see its account.)
+// A re-enrolled binding has grant standing in every space. (Written with
+// t's shape, which HoldStart fixes, so proofs see its account.)
+#ifdef not PREINVITERS
 rule HoldComplete:
     let t = <A, pt, pet> in
     [ Hold(c, A, t) ]
@@ -171,7 +180,7 @@ rule HoldCancel:
   --[ Revoke(c, t) ]->
     [ LiveN(c, A, 'z') ]
 
-/* ---- Grant standing (INVITERS) ---------------------------------------- */
+/* ---- Grant standing (all but PREINVITERS) ------------------------------ */
 
 // Grant standing gates only what a client grants; acceptance is unchanged.
 // !Standing(c, sc, t, r), with action GainStanding: c may grant to t the key
@@ -180,7 +189,7 @@ rule HoldCancel:
 // approval ancestor of t. Own bindings are not modeled: a client never
 // accepts its own account's.
 
-#ifdef INVITERS
+#ifdef not PREINVITERS
 // An invite: a client learns that its own account's invite admitted
 // account A to a space (Admit). It counts only if it admitted A
 // (restriction InviteAdmits). A vouch is used only by IssueGrant, which
@@ -200,14 +209,14 @@ rule Invite:
 // after the first use, and the invite before or after it, which only adds
 // behaviors; a pending invite's expiry is time, abstracted as holds are: a
 // capture may simply never happen.
-#ifdef INVITERS & not UNSCOPED
+#ifdef not PREINVITERS & not UNSCOPED
 rule InviteFirstUse:
     let t = <A, pt, pet> in
     [ !Acc(c, t), !Invite(c, S, A) ]
   --[ Vouched(c, t), Authorized(c, S, t), GainStanding(c, S, t, t), VouchOnce(c, t), UsesLive(c, t) ]->
     [ !VouchedFor(c, t), !Standing(c, S, t, t) ]
 #endif
-#ifdef INVITERS & UNSCOPED
+#ifdef not PREINVITERS & UNSCOPED
 // The rejected form: a vouch gives standing in every space.
 rule InviteFirstUse:
     let t = <A, pt, pet> in
@@ -216,7 +225,7 @@ rule InviteFirstUse:
     [ !VouchedFor(c, t), !Standing(c, 'all', t, t) ]
 #endif
 
-#ifdef INVITERS
+#ifdef not PREINVITERS
 restriction VouchOnlyOnFirstUse:
   "All c A pt pet #v. Vouched(c, <A, pt, pet>) @ v ==>
      Ex #f. AcceptFirstUse(c, A, <A, pt, pet>) @ f & f < v"
@@ -225,7 +234,7 @@ restriction VouchOnce:
   "All c t #i #j. VouchOnce(c, t) @ i & VouchOnce(c, t) @ j ==> #i = #j"
 #endif
 
-#ifdef INVITERS & not REINVITE
+#ifdef not PREINVITERS & not REINVITE
 // An invite counts only if it admits the account: no account's invite
 // follows the account's admission to the space, so a vouch is never carried
 // into a space where the account was already a member.
@@ -233,7 +242,7 @@ restriction InviteAdmits:
   "All S A X #i #j. AdmittedBy(S, A, X) @ i & Admitted(S, A) @ j & j < i ==> F"
 #endif
 
-#ifdef INVITERS & not UNSCOPED
+#ifdef not PREINVITERS & not UNSCOPED
 // A later invite authorizes, in its space, the bindings already vouched for
 // when it is made. An invite's record never extends to a binding vouched
 // for after it (restriction InviteAfterVouch).
@@ -244,14 +253,14 @@ rule AuthorizeVouched:
     [ !Standing(c, S, t, t) ]
 #endif
 
-#ifdef INVITERS & not UNSCOPED & not RETRO
+#ifdef not PREINVITERS & not UNSCOPED & not RETRO
 // The admission behind a later authorization follows the vouch.
 restriction InviteAfterVouch:
   "All c S A pt pet #x. AuthorizedLater(c, S, <A, pt, pet>) @ x ==>
      Ex X #v #a. Vouched(c, <A, pt, pet>) @ v & AdmittedBy(S, A, X) @ a & v < a"
 #endif
 
-#ifdef INVITERS
+#ifdef not PREINVITERS
 // The first-contact hold: every binding accepted by first use or approval
 // starts one on acceptance (one accepted by HoldComplete has standing
 // already). Time is abstracted as for re-enrollment. A revoked binding
@@ -298,10 +307,10 @@ restriction GrantNeedsStanding:
        (Ex RA rp rpe #a. GainStanding(c, S, t, <RA, rp, rpe>) @ a & a < g)
      | (Ex RA rp rpe #a. GainStanding(c, 'all', t, <RA, rp, rpe>) @ a & a < g)"
 #else
-/* ---- Grants ----------------------------------------------------------- */
+/* ---- Grants (PREINVITERS) --------------------------------------------- */
 
-// An issuer grants a key it holds to a binding it accepted and that is live,
-// for members of the space. HPKE is abstracted as public-key encryption of
+// An issuer grants a key it holds to any binding it accepted and that is
+// live, for members of the space. HPKE is abstracted as public-key encryption of
 // the key bound to the header; the issuer signature is required.
 rule IssueGrant:
     let me  = <A, pk(sk), pk(ek)>
@@ -357,11 +366,12 @@ restriction RevokeOnce:
 /* ---- Lemmas ----------------------------------------------------------- */
 
 // 1. An honest member's device receives the key from an honest creator,
-// with both sides meeting on first contact. (The negated clauses only prune
-// the search for a witness.)
+// with both sides meeting on first contact. (The single grant and the
+// negated clauses only prune the search for a witness.)
 lemma executable_grant:
   exists-trace
-  "Ex r S k ps #i. AcceptKey(r, S, k, ps) @ i
+  "Ex r S k ps #i #g. AcceptKey(r, S, k, ps) @ i & Grant(ps, S, k, r) @ g
+     & (All a b c d #c. Grant(a, b, c, d) @ c ==> #c = #g)
      & not (Ex x #c. Compromised(x) @ c)
      & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
      & not (Ex a b x #c. HoldStart(a, b, x) @ c)
@@ -445,9 +455,9 @@ lemma revoked_signer_bypass:
 // 2. Space-key secrecy, proved in two halves whose conjunction is the full
 // claim: the adversary learns a space key only from a compromised holder, a
 // grant to a compromised encryption key, or a grant to its own key that the
-// issuer accepted by first use, after a hold, or through an approval by a
-// compromised or adversary signing key. As one lemma the search does not
-// terminate; 2a and 2b each do.
+// issuer gave grant standing (2b is inviters_grant_targets_justified below;
+// under PREINVITERS, adversary_grant_targets_justified). As one lemma the
+// search does not terminate; 2a and 2b each do.
 
 // 2a. How a space key can leak: from a compromised holder, or through a
 // grant to an encryption key the adversary can decrypt.
@@ -457,9 +467,10 @@ lemma key_leaks_only_via_holders_or_grants:
      | (Ex iss B pr pe #g #r. Grant(iss, S, k, <B, pr, pe>) @ g & CompromisedEnc(pe) @ r)
      | (Ex iss B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h))"
 
-// 2b. Why an issuer grants to an encryption key the adversary created: it
-// accepted that binding by first use, after a hold, or through an approval
-// by a compromised or adversary signing key.
+#ifdef PREINVITERS
+// 2b (PREINVITERS). Why an issuer grants to an encryption key the adversary
+// created: it accepted that binding by first use, after a hold, or through
+// an approval by a compromised or adversary signing key.
 lemma adversary_grant_targets_justified:
   "All iss S k B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h) ==>
        (Ex #a. AcceptFirstUse(iss, B, <B, pr, pe>) @ a)
@@ -467,8 +478,8 @@ lemma adversary_grant_targets_justified:
      | (Ex ps #a. ApprovalAccept(iss, B, ps, <B, pr, pe>) @ a
           & ((not (Ex #h. HonestSign(ps) @ h)) | (Ex #r. Compromised(ps) @ r)))"
 
-// 8. Non-goal 1 is a real attack, not an omission: first-use substitution
-// discloses a space key with no compromise at all.
+// 8 (PREINVITERS). Non-goal 1 is a real attack, not an omission: any
+// member's first-use substitution discloses a space key with no compromise.
 lemma first_contact_substitution:
   exists-trace
   "Ex S k iss B pr pe #i #j #a. SpaceKey(S, k) @ i & K(k) @ j
@@ -477,10 +488,26 @@ lemma first_contact_substitution:
      & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
      & not (Ex a b x #c. HoldStart(a, b, x) @ c)
      & not (Ex a x #c. Revoke(a, x) @ c)"
+#else
+// 8. Non-goal 1, narrowed but real: the inviter's own first contact is
+// still a substitution point. An inviter that first meets a substituted
+// binding through its invite vouches for it and discloses the space key,
+// with no hold and no compromise.
+lemma first_contact_substitution:
+  exists-trace
+  "Ex S k iss B pr pe #i #j #a #v. SpaceKey(S, k) @ i & K(k) @ j
+     & AcceptFirstUse(iss, B, <B, pr, pe>) @ a & Vouched(iss, <B, pr, pe>) @ v
+     & not (Ex #h. HonestEnc(pe) @ h)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex x y #c. FirstContactHoldDone(x, y) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+#endif
 
-/* ---- Lemmas for the inviters proposal (-D=INVITERS) ------------------- */
+/* ---- Lemmas on grant standing ----------------------------------------- */
 
-#ifdef INVITERS & not UNSCOPED
+#ifdef not PREINVITERS & not UNSCOPED
 // I1. A grant on a vouch alone: the inviter grants the key of a space its
 // account invited the account to, with no hold and no compromise.
 lemma inviters_executable_vouched_grant:
@@ -523,13 +550,12 @@ lemma inviters_executable_held_grant:
      & not (Ex a b x #c. HoldStart(a, b, x) @ c)
      & not (Ex a x #c. Revoke(a, x) @ c)"
 
-// I4. Under the inviters rule, first use alone no longer justifies a grant
-// to an encryption key the adversary created. The issuer vouched for that
-// binding and an invite of the binding's account to this space authorized
-// it, no earlier than the vouch,
-// completed a first-contact or re-enrollment hold on it, or accepted it
-// through an approval by a compromised or adversary signing key. With 2a,
-// which still verifies under the variant, this is space-key secrecy for it.
+// I4 (2b). First use alone does not justify a grant to an encryption key
+// the adversary created. The issuer vouched for that binding and an invite
+// of the binding's account to this space authorized it, no earlier than the
+// vouch; completed a first-contact or re-enrollment hold on it; or accepted
+// it through an approval by a compromised or adversary signing key. With
+// 2a, this is space-key secrecy.
 lemma inviters_grant_targets_justified:
   "All iss S k B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h) ==>
        (Ex #v #a. Vouched(iss, <B, pr, pe>) @ v & Authorized(iss, S, <B, pr, pe>) @ a & not (a < v))
@@ -539,7 +565,7 @@ lemma inviters_grant_targets_justified:
           & ((not (Ex #h. HonestSign(ps) @ h)) | (Ex #r. Compromised(ps) @ r)))"
 #endif
 
-#ifdef INVITERS & UNSCOPED
+#ifdef not PREINVITERS & UNSCOPED
 // I5. With vouches that count in every space, an adversary binding vouched
 // for through an invite to one space is granted the key of another space
 // its account was never invited to by the issuer, with no hold and no
@@ -561,7 +587,7 @@ lemma cross_space_vouch_attack:
      & not (Ex a x #c. Revoke(a, x) @ c)"
 #endif
 
-#ifdef INVITERS & REINVITE & not UNSCOPED
+#ifdef not PREINVITERS & REINVITE & not UNSCOPED
 // I6. Without InviteAdmits, an invite of an account already admitted to a
 // space carries the inviter's vouch there: the client gains standing in a
 // space where another admission had made the account a member first.
@@ -576,7 +602,7 @@ lemma reinvite_carries_vouch:
      & not (Ex x #c. Compromised(x) @ c)"
 #endif
 
-#ifdef INVITERS & RETRO & not UNSCOPED
+#ifdef not PREINVITERS & RETRO & not UNSCOPED
 // I7. If a later vouch could combine with an earlier invite, an invite
 // made before the client knew the account, and never captured, would let a
 // vouch made through another space's invite authorize it after the fact:
@@ -598,7 +624,7 @@ lemma retro_vouch_attack:
      & not (Ex a x #c. Revoke(a, x) @ c)"
 #endif
 
-#ifdef INVITERS & not UNSCOPED & not REINVITE & not RETRO
+#ifdef not PREINVITERS & not UNSCOPED & not REINVITE & not RETRO
 // I8a. Standing's root is the binding itself or an approval ancestor: an
 // inherited standing comes from the standing of the binding that approved
 // it, with the same root.

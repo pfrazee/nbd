@@ -3,10 +3,11 @@
 
 import { InvariantMonitor } from "../src/sim/invariants";
 import { bindingId } from "../src/protocol/types";
+import type { Policy } from "../src/protocol/types";
 import { World } from "../src/world/world";
 
-function club(seed: string) {
-  const w = new World(seed);
+function club(seed: string, policy?: Policy) {
+  const w = new World(seed, { policy });
   const m = new InvariantMonitor(w);
   const alice = w.install(w.account("alice"), "phone");
   const bob = w.install(w.account("bob"), "phone");
@@ -21,7 +22,9 @@ const goal = (vs: string[]) => vs.filter((v) => v.startsWith("goal:"));
 
 describe("disclosure check", () => {
   it("flags a client that shares with a takeover device before the hold", () => {
-    const { w, m, alice, bob, space } = club("d1");
+    // The simulated bug is an acceptance, which only the baseline rule turns
+    // into a grant; inviters.test.ts covers the same flag under inviters.
+    const { w, m, alice, bob, space } = club("d1", "baseline");
     m.before();
     const attacker = w.takeover(bob.did);
     attacker.join(space);
@@ -57,7 +60,7 @@ describe("disclosure check", () => {
   });
 
   it("flags the old hold bypass if it ever comes back", () => {
-    const { w, m, alice, bob, space } = club("d4");
+    const { w, m, alice, bob, space } = club("d4", "baseline"); // see d1
     const stolen = w.stealKeys(bob);
     m.before();
     const attacker = w.takeover(bob.did);

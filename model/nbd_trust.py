@@ -1,8 +1,11 @@
 """Executable model of NBD device trust.
 
-`SpecClient` models the rules in device-enrollment.md: trust on first
-use, approvals afterwards, revocation by observed absence, and a
-re-enrollment hold bound to its candidate. The other clients are variants
+`InviterClient` models the specified rules: `SpecClient`'s acceptance
+(trust on first use, approvals afterwards, revocation by observed absence,
+and a re-enrollment hold bound to its candidate, as in device-enrollment.md)
+plus grant standing and invites (device-enrollment.md#grant-standing,
+core.md#invites). `SpecClient` alone is the acceptance layer, and the
+design before grant standing. The other clients are variants
 kept for comparison (see COMPARISON.md): ScopedWitnessClient, the rejected
 per-space witness design, which also holds the shared machinery;
 WarnOnlyClient; and AccountWideAnchorClient. Everything is modelled abstractly. There is no
@@ -18,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 REENROLL_HOLD = 72.0  # hours
-PENDING_INVITE_TTL = 168.0  # hours (proposal-inviters.md#pending-invites)
+PENDING_INVITE_TTL = 168.0  # hours (core.md#invites)
 
 
 @dataclass(frozen=True)
@@ -56,7 +59,7 @@ class Grant:
 
 @dataclass(frozen=True)
 class InviteRecord:
-    """An invite record in the inviter account's space repo (proposal-inviters.md).
+    """An invite record in the inviter account's space repo (core.md#invites).
     `bindings` lists the invited account's devices the inviter accepted;
     `authorizes` names those that were vouched for the inviting device when
     it made the record, which may grant there before a hold ends. A pending
@@ -677,8 +680,9 @@ class InviterState(SpecState):
 
 
 class InviterClient(SpecClient):
-    """The inviters proposal (proposal-inviters.md): acceptance as in
-    SpecClient, plus grant standing, which gates what this client grants.
+    """The specified client: acceptance as in SpecClient, plus grant
+    standing (device-enrollment.md#grant-standing) and invites
+    (core.md#invites), which gates what this client grants.
     A binding has standing in a space when a published invite or capture
     record of this client's account for that space authorizes it (each
     record authorizes exactly the bindings vouched, that is first met

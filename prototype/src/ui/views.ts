@@ -61,7 +61,7 @@ export function trustStatus(viewer: Installation, b: Binding, spaceName: (uri: s
   if (st.revoked.has(id)) return { status: "revoked", detail: "removed" };
   const a = st.accepted.get(id);
   if (a && viewer.trust.policy === "inviters" && b.account !== viewer.did) {
-    // Grant standing per joined space (proposal-inviters.md).
+    // Grant standing per joined space (device-enrollment.md#grant-standing).
     const spaces = [...viewer.spaces.keys()].map((s) => {
       const basis = viewer.trust.standingBasis(b, s);
       const left = viewer.trust.firstContactRemaining(b);

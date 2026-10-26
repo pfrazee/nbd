@@ -6,7 +6,7 @@
 // express (public-repo writes and elapsed time, no lag or forged views) and
 // record a trace of the viewer's trust decisions for model/test_traces.py.
 //
-// Under the inviters policy (proposal-inviters.md) a walk has four accounts
+// Under the inviters policy (device-enrollment.md#grant-standing) a walk has four accounts
 // and two spaces with different admins, adds invites and joins only by
 // admitted accounts, and its traces also record invite operations, the
 // accounts the viewer tracks, and the viewer's grant standing per space.
@@ -48,7 +48,7 @@ export class Walk {
   readonly accounts: string[];
   private names = 0;
 
-  constructor(readonly seed: string, readonly shared: boolean, readonly policy: Policy = "baseline") {
+  constructor(readonly seed: string, readonly shared: boolean, readonly policy: Policy = "inviters") {
     const w = (this.world = new World(seed, { policy }));
     if (shared) w.trace = [];
     const inviters = policy === "inviters";
@@ -334,7 +334,7 @@ function eq(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-export function replay(seed: string, shared: boolean, actions: Action[], policy: Policy = "baseline"): string | null {
+export function replay(seed: string, shared: boolean, actions: Action[], policy: Policy = "inviters"): string | null {
   const walk = new Walk(seed, shared, policy);
   for (let n = 0; n < actions.length; n++) {
     const err = walk.step(actions[n]);
@@ -344,7 +344,7 @@ export function replay(seed: string, shared: boolean, actions: Action[], policy:
 }
 
 /** Drop actions one at a time while the walk still fails. */
-export function shrink(seed: string, shared: boolean, actions: Action[], policy: Policy = "baseline"): Action[] {
+export function shrink(seed: string, shared: boolean, actions: Action[], policy: Policy = "inviters"): Action[] {
   for (let changed = true; changed; ) {
     changed = false;
     for (let n = 0; n < actions.length; n++) {
@@ -360,7 +360,7 @@ export function shrink(seed: string, shared: boolean, actions: Action[], policy:
 }
 
 /** Run one seeded walk. Returns the shrunk failing actions, if any. */
-export function walk(seed: string, steps: number, shared: boolean, policy: Policy = "baseline"): { failure: string | null; actions: Action[]; trace: Trace | null } {
+export function walk(seed: string, steps: number, shared: boolean, policy: Policy = "inviters"): { failure: string | null; actions: Action[]; trace: Trace | null } {
   const rng = Rng.fromLabel(`fuzz/${seed}`);
   const w = new Walk(seed, shared, policy);
   const actions: Action[] = [];

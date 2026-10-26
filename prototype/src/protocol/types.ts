@@ -5,8 +5,10 @@ import { type Cbor, ref } from "./encoding";
 
 export type Did = string;
 
-/** Which grant rule installations follow: the baseline specification, or the
- * inviters proposal (proposal-inviters.md), which adds grant standing. */
+/** Which grant rule installations follow: "inviters", the specified rule
+ * with grant standing (device-enrollment.md#grant-standing) and invites
+ * (core.md#invites), or "baseline", the rule from before it, kept for
+ * comparison. */
 export type Policy = "baseline" | "inviters";
 
 export type Device = { deviceId: string; authPubkey: Uint8Array; encryptPubkey: Uint8Array };
@@ -66,7 +68,7 @@ export type SpaceKeyGrant = {
 };
 
 /** An invite record in the inviting account's space repo
- * (proposal-inviters.md#invite-records). `authorizes`: the listed bindings
+ * (core.md#invites). `authorizes`: the listed bindings
  * that were vouched for the inviting device when it made the record, which
  * may grant in this space at once. A pending invite (`pending`, no bindings)
  * admits an account that has no devices yet; a capture record (`captures`:

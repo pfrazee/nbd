@@ -62,7 +62,7 @@ export function authorizeExchange(
     return fail("INCOMPLETE", `${label(other)} is not accepted`);
   }
   // Inviters policy: an issuer also needs grant standing for the recipient
-  // in this space (proposal-inviters.md#grant-standing).
+  // in this space (device-enrollment.md#grant-standing).
   const evidence = trust.state.accepted.get(bindingId(other))!.evidence;
   if (role === "issuer" && trust.policy === "inviters") {
     const basis = trust.standingBasis(other, space);

@@ -4,7 +4,7 @@
 // show them.
 //
 // Under the inviters policy it also checks grant standing
-// (proposal-inviters.md): every accepted binding starts its own first-contact
+// (device-enrollment.md#grant-standing): every accepted binding starts its own first-contact
 // hold, credited no faster than real time and frozen once revoked; a vouch
 // comes only from an invite or capture record its account made on first
 // meeting the account, reaching only installations that had not pinned it

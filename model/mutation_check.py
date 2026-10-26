@@ -64,7 +64,7 @@ MUTATIONS = {
     "revoked stays usable": (
         "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),
-    # InviterClient (proposal-inviters.md).
+    # InviterClient: grant standing and invites.
     "vouch counts in every space": (
         "        if b in st.authorized.get(space, set()):",
         "        if any(b in v for v in st.authorized.values()):"),

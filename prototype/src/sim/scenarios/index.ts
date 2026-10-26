@@ -243,12 +243,12 @@ const s5: Scenario = {
 const s6: Scenario = {
   id: "substitution",
   title: "6. First-contact substitution by a malicious PDS",
-  summary: "Bob's PDS shows Carol, who has never met Bob, a device it controls instead of his. Carol shares the key with it; auditing reveals it only afterwards.",
+  summary: "Bob's PDS shows Carol, who has never met Bob, a device it controls instead of his. Carol's app accepts it but, not having invited Bob, holds it for 72 hours; then it shares, and auditing reveals it only afterwards.",
   steps: [
     ...bookClub(),
     {
       title: "Carol is invited; Bob's PDS substitutes his devices for her",
-      narration: "Carol's app meets Bob for the first time and trusts what his PDS shows: one device, the PDS's own. Alice already knew Bob and sees his real repo.",
+      narration: "Carol's app meets Bob for the first time and trusts what his PDS shows: one device, the PDS's own. Carol didn't invite Bob, so her app holds that device before granting to it (device-enrollment.md#grant-standing). Alice already knew Bob and sees his real repo.",
       run: (w, c) => {
         c.did.carol = w.account("carol");
         c.inst.carolPhone = w.install(c.did.carol, "phone");
@@ -261,15 +261,16 @@ const s6: Scenario = {
       expect: (_w, c) => [
         check("Carol accepted the substitute as Bob", c.inst.carolPhone.trust.isAccepted(c.inst.sub.binding)),
         check("Carol never saw Bob's real phone", !c.inst.carolPhone.trust.isAccepted(c.inst.bobPhone.binding)),
-        check("The substitute got the key, from Carol", hasKey(c.inst.sub, c.space.club)),
+        check("Carol holds it: no key for the substitute yet", !hasKey(c.inst.sub, c.space.club)),
         check("Alice did not accept the substitute", !c.inst.alicePhone.trust.isAccepted(c.inst.sub.binding)),
       ],
     },
     {
-      title: "Detection, after the fact",
-      narration: "Bob's phone audits grants in other members' repos and finds one to a Bob device it never approved. Alice's app compares the commit in Carol's grant evidence with the one it verified for the same revision, and they differ. Neither undoes the disclosure.",
-      run: (w) => w.settle(),
+      title: "72 hours later: disclosure, then detection",
+      narration: "Nobody noticed during the hold, so Carol's app shares with the substitute. Bob's phone audits grants in other members' repos and finds one to a Bob device it never approved. Alice's app compares the commit in Carol's grant evidence with the one it verified for the same revision, and they differ. Neither undoes the disclosure.",
+      run: (w) => w.advance(72),
       expect: (_w, c) => [
+        check("The substitute got the key, from Carol", c.inst.sub.spaces.get(c.space.club)?.keyFrom?.startsWith("did:plc:carol") ?? false),
         check("Bob's phone alarms about an unrecognised device with access", alarms(c.inst.bobPhone, "unapproved-grant").length > 0),
         check("Alice's app raises a fork alarm", alarms(c.inst.alicePhone, "fork").length > 0),
       ],
@@ -443,7 +444,7 @@ const s10: Scenario = {
 const s11: Scenario = {
   id: "eager-pinning",
   title: "11. Why every member must pin eagerly",
-  summary: "Carol and Dave join after Bob and never exchange keys with him. Dave's app pins every member on joining; Carol's pins only when it first exchanges keys. After a takeover of Bob, Dave's app holds, but Carol's meets Bob for the first time through the attacker's device and shares at once.",
+  summary: "Carol and Dave join after Bob and never exchange keys with him. Dave's app pins every member on joining; Carol's pins only when it first exchanges keys. After a takeover of Bob, Dave's app holds, and Carol's meets Bob for the first time through the attacker's device. Under the baseline rule that lazy first contact would share at once; under the inviters rule Carol didn't invite Bob, so her app holds too.",
   steps: [
     ...bookClub(),
     {
@@ -469,7 +470,7 @@ const s11: Scenario = {
     },
     {
       title: "An attacker takes over Bob's account",
-      narration: "Alice's and Dave's apps knew Bob, so they see a reset and hold. Carol's app first meets Bob now, when the attacker's device asks for the key, and sees an ordinary first contact. One lazy member is enough to disclose the space: that is why the specification requires pinning every member on joining.",
+      narration: "Alice's and Dave's apps knew Bob, so they see a reset and hold. Carol's app first meets Bob now, when the attacker's device asks for the key, and sees an ordinary first contact. Under the baseline rule one lazy member was enough to disclose the space, which is why the specification requires pinning every member on joining. Under the inviters rule only Bob's inviter may grant on first contact, so Carol's app holds too; eager pinning still starts each member's hold as early as it can.",
       run: (w, c) => {
         c.inst.attacker = w.takeover(c.did.bob);
         c.inst.attacker.join(c.space.club);
@@ -479,7 +480,8 @@ const s11: Scenario = {
         check("Dave holds the attacker's device", !!c.inst.davePhone.trust.hold(c.did.bob)),
         check("Alice holds it too", !!c.inst.alicePhone.trust.hold(c.did.bob)),
         check("Carol accepted it on first contact", c.inst.carolPhone.trust.isAccepted(c.inst.attacker.binding)),
-        check("The attacker got the key, from Carol", c.inst.attacker.spaces.get(c.space.club)?.keyFrom?.startsWith("did:plc:carol") ?? false),
+        check("Carol has no grant standing for it", !c.inst.carolPhone.trust.standing(c.inst.attacker.binding, c.space.club)),
+        check("The attacker has no key", !hasKey(c.inst.attacker, c.space.club)),
       ],
     },
   ],

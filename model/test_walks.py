@@ -371,7 +371,7 @@ SPACES = ("s1", "s2")
 
 
 class InviterWalk(Walk):
-    """The same walk over InviterClient (proposal-inviters.md), adding
+    """The same walk over InviterClient (grant standing and invites), adding
     invites into two spaces, an account (erin) that starts with no devices
     and later installs, failing writes and retries, and standing queries.
     Extra invariants, checked against the walk's own record of each client's

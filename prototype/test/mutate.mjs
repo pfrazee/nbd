@@ -30,7 +30,7 @@ const MUTATIONS = {
   "host alarm freezes membership": [CLIENT, "if (tampered) this.trust.raise(", "if (tampered) return void this.trust.raise("],
   "start-over quiets every grant": ["    if (!so?.list?.has(bindingId(b))) return false;", "    if (so) return true;"],
   "start-over list never closes": ["} else if (!(so && !so.done && so.list!.has(id))) {", "} else if (!(so && so.list!.has(id))) {"],
-  // The inviters policy (proposal-inviters.md).
+  // The inviters policy (device-enrollment.md#grant-standing).
   "inviters: grants ignore standing": [GRANTS, "if (!basis) return fail(", "if (false) return fail("],
   "inviters: a new invite drops earlier vouches": [CLIENT, "const authorizes = [...met, ...live.filter((b) => !met.includes(b) && this.trust.descendsFromVouched(b))];", "const authorizes = [...met];"],
   "inviters: a later vouch extends older admissions": ["if (st.authorized.get(space)?.has(id)) return \"authorized\";", "if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return \"authorized\";"],

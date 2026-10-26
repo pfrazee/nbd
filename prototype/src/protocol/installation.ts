@@ -263,7 +263,7 @@ export class Installation {
   /** Admit `account` to `space`. Under the inviters policy this first meets
    * the account and saves a signed invite record, then publishes it and
    * admits the account; a record that fails to publish is resent byte for
-   * byte on later syncs (proposal-inviters.md#durable-invites). An invite
+   * byte on later syncs (core.md#invites). An invite
    * counts only if it admits the account, so none is made for a member.
    * Returns whether the account was admitted now. */
   invite(space: string, account: Did): boolean {
@@ -300,7 +300,7 @@ export class Installation {
   /** Invites saved but not yet published, oldest first. */
   inviteOutbox: OutboxInvite[] = [];
 
-  /** proposal-inviters.md#invite-records: sync the account's repo, pin it on
+  /** core.md#invites: sync the account's repo, pin it on
    * first use if this installation has no pin for it, decide what the invite
    * vouches for and authorizes, save the vouch, and sign the record, once. An account with no devices
    * that this installation never pinned gets a pending invite. */
@@ -386,7 +386,7 @@ export class Installation {
     }
   }
 
-  /** proposal-inviters.md#pending-invites: the first time this installation
+  /** core.md#invites: the first time this installation
    * pins an account it made a pending invite for, it vouches for the devices
    * it met on first use and publishes a capture record, if the invite has
    * not expired. */

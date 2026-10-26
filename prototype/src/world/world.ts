@@ -98,12 +98,14 @@ export class World implements Network {
   trace: TraceOp[] | null = null;
   private counter = 0;
 
-  /** The grant rule every installation follows; set at creation. */
+  /** The grant rule every installation follows; set at creation. The
+   * default is the specified rule (inviters); "baseline" is the rule before
+   * it, kept for comparison and for the model's SpecClient traces. */
   readonly policy: Policy;
 
   constructor(seed = "nbd", opts: { policy?: Policy } = {}) {
     this.rng = Rng.fromLabel(seed);
-    this.policy = opts.policy ?? "baseline";
+    this.policy = opts.policy ?? "inviters";
   }
 
   // ---- Network ---------------------------------------------------------------

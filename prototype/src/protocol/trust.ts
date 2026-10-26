@@ -5,7 +5,7 @@
 // model/nbd_trust.py, driven by this installation's verified snapshots
 // rather than a shared world.
 //
-// Under the inviters policy (proposal-inviters.md) it also keeps grant
+// Under the inviters policy (device-enrollment.md#grant-standing) it also keeps grant
 // standing's bases, following InviterClient in model/nbd_trust.py: the
 // bindings its own account's published records authorize per space, vouched
 // bindings (what a new record may authorize), the approver that accepted
@@ -19,7 +19,7 @@ import {
 
 export const REENROLL_HOLD = 72; // hours
 /** How long a pending invite can be captured, in credited hours
- * (proposal-inviters.md#pending-invites). */
+ * (core.md#invites). */
 export const PENDING_INVITE_TTL = 168;
 
 export type Hold = { candidate: string[]; bindings: Binding[]; credited: number; checkpoint: number };
@@ -156,7 +156,7 @@ export class Trust {
     public state: TrustState,
     private readonly own: Binding,
     private readonly localNow: () => number,
-    readonly policy: Policy = "baseline",
+    readonly policy: Policy = "inviters",
   ) {}
 
   // ---- queries -------------------------------------------------------------

@@ -11,7 +11,7 @@ Hold), how a client came to accept the signer of an approval (!Acc leads
 to an earlier approval), and how the adversary learned a public key. Signature checks and adversary knowledge go
 first, since they close most branches outright.
 
-Under -D=INVITERS, how a binding got grant standing comes next: the
+In the main model, how a binding got grant standing comes next: the
 approval that named it, or the vouch and invite behind it, before where an
 approving signer's standing came from. The approval's signature check
 usually closes the branch, while the signer's standing leads to an earlier

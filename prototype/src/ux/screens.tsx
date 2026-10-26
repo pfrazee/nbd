@@ -350,3 +350,27 @@ export function StartOverList({ title, body, rows, confirm, stillHave, unrecogni
     </div>
   );
 }
+
+/** A space's members, with who invited each and when this device will share
+ * with those it is still waiting on (device-enrollment.md#grant-standing). */
+export function MemberList({ title, rows, invitedBy, shareFrom, onBack }: {
+  title: string; rows: { name: string; invitedBy?: string; shareFrom?: string }[];
+  invitedBy?: (who: string) => string; shareFrom?: (who: string, day: string) => string; onBack?: () => void;
+}) {
+  return (
+    <div className="info">
+      <header className="form-header"><span className="back" onClick={onBack}>‹</span><b>{title}</b><span /></header>
+      <section>
+        {rows.map((r) => (
+          <div key={r.name} className={`device-row ${r.shareFrom ? "held" : ""}`}>
+            <div className="device-text">
+              <div className="device-name">{r.name}</div>
+              {invitedBy && r.invitedBy && <div className="device-detail">{invitedBy(r.invitedBy === "you" ? "you" : r.invitedBy)}</div>}
+              {shareFrom && r.shareFrom && <div className="device-detail">{shareFrom(r.name, r.shareFrom)}</div>}
+            </div>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}

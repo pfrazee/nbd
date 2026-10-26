@@ -13,6 +13,7 @@ import {
 } from "../screens";
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
 import { creatingFromExisting, removing } from "./relaxed";
+import { invitingBeforeInstall, newSpaceWaits } from "./invites";
 
 const T = COPY.paranoid;
 type C = FigureCtx;
@@ -93,7 +94,7 @@ const addingAMember1: Figure = {
   mode: "paranoid",
   number: 2,
   title: "Adding a member (1 of 2)",
-  description: "Alice adds Bob. The confirmation says he'll read the history; every member sees the change; Bob joins with one tap.",
+  description: "Alice adds Bob. The confirmation names his devices and says he'll read the history; every member sees the change; Bob joins with one tap.",
   setup: clubWithoutBob,
   steps: [(w, c) => { c.i.iphone.invite(c.space.club, c.i.bob.did); w.settle(); }],
   panels: [
@@ -105,12 +106,13 @@ const addingAMember1: Figure = {
           <Sheet>
             <h3>Add Bob to Book club?</h3>
             <p>{PARANOID.inviteHistory("Bob")}</p>
+            <p>{PARANOID.inviteDevices("Bob", devices(w, c.i.iphone, c.i.bob.did).map((r) => r.name).concat(c.i.iphone.trust.knew(c.i.bob.did) ? [] : [c.i.bob.name]))}</p>
             <button className="primary">Add</button>
             <button className="plain">{T.cancel}</button>
           </Sheet>
         </Phone>
       ),
-      caption: "The confirmation says **admission includes retained history**: a space has one key.",
+      caption: "The confirmation says **admission includes retained history**: a space has one key. Alice's app meets Bob's devices now, at the invite, and **names them** so she can notice an obviously wrong list.",
     },
     {
       label: "Members see it", device: "Carol", at: 1,
@@ -135,7 +137,7 @@ const addingAMember2: Figure = {
   mode: "paranoid",
   number: 2,
   title: "Adding a member (2 of 2)",
-  description: "Bob waits briefly for a member's device, then reads the whole history. Members see his devices; a device he never linked gets nothing, and his own app alarms.",
+  description: "Bob waits briefly for Alice's device, then reads the whole history. Other members hold his device; a device he never linked gets nothing, and his own app alarms.",
   setup: (w, c) => {
     clubWithoutBob(w, c);
     c.i.iphone.invite(c.space.club, c.i.bob.did);
@@ -147,7 +149,7 @@ const addingAMember2: Figure = {
       c.i.bob.join(c.space.club);
       w.settle();
     },
-    (w, c) => { w.advance(0.2); w.setOnline(c.i.carol, true); },
+    (w, c) => { w.advance(0.2); for (const i of [c.i.carol, c.i.iphone]) w.setOnline(i, true); },
     (w, c) => { c.i.tablet = w.install(c.i.bob.did, "Bob's tablet"); },
   ],
   panels: [
@@ -163,10 +165,11 @@ const addingAMember2: Figure = {
     {
       label: "Unlock", device: "Bob", at: 2,
       view: (w, c) => <Phone>{club(w, c, c.i.bob)}</Phone>,
-      caption: "Carol's device pins Bob's on first sight and grants; Bob's pins Carol's. **One grant unlocks all history.**",
+      caption: "Alice's device, which met Bob's when she invited him, grants. Carol's pins Bob's on first sight and **holds it for 3 days** before it would grant. **One grant unlocks all history.**",
       expect: (w, c) => [
-        check("Bob holds the key", !!c.i.bob.spaces.get(c.space.club)?.key),
+        check("Bob holds the key, from Alice", c.i.bob.spaces.get(c.space.club)?.keyFrom?.startsWith("did:plc:alice") ?? false),
         check("Carol pinned Bob's phone on first use", c.i.carol.trust.isAccepted(c.i.bob.binding)),
+        check("Carol holds it", !c.i.carol.trust.standing(c.i.bob.binding, c.space.club)),
         check("He reads history from before he joined", timeline(w, c.i.bob, c.space.club).some((b) => "text" in b && b.text.startsWith("Next up"))),
       ],
     },
@@ -329,7 +332,7 @@ const losingEveryDevice: Figure = {
     {
       label: "Waiting", device: "Alice's new phone", at: 2,
       view: (w, c) => <Phone><Recovery title="Getting your spaces back" body={PARANOID.holdBody} spaces={recovery(w, c.i.fresh)} /></Phone>,
-      caption: "Each space shows its own status. **No promised time:** each member's app starts its own wait, and one that never knew Alice may share at once.",
+      caption: "Each space shows its own status. **No promised time:** each member's app starts its own wait when it first sees the new phone, including members who never knew Alice.",
       expect: (_w, c) => [
         check("Both spaces are still locked", [c.space.club, c.space.family].every((s) => !c.i.fresh.spaces.get(s)?.key)),
         check("The new phone raises no alarm for her old devices", alarmsOf(c.i.fresh).length === 0),
@@ -431,5 +434,6 @@ const keepingSpacesAvailable: Figure = {
 };
 
 export const paranoidFigures: Figure[] = [
-  creatingASpace, addingAMember1, addingAMember2, addingADevice, replacingAPhone, losingEveryDevice, paranoidCreatingFromExisting, paranoidRemoving, keepingSpacesAvailable,
+  creatingASpace, newSpaceWaits("paranoid", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("paranoid", "2b"), addingADevice, replacingAPhone, losingEveryDevice,
+  paranoidCreatingFromExisting, paranoidRemoving, keepingSpacesAvailable,
 ];

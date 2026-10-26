@@ -1,4 +1,4 @@
-"""Adversarial cases for SpecClient, the design the specification adopts
+"""Adversarial cases for SpecClient, the acceptance layer of the specified design
 (TODO-17). Anchor and witness variants are tested in test_variants.py.
 
 Run: python3 -I -m unittest discover -s model

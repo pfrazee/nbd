@@ -1,4 +1,4 @@
-// The inviters proposal (proposal-inviters.md) as a world policy: grant
+// The inviters rule (device-enrollment.md#grant-standing, core.md#invites) as a world policy: grant
 // standing, invite records, and first-contact holds, checked against the
 // baseline. Scenarios 13-18 run in scenarios.test.ts; these cover the
 // contrasts and the cases scenarios don't reach.

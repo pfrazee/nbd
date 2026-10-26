@@ -2,6 +2,7 @@
 
 import { check } from "../../sim/scenario";
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
+import { invitingBeforeInstall, newSpaceWaits } from "./invites";
 import { COPY } from "../copy";
 import type { Figure } from "../figure";
 import { Laptop, Phone, Tablet } from "../frames";
@@ -146,7 +147,7 @@ const addingAMember2: Figure = {
     {
       label: "Unlock", device: "Bob", at: 2,
       view: (w, c) => <Phone>{club(w, c, c.i.bob)}</Phone>,
-      caption: "Devices pin each other on first sight. **No badges, no verification prompts.** One grant unlocks the whole history.",
+      caption: "Alice's device, which met Bob's when she invited him, grants. Others pin it on first sight and quietly wait. **No badges, no verification prompts.** One grant unlocks the whole history.",
       expect: (w, c) => [
         check("Bob holds the key", !!c.i.bob.spaces.get(c.space.club)?.key),
         check("He reads history from before he joined", timeline(w, c.i.bob, c.space.club).some((b) => "text" in b && b.text.startsWith("Next up"))),
@@ -303,7 +304,7 @@ const losingEveryDevice: Figure = {
           <Recovery title="Getting your spaces back" body="People who already know you will wait at least 3 days before sharing with this device." spaces={recovery(w, c.i.fresh)} />
         </Phone>
       ),
-      caption: "Each space shows its own status as members' apps catch up. **No promised time:** a member who never knew Alice may share sooner.",
+      caption: "Each space shows its own status as members' apps catch up. **No promised time:** each member's app starts its own wait when it first sees the new phone.",
       expect: (_w, c) => [
         check("Both spaces are still locked", [c.space.club, c.space.family].every((s) => !c.i.fresh.spaces.get(s)?.key)),
         check("The new phone raises no alarm for her old devices", alarmsOf(c.i.fresh).length === 0),
@@ -492,5 +493,5 @@ const settings: Figure = {
 };
 
 export const relaxedFigures: Figure[] = [
-  creatingASpace, addingAMember1, addingAMember2, addingADevice, replacingAPhone, losingEveryDevice, creatingFromExisting, removing, alarms, settings,
+  creatingASpace, newSpaceWaits("relaxed", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("relaxed", "2b"), addingADevice, replacingAPhone, losingEveryDevice, creatingFromExisting, removing, alarms, settings,
 ];

@@ -76,3 +76,52 @@ export const checkOldDevices = (at: number): Panel => ({
     check("The new phone raises no alarm for them", alarmsOf(c.i.fresh).length === 0),
   ],
 });
+
+/** Alice (iPhone, iPad) and Carol in Book club; Bob has an account but no
+ * app yet. */
+export function clubBeforeBobInstalls(w: World, c: C): void {
+  const alice = w.account("alice");
+  c.i.iphone = w.install(alice, "iPhone");
+  c.i.ipad = w.install(alice, "iPad", { link: c.i.iphone });
+  c.i.carol = w.install(w.account("carol"), "iPhone");
+  c.did.bob = w.account("bob", "pds.bob.example");
+  c.space.club = c.i.iphone.createSpace("Book club");
+  c.i.iphone.invite(c.space.club, c.i.carol.did);
+  c.i.carol.join(c.space.club);
+  c.i.ipad.join(c.space.club);
+  w.settle();
+  say(w, c.i.iphone, c.space.club, "Next up: Middlemarch, chapters 1–10");
+  say(w, c.i.carol, c.space.club, "ambitious!!");
+}
+
+/** Bob installs Lantern on his Pixel and joins Book club. */
+export function bobInstallsAndJoins(w: World, c: C): void {
+  c.i.bob = w.install(c.did.bob, "Pixel");
+  c.i.bob.join(c.space.club);
+  w.settle();
+}
+
+/** Alice and Carol met as fellow members of Dave's Pottery, not through an
+ * invite, a day ago. */
+export function metInPottery(w: World, c: C): void {
+  const alice = w.account("alice");
+  c.i.iphone = w.install(alice, "iPhone");
+  c.i.carol = w.install(w.account("carol"), "iPhone");
+  c.i.dave = w.install(w.account("dave"), "iPhone");
+  c.space.pottery = c.i.dave.createSpace("Pottery");
+  for (const i of [c.i.iphone, c.i.carol]) {
+    c.i.dave.invite(c.space.pottery, i.did);
+    i.join(c.space.pottery);
+  }
+  w.settle();
+  w.advance(24);
+}
+
+/** Alice creates Garden and invites Carol, who joins. */
+export function gardenWithCarol(w: World, c: C): void {
+  c.space.garden = c.i.iphone.createSpace("Garden");
+  c.i.iphone.invite(c.space.garden, c.i.carol.did);
+  c.i.carol.join(c.space.garden);
+  w.settle();
+  say(w, c.i.iphone, c.space.garden, "Seedlings are up!");
+}

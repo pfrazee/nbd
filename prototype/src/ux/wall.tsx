@@ -10,11 +10,12 @@ import type { Installation } from "../protocol/installation";
 import { COL } from "../protocol/types";
 import { World } from "../world/world";
 import { COPY, type Mode, START_OVER, PARANOID } from "./copy";
-import type { FigureCtx } from "./figure";
 import { bookClub } from "./figures/cast";
 import { Laptop, Phone, Tablet } from "./frames";
-import { type DeviceRow, alarmsOf, deviceName, devices, inbox, memberAccess, members, person, soleHolder, startOverList, timeline } from "./model";
-import { DeviceList, FullAlarm, InfoScreen, Inbox, MemberAccess, NoticeBanner, SpaceView, StartOverList } from "./screens";
+import {
+  type DeviceRow, alarmsOf, deviceName, devices, inbox, inviteStatus, memberAccess, memberList, members, person, soleHolder, startOverList, timeline,
+} from "./model";
+import { Banner, DeviceList, FullAlarm, InfoScreen, Inbox, MemberAccess, NoticeBanner, SpaceView, StartOverList } from "./screens";
 
 type Nav = { screen: "inbox" } | { screen: "space"; uri: string } | { screen: "info"; uri: string } | { screen: "access"; uri: string } | { screen: "devices"; account: string };
 /** How many alarms and notices each device has already shown. */
@@ -22,7 +23,7 @@ type Seen = { alarms: number; notices: number };
 
 function newWorld(): World {
   const w = new World("wall");
-  bookClub(w, { i: {}, space: {} } as FigureCtx);
+  bookClub(w, { i: {}, space: {}, did: {} });
   return w;
 }
 
@@ -119,6 +120,7 @@ function Device({ w, me, mode, nav, go, seen, see, act }: {
     screen = (
       <SpaceView title={w.host.spaceName(uri)} subtitle={members(w, me, uri)} bubbles={timeline(w, me, uri)} composer={sp?.key ? T.message : "Draft (sends when unlocked)"}
         locked={sp?.key ? undefined : mode === "paranoid" ? PARANOID.waitingForDevice : "Getting access…"}
+        banner={inviteStatus(me, uri).unsent.length ? <Banner tone="info" text={T.inviteUnsent} /> : undefined}
         note={mode === "paranoid" && soleHolder(w, me, uri) ? <>{PARANOID.soleHolder} <b onClick={ownDevices}>{PARANOID.addADevice}</b></> : undefined}
         onBack={() => go({ screen: "inbox" })} onMore={() => go({ screen: "info", uri })}
         onSend={sp?.key ? (text) => act(() => { w.advance(0.05); me.post(uri, text); }) : undefined} />
@@ -126,12 +128,19 @@ function Device({ w, me, mode, nav, go, seen, see, act }: {
   } else if (nav.screen === "info") {
     const uri = nav.uri;
     const admin = w.host.admin(uri) === me.did;
-    const memberList = w.host.members(uri);
-    const others = [...new Set([...w.installations.values()].map((i) => i.did))].filter((d) => !memberList.includes(d));
+    const current = w.host.members(uri);
+    // Anyone with an account can be invited, installed or not (a pending invite).
+    const others = [...w.registry.keys()].filter((d) => !current.includes(d));
+    const rows = new Map(memberList(w, me, uri).map((r) => [r.name, r]));
+    const detail = (d: string) => {
+      const r = rows.get(person(d));
+      const parts = [mode === "paranoid" && r?.invitedBy ? T.invitedBy(r.invitedBy) : "", r?.shareFrom ? T.shareFrom(person(d), r.shareFrom) : ""].filter(Boolean);
+      return parts.length ? <div className="device-detail">{parts.join(" · ")}</div> : null;
+    };
     screen = (
       <InfoScreen title={w.host.spaceName(uri)} onBack={() => go({ screen: "space", uri })} sections={[
-        { heading: "Members", lines: memberList.map((d) => (
-          <span className="wall-line">{d === me.did ? "You" : person(d)}
+        { heading: "Members", lines: current.map((d) => (
+          <span className="wall-line"><span>{d === me.did ? "You" : person(d)}{d !== me.did && detail(d)}</span>
             {d !== me.did && <a onClick={() => go({ screen: "devices", account: d })}>Devices</a>}
             {admin && d !== me.did && <a className="danger" onClick={() => act(() => me.removeMember(uri, d))}>Remove</a>}
           </span>

@@ -9,7 +9,7 @@ import type { Check } from "../sim/scenario";
 import { World } from "../world/world";
 import type { Mode } from "./copy";
 
-export type FigureCtx = { i: Record<string, Installation>; space: Record<string, string> };
+export type FigureCtx = { i: Record<string, Installation>; space: Record<string, string>; did: Record<string, string> };
 export type Action = (w: World, c: FigureCtx) => void;
 
 export type Panel = {
@@ -38,7 +38,7 @@ export function worldAt(f: Figure, at: number, cache = new Map<string, [World, F
   let hit = cache.get(key);
   if (!hit) {
     const w = new World(f.id);
-    const c: FigureCtx = { i: {}, space: {} };
+    const c: FigureCtx = { i: {}, space: {}, did: {} };
     f.setup(w, c);
     for (const step of f.steps.slice(0, at)) step(w, c);
     w.settle();
