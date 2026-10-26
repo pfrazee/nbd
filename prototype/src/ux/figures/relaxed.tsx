@@ -493,5 +493,5 @@ const settings: Figure = {
 };
 
 export const relaxedFigures: Figure[] = [
-  creatingASpace, newSpaceAfterReset("relaxed", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("relaxed", "2b"), addingADevice, replacingAPhone, losingEveryDevice, creatingFromExisting, removing, alarms, settings,
+  creatingASpace, addingAMember1, addingAMember2, invitingBeforeInstall("relaxed", "2b"), addingADevice, replacingAPhone, losingEveryDevice, newSpaceAfterReset("relaxed", "4b"), creatingFromExisting, removing, alarms, settings,
 ];

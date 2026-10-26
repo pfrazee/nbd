@@ -434,6 +434,6 @@ const keepingSpacesAvailable: Figure = {
 };
 
 export const paranoidFigures: Figure[] = [
-  creatingASpace, newSpaceAfterReset("paranoid", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("paranoid", "2b"), addingADevice, replacingAPhone, losingEveryDevice,
+  creatingASpace, addingAMember1, addingAMember2, invitingBeforeInstall("paranoid", "2b"), addingADevice, replacingAPhone, losingEveryDevice, newSpaceAfterReset("paranoid", "4b"),
   paranoidCreatingFromExisting, paranoidRemoving, keepingSpacesAvailable,
 ];

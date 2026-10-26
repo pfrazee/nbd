@@ -20,10 +20,6 @@ There is no device verification. Members share one key, so one member verifying 
    - *Under the hood:* the host stores configuration revision 1 and the creator's eligible membership decision. On the app's first NBD use, it generates keypairs and publishes its [device record](../device-enrollment.md#bindings-and-publication).
 3. **No extra wait.** The space key is generated on this device before the space is created, and its [commitment](../core.md#key-generation) is part of the creating configuration, so posting can start as soon as creation succeeds.
 4. **Space opens.** The creator's other devices get the key when they open it; installations of the same app get it right away. Members get it at once from the creator's devices for every device the creator's app met as a first contact, whether through an invite or as a fellow member of another space ([grant standing](../device-enrollment.md#grant-standing)).
-5. **After a reset, a new space waits.** If someone the creator already knew reset their devices, the creator's app holds the new device for 3 days, and inviting them into a new space never shortens that: the new space waits for it: "Your device will share with Carol from Friday." Someone else in the new space who already shares with the new device can grant instead. Applications that create spaces often, such as one per conversation, will hit this only after a reset.
-
-![A new space that waits (Paranoid): Alice starts Garden with Carol, who reset her devices yesterday, her app says it will share with Carol from Friday, Carol's new phone waits for Alice's device with no unlock time, and on Friday Alice's app grants](images/paranoid-new-space-after-reset.png)
-
 **Sole-holder indicator:** whenever this device is the only known holder of the space key (it has seen no grant of that key to any other binding), show a quiet note: "Only this device can currently read this space." It disappears once another device or member receives the key and links to "Add a device".
 
 ![Creating a space (Paranoid): the new space form, the opened space with the sole-holder note and its Add a device link, space info saying devices aren't verified and members read the full history, and the note gone once Alice's iPad has the key](images/paranoid-creating-a-space.png)
@@ -99,6 +95,12 @@ Alice gets a new laptop.
 6. **Prevention still matters.** The app prompts users with one device to add a second device or turn on backup, so recovery doesn't need the wait.
 
 ![Losing every device (Paranoid): the new phone lists her old devices, with when each was added, and asks whether she recognises them all before removing them, then explains the 3-day wait with each space's status, Bob sees the reset line with the day his app computed, and Alice's old iPad alarms when it sees itself removed](images/paranoid-losing-every-device.png)
+
+## A new space after someone resets
+
+If someone the creator already knew reset their devices, the creator's app holds the new device for 3 days, and inviting them into a new space never shortens that: the new space waits for it: "Your device will share with Carol from Friday." Someone else in the new space who already shares with the new device can grant instead. Applications that create spaces often, such as one per conversation, will hit this only after a reset.
+
+![A new space that waits (Paranoid): Alice starts Garden with Carol, who reset her devices yesterday, her app says it will share with Carol from Friday, Carol's new phone waits for Alice's device with no unlock time, and on Friday Alice's app grants](images/paranoid-new-space-after-reset.png)
 
 ## Creating a space from an existing space
 

@@ -16,10 +16,6 @@ The same as [Paranoid](paranoid.md#what-protects-these-spaces): devices are trus
 
 ![Creating a space: the new space form with no security choices, the space open at once with "You added Bob" and "You added Carol" timeline lines, and space info stating that everyone can read the full history](images/relaxed-creating-a-space.png)
 
-**After a reset, a new space waits.** If someone the creator already knew reset their devices less than 3 days ago, the creator's app is still holding their new device, and a new space doesn't change that. The space waits for the rest of the hold, with a quiet note: "Your device will share with Carol from Friday." Someone else in the space who already shares with Carol's new device can grant instead.
-
-![A new space that waits: Alice starts Garden with Carol, who reset her devices yesterday, the space notes "Your device will share with Carol from Friday," Carol's new phone sees "Getting access…" with no unlock time, and on Friday Alice's app grants](images/relaxed-new-space-after-reset.png)
-
 ### Adding a member
 
 Alice adds Bob.
@@ -67,6 +63,12 @@ If Alice invites Bob while offline or while her provider is failing writes, her 
 3. **The hold is not softened.** Relaxed apps can't skip or shorten their own [72-hour wait](../device-enrollment.md#re-enrollment), and an old device that sees itself removed still alarms.
 
 ![Losing every device: "Welcome back" offers restore or start over, the new phone lists her old iPhone and iPad and asks whether she recognises them before removing them, it shows each space waiting for members, and Bob sees "Alice reset their devices. This device will share with their new device from Friday."](images/relaxed-losing-every-device.png)
+
+### A new space after someone resets
+
+If someone the creator already knew reset their devices less than 3 days ago, the creator's app is still holding their new device, and a new space doesn't change that. The space waits for the rest of the hold, with a quiet note: "Your device will share with Carol from Friday." Someone else in the space who already shares with Carol's new device can grant instead.
+
+![A new space that waits: Alice starts Garden with Carol, who reset her devices yesterday, the space notes "Your device will share with Carol from Friday," Carol's new phone sees "Getting access…" with no unlock time, and on Friday Alice's app grants](images/relaxed-new-space-after-reset.png)
 
 ### Creating a space from an existing space
 
