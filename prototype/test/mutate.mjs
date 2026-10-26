@@ -36,7 +36,7 @@ const MUTATIONS = {
   "inviters: a later vouch extends older admissions": ["if (st.authorized.get(space)?.has(id)) return \"authorized\";", "if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return \"authorized\";"],
   "inviters: known account vouched": [CLIENT, "const met = knew ? [] : live.filter(", "const met = live.filter("],
   "inviters: import ends a hold": ["if (b && !knew.has(b.account)) this.vouch(space, b);", "if (b) this.vouch(space, b);"],
-  "inviters: invite records override pins": ["      } else if (!st.vouched.has(bindingId(b))) continue;\n", "      }\n"],
+  "inviters: invite records override pins": ["      } else if (!this.descendsFromVouched(b)) continue;\n", "      }\n"],
   "inviters: hold keyed to account instead of binding": ["const fcKey = (b: Binding): string => bindingId(b);", "const fcKey = (b: Binding): string => b.account;"],
   "inviters: approved devices start no hold": ["            this.startFirstContactHold(ap.target);\n", ""],
   "inviters: removal erases credit": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint); else h.credited = 0;"],
@@ -46,10 +46,12 @@ const MUTATIONS = {
   "inviters: a retry re-derives the record": [CLIENT, "const { record, rkey, vouch } = e;", "const { record, rkey, vouch } = e === current ? e : this.prepareInvite(e.space, e.account);"],
   "inviters: pending invites never expire": [CLIENT, "      if (p.credited >= PENDING_INVITE_TTL) continue; // expired: an ordinary first contact\n", ""],
   "inviters: a re-invite prepares a second record": [CLIENT, "    if (unsent) {", "    if (false) {"],
-  "inviters: abandon keeps the pending state": [CLIENT, "          this.trust.state.pending.delete(rkey);\n", ""],
+  "inviters: abandon keeps the pending state": [CLIENT, "          this.trust.abandonPending(rkey);\n", ""],
+  "inviters: import restores pending": ["      // Pending invites never transfer; abandonments do.\n", "      for (const [k, p] of other.pending) st.pending.set(k, { ...p, checkpoint: now });\n"],
+  "inviters: capture skips the published check": [CLIENT, "        if (!this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === record.captures)) {", "        if (false) {"],
+  "inviters: adoption requires a direct vouch": ["      } else if (!this.descendsFromVouched(b)) continue;", "      } else if (!st.vouched.has(bindingId(b))) continue;"],
   "inviters: vouch on publication": [CLIENT, "    for (const b of met) this.trust.vouch(space, b); // the vouch is saved with the prepared record\n", ""],
   "inviters: authorizes ignores descendants": ["id && !seen.has(id); id = st.approvers.get(id)) {", "id && !seen.has(id); id = undefined) {"],
-  "inviters: a capture by a non-inviting installation": [CLIENT, "      if (p.issuer !== this.binding.device.deviceId) continue; // only the device that made it\n", ""],
 };
 
 const all = process.argv.includes("--all");

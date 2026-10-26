@@ -76,7 +76,12 @@ MUTATIONS = {
     "captures authorize nothing": (
         "frozenset(met), frozenset(met),\n", "frozenset(met), frozenset(),\n"),
     "abandoning keeps the pending invite": (
-        "        if rec.pending and st.pending.get(rec.account, (\"\",))[0] == rec.space:\n            del st.pending[rec.account]\n",
+        "        if rec.pending:\n            st.abandoned.add", "        if False:\n            st.abandoned.add"),
+    "abandoned invites still capture": (
+        "if met and x in st.pending and (x, st.pending[x][0]) not in st.abandoned:",
+        "if met and x in st.pending:"),
+    "captures skip the published check": (
+        "            elif rec.captures and not self._pending_published(rec):\n                return  # its pending invite must be published first\n",
         ""),
     "abandoning keeps queued captures": (
         "        st.outbox = [r for r in st.outbox\n                     if not (r.captures and r.account == rec.account and r.space == rec.space)]",
@@ -85,6 +90,15 @@ MUTATIONS = {
         "if not queued and self.world.publish_invite(rec):", "if self.world.publish_invite(rec):"),
     "authorizes ignores descendants": (
         "            seen.add(b)\n            b = st.approvers.get(b)", "            seen.add(b)\n            b = None"),
+    "adoption requires a direct vouch": (
+        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if self._vouched_line(b))",
+        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if b in st.vouched)"),
+    "imports require a direct vouch": (
+        "                st.authorized.setdefault(sp, set()).update(b for b in bs if self._vouched_line(b))",
+        "                st.authorized.setdefault(sp, set()).update(b for b in bs if b in st.vouched)"),
+    "imports restore pending invites": (
+        "            st.abandoned |= other.abandoned\n            for x, (space, _cr, _ck) in list(st.pending.items()):\n                if (x, space) in st.abandoned:\n                    del st.pending[x]\n",
+        "            st.pending.update(other.pending)\n"),
     "pinned installations adopt any authorization": (
         "                b for b in rec.authorizes if self._vouched_line(b))", "                b for b in rec.authorizes)"),
     "known account vouched": (

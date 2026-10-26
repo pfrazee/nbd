@@ -71,8 +71,12 @@ export type TrustState = {
   /** account -> spaces this installation's account published an invite
    * record admitting it to (for display; it grants nothing). */
   admitted: Map<Did, Set<string>>;
-  /** pending invite record rkey -> the pending invite. */
+  /** pending invite record rkey -> the pending invite. Never transferred:
+   * only the installation that made it holds it. */
   pending: Map<string, PendingInvite>;
+  /** rkeys of pending invites this account abandoned. Transferred, so a
+   * stale backup cannot reopen one. */
+  abandoned: Set<string>;
   /** binding ID -> ID of the signer whose approval accepted it. */
   approvers: Map<string, string>;
   /** binding ID -> its first-contact hold. */
@@ -83,7 +87,7 @@ export function emptyTrust(): TrustState {
   return {
     accepted: new Map(), revoked: new Map(), holds: new Map(), candidatesSeen: new Map(), views: new Map(),
     approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [], startOver: null,
-    authorized: new Map(), vouched: new Map(), admitted: new Map(), pending: new Map(), approvers: new Map(), fcHolds: new Map(),
+    authorized: new Map(), vouched: new Map(), admitted: new Map(), pending: new Map(), abandoned: new Set(), approvers: new Map(), fcHolds: new Map(),
   };
 }
 
@@ -103,6 +107,7 @@ export function cloneTrust(t: TrustState): TrustState {
     vouched: new Map(t.vouched),
     admitted: new Map([...t.admitted].map(([d, s]) => [d, new Set(s)])),
     pending: new Map([...t.pending].map(([k, p]) => [k, { ...p }])),
+    abandoned: new Set(t.abandoned),
     approvers: new Map(t.approvers),
     fcHolds: new Map([...t.fcHolds].map(([id, h]) => [id, { ...h }])),
   };
@@ -470,9 +475,15 @@ export class Trust {
     st.admitted.get(account)!.add(space);
   }
 
+  /** Abandon a pending invite: it stops being pending, persistently. */
+  abandonPending(rkey: string): void {
+    this.state.pending.delete(rkey);
+    this.state.abandoned.add(rkey);
+  }
+
   /** Remember a pending invite this installation's device `issuer` made. */
   addPending(rkey: string, space: string, account: Did, issuer: string): void {
-    if (!this.state.pending.has(rkey))
+    if (!this.state.pending.has(rkey) && !this.state.abandoned.has(rkey))
       this.state.pending.set(rkey, { space, account, issuer, credited: 0, checkpoint: this.localNow(), done: false });
   }
 
@@ -480,8 +491,9 @@ export class Trust {
    * installation's own account. If it never pinned the account, it pins the
    * authorized bindings as vouched, like a pin copied by pairing (presence
    * is checked by the next observation). If it already pins the account, it
-   * takes the authorization only for bindings it already holds as vouched,
-   * so a record never ends a hold running here. Returns whether it pinned
+   * takes the authorization only for bindings it holds as vouched or
+   * accepted by approval from one it does, so a record never ends a hold
+   * running here. Returns whether it pinned
    * anything. */
   adoptInvite(rec: Invite): boolean {
     if (!rec.authorizes.length) return false;
@@ -493,7 +505,7 @@ export class Trust {
         st.accepted.set(bindingId(b), { binding: b, evidence: `invited by ${label(rec.issuer)}` });
         this.startFirstContactHold(b);
         this.vouch(rec.space, b);
-      } else if (!st.vouched.has(bindingId(b))) continue;
+      } else if (!this.descendsFromVouched(b)) continue;
       this.authorize(rec.space, b);
     }
     return fresh && this.knew(rec.account);
@@ -527,25 +539,22 @@ export class Trust {
         const mine = st.fcHolds.get(id);
         st.fcHolds.set(id, { credited: Math.max(h.credited, mine?.credited ?? 0), checkpoint: now });
       }
-      // A vouch carries only to an installation with no pin for the account,
-      // and an authorization only for a binding vouched here.
+      // A vouch carries only to an installation with no pin for the account.
       for (const [id, space] of other.vouched) {
         const b = other.accepted.get(id)?.binding;
         if (b && !knew.has(b.account)) this.vouch(space, b);
       }
+      // Approval evidence first, then an authorization only for a binding
+      // vouched here or linked from one that is.
+      for (const [t, s] of other.approvers) if (!st.approvers.has(t)) st.approvers.set(t, s);
       for (const [space, ids] of other.authorized)
         for (const id of ids) {
           const b = other.accepted.get(id)?.binding;
-          if (b && st.vouched.has(id)) this.authorize(space, b);
+          if (b && this.descendsFromVouched(b)) this.authorize(space, b);
         }
       for (const [d, spaces] of other.admitted) for (const s of spaces) this.admit(d, s);
-      // Pending invites transfer as credited time; only their issuing device
-      // may ever capture them.
-      for (const [k, p] of other.pending) {
-        const mine = st.pending.get(k);
-        st.pending.set(k, { ...p, credited: Math.max(p.credited, mine?.credited ?? 0), checkpoint: now, done: p.done || !!mine?.done });
-      }
-      for (const [t, s] of other.approvers) if (!st.approvers.has(t)) st.approvers.set(t, s);
+      // Pending invites never transfer; abandonments do.
+      for (const k of other.abandoned) this.abandonPending(k);
     }
     if (st.revoked.has(bindingId(this.own)))
       this.alarmOnce("own-removed", "own-removed", "This device was removed from your account. If this wasn't you, change your password and remove devices you don't recognise.");

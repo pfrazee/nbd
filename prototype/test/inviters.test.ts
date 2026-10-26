@@ -4,7 +4,7 @@
 // contrasts and the cases scenarios don't reach.
 
 import { verify } from "../src/protocol/crypto";
-import { invitePayload } from "../src/protocol/trust";
+import { cloneTrust, invitePayload } from "../src/protocol/trust";
 import { type Invite, COL, type Policy, bindingId, withoutProof } from "../src/protocol/types";
 import { recordsIn } from "../src/protocol/repo";
 import { Run } from "../src/sim/scenario";
@@ -250,6 +250,86 @@ describe("durable invites (Astra's fourth review)", () => {
     expect(alice.trust.standingBasis(phone2.binding, garden)).toBe("authorized");
     expect(phone2.spaces.get(garden)?.keyFrom).toMatch(/^did:plc:alice/);
     expect(alice.trust.standing(phone2.binding, space)).toBe(true); // linked by the authorized phone
+  });
+});
+
+describe("state transfer (Astra's fifth review)", () => {
+  it("a stale import doesn't reopen an abandoned pending invite", () => {
+    const w = new World("t1", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const did = w.account("bob");
+    const space = alice.createSpace("Book club");
+    w.fault(alice, "reject", 1, COL.invite);
+    alice.invite(space, did); // pending, unsent
+    const stale = alice.exportState();
+    w.host.setMembership(alice.did, space, did, true); // a host console admits Bob
+    w.settle(); // the retry abandons the invite
+    m.before();
+    alice.importState(stale);
+    expect(alice.trust.state.pending.size).toBe(0);
+    const bob = w.install(did, "phone");
+    bob.join(space);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    expect(w.provenance.invites.some((f) => f.captures)).toBe(false);
+    expect(alice.trust.standing(bob.binding, space)).toBe(false);
+  });
+
+  it("a restored device doesn't capture the pending invite it made before", () => {
+    const w = new World("t2", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const did = w.account("bob");
+    const space = alice.createSpace("Book club");
+    alice.invite(space, did); // pending, published
+    w.backup(alice);
+    const restored = w.restore(alice, 0);
+    expect(restored.trust.state.pending.size).toBe(0);
+    const bob = w.install(did, "phone");
+    bob.join(space);
+    w.settle();
+    expect(w.provenance.invites.some((f) => f.captures)).toBe(false);
+    expect(restored.trust.standing(bob.binding, space)).toBe(false);
+  });
+
+  it("a capture waits for its pending record to be published", () => {
+    const w = new World("t3", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const did = w.account("bob");
+    const space = alice.createSpace("Book club");
+    w.fault(alice, "reject", 3, COL.invite);
+    alice.invite(space, did); // pending, unsent
+    const bob = w.install(did, "phone"); // Alice's app captures; the capture queues
+    expect(alice.inviteOutbox.map((e) => !!e.record.captures)).toEqual([false, true]);
+    alice.inviteOutbox.reverse(); // even out of order, the capture may not go first
+    w.faults.delete(alice.id);
+    w.settle();
+    expect(w.provenance.invites.some((f) => f.captures)).toBe(false);
+    void bob;
+  });
+
+  it("another installation takes the authorization of a replacement it trusts through the same chain", () => {
+    const { w, alice, bob, space } = club("t4");
+    const laptop = w.install(alice.did, "laptop", { link: alice });
+    laptop.join(space);
+    w.settle();
+    const phone2 = w.install(bob.did, "new-phone", { link: bob });
+    w.removeDevice(bob);
+    expect(laptop.trust.isAccepted(phone2.binding)).toBe(true);
+    // The laptop is offline when the phone invites Bob to Garden.
+    w.setOnline(laptop, false);
+    const garden = alice.createSpace("Garden");
+    alice.invite(garden, bob.did);
+    w.settle();
+    // An import from the phone carries the authorization: the laptop trusts
+    // the replacement through an approval from the phone it holds as vouched.
+    const copy = cloneTrust(laptop.trust.state);
+    laptop.trust.importFrom(cloneTrust(alice.trust.state));
+    expect(laptop.trust.standingBasis(phone2.binding, garden)).toBe("authorized");
+    // So does reading the phone's invite record.
+    laptop.trust.state = copy;
+    w.setOnline(laptop, true);
+    expect(laptop.trust.standingBasis(phone2.binding, garden)).toBe("authorized");
   });
 });
 

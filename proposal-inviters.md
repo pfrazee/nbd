@@ -46,7 +46,7 @@ An invite counts only if it admits the account. A client never publishes an invi
 
 An invite is **pending** when the inviter has never pinned the account and the account has no devices yet, as when someone is invited before installing an NBD app. The inviting installation publishes the invite record with no bindings and `pending: true`, which admits the account, and remembers the pending invite. The first time it then accepts that account's devices on first use, it vouches for them, and publishes a **capture record**: an invite record for the pending invite's space naming them in `authorizes`, with a `captures` reference to the pending record. A capture completes only the invite it references. The inviter's other installations adopt the capture as they adopt any invite that authorizes devices.
 
-A pending invite expires after `PENDING_INVITE_TTL` of elapsed time credited by the inviting installation, measured like a hold ([hold timing](device-enrollment.md#hold-timing)); this proposal suggests seven days. An expired pending invite captures nothing, and the account's devices are an ordinary first contact. Only the installation that made the pending invite captures it, since the capture is its own first contact.
+A pending invite expires after `PENDING_INVITE_TTL` of elapsed time credited by the inviting installation, measured like a hold ([hold timing](device-enrollment.md#hold-timing)); this proposal suggests seven days. An expired pending invite captures nothing, and the account's devices are an ordinary first contact. Only the installation that made the pending invite captures it, since the capture is its own first contact. Pending state does not transfer: imports and pairing never bring a pending invite to another installation, or back to the one that made it. Abandoning a pending invite ([durable invites](#durable-invites)) is recorded persistently, and that record does transfer, so a stale backup cannot reopen it. A capture publishes only once its referenced pending invite has been published by the inviter's account, and never after that invite was abandoned.
 
 Capturing widens the remaining exposure from an instant to a window. If the account is taken over between the invite and its first device, and the attacker enrolls first, the inviter vouches for the attacker's device. That is the same risk as inviting a never-met account during a takeover, and the expiry bounds how long it stays open.
 
@@ -74,7 +74,7 @@ When a client adds an account to a space, it resolves that account's devices, pi
 
 The record does three things:
 
-- **It carries the authorization to the inviter's other installations.** They treat a valid invite or capture from their own account that authorizes devices like a pin copied by [pairing](device-enrollment.md#backup-and-transfer): if the installation has no pin for that account yet, it pins the authorized bindings as vouched, authorized in that record's space. An installation that already pins the account takes a record's authorization only for bindings it already holds as vouched, and otherwise keeps its own state, including any hold it is running. A PDS can withhold a record but not forge it.
+- **It carries the authorization to the inviter's other installations.** They treat a valid invite or capture from their own account that authorizes devices like a pin copied by [pairing](device-enrollment.md#backup-and-transfer): if the installation has no pin for that account yet, it pins the authorized bindings as vouched, authorized in that record's space. An installation that already pins the account takes a record's authorization only for bindings it already holds as vouched, or has accepted by approval, directly or through a chain, from one it holds as vouched. It otherwise keeps its own state, including any hold it is running. Imports from the user's own installations follow the same rule, and bring in approval evidence before judging it. A PDS can withhold a record but not forge it.
 - **It makes vouching auditable.** Every member can see who vouched for whom, in which space, and for which devices. If an account turns out to have been taken over, the record names where its first-contact grant came from.
 - **It lets the invited account check it.** The invited account's own installations [audit](audit.md#direct-sync) invite records naming their account and alarm on listed bindings they never accepted, just as they do for grants.
 
@@ -221,6 +221,13 @@ A newcomer could compare its own first-contact view of an account with the bindi
 ## Before changing the baseline
 
 The rule should be modeled before it changes the specification.
+
+**Revision after Astra's fifth review.** Astra confirmed the fourth-review fixes and found two issues in transfers between a user's own installations, both reproduced in the prototype. Importing a stale backup restored an abandoned pending invite, so a later capture published for an invite that was never published. And an installation that already trusted Bob's replacement phone through the same approval chain rejected another installation's authorization of it, because adoption and imports still required a direct vouch. Pending state no longer transfers, abandonment is recorded persistently, captures require their published invite ([pending invites](#pending-invites)), and adoption and imports apply the descendant rule ([invite records](#invite-records)). - **Python model.** It already behaved correctly in both cases. It now records abandonment the same way, and it imports approval evidence before judging authorizations. That fixed an ordering bug no test had caught.
+- **Prototype.** It has the fixes and Astra's repros as tests.
+- **Defense-in-depth checks.** Checks that matter only if stale state returns some other way are tested by injecting that state.
+- **Mutations.** All are caught: 53 in the model and 40 in the prototype.
+- **Cross-check.** The traces are unchanged, and the two implementations still agree at every step.
+- **Tamarin.** It does not model an account's separate installations, so it is unaffected.
 
 **Revision after Astra's fourth review.** Astra confirmed the retroactive-vouch fix and found three narrower issues in the invite lifecycle and in the availability promise:
 

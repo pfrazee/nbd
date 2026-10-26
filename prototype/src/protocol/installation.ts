@@ -350,11 +350,25 @@ export class Installation {
         this.inviteOutbox.shift();
         report(e, false, true);
         if (record.pending) {
-          // Abandoning a pending invite ends it, with any capture queued for it.
-          this.trust.state.pending.delete(rkey);
+          // Abandoning a pending invite ends it, persistently, with any
+          // capture queued for it.
+          this.trust.abandonPending(rkey);
           this.inviteOutbox = this.inviteOutbox.filter((x) => x.record.captures !== rkey);
         }
         continue;
+      }
+      if (record.captures) {
+        // A capture goes out only once its pending invite has been published
+        // by this account, and never for one that was abandoned.
+        if (this.trust.state.abandoned.has(record.captures)) {
+          this.inviteOutbox.shift();
+          report(e, false, true);
+          continue;
+        }
+        if (!this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === record.captures)) {
+          if (current && this.inviteOutbox.includes(current)) report(current, false);
+          return;
+        }
       }
       if (!this.write([{ action: "create", collection: COL.invite, rkey, value: { $type: COL.invite, value: asCbor(record) } }], e.space) && !landed()) {
         if (current && this.inviteOutbox.includes(current)) report(current, false);

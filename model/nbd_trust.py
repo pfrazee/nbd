@@ -665,6 +665,7 @@ class InviterState(SpecState):
     # account -> (space, credited hours, checkpoint) for this installation's pending invite
     pending: Dict[str, Tuple[str, float, float]] = field(default_factory=dict)
     outbox: List[InviteRecord] = field(default_factory=list)  # prepared, signed, unpublished
+    abandoned: Set[Tuple[str, str]] = field(default_factory=set)  # (account, space) of dropped pending invites
 
     def copy(self) -> "InviterState":
         base = SpecState.copy(self)
@@ -672,7 +673,7 @@ class InviterState(SpecState):
                             base.alarms, set(self.vouched),
                             {sp: set(v) for sp, v in self.authorized.items()},
                             dict(self.approvers), dict(self.fc_holds), dict(self.pending),
-                            list(self.outbox))
+                            list(self.outbox), set(self.abandoned))
 
 
 class InviterClient(SpecClient):
@@ -734,6 +735,8 @@ class InviterClient(SpecClient):
                 continue  # dropped with an abandoned invite
             if not rec.captures and self.world.eligible(rec.account, rec.space):
                 self._abandon(rec)
+            elif rec.captures and not self._pending_published(rec):
+                return  # its pending invite must be published first
             elif self.world.publish_invite(rec):
                 st.outbox.remove(rec)
                 self._published(rec)
@@ -760,6 +763,9 @@ class InviterClient(SpecClient):
             self.flush()
 
     def import_state(self, other: SpecState) -> None:
+        """Merge state from the user's own installation. Pending invites never
+        transfer (only the installation that made one captures it), but
+        abandonment does, so a stale backup cannot reopen one."""
         st = self.state
         knew = {b.account for b in st.accepted}
         self._tick()
@@ -775,18 +781,25 @@ class InviterClient(SpecClient):
             for b in other.vouched:
                 if b.account not in knew:
                     st.vouched.add(b)
-            for sp, bs in other.authorized.items():
-                st.authorized.setdefault(sp, set()).update(b for b in bs if self._vouched_line(b))
             for t, s in other.approvers.items():
                 st.approvers.setdefault(t, s)
+            st.abandoned |= other.abandoned
+            for x, (space, _cr, _ck) in list(st.pending.items()):
+                if (x, space) in st.abandoned:
+                    del st.pending[x]
         super().import_state(other)
+        if isinstance(other, InviterState):
+            # Judge imported authorizations only after the approval evidence
+            # and acceptance they rest on are merged.
+            for sp, bs in other.authorized.items():
+                st.authorized.setdefault(sp, set()).update(b for b in bs if self._vouched_line(b))
 
     # ---- rules -----------------------------------------------------------
 
     def _prepare(self, rec: InviteRecord) -> None:
         """Save a signed record durably, then publish it at once unless older
         records are still unsent, which go first."""
-        queued = bool(self.state.outbox)
+        queued = bool(self.state.outbox) or (rec.captures and not self._pending_published(rec))
         self.state.outbox.append(rec)
         if not queued and self.world.publish_invite(rec):
             self.state.outbox.remove(rec)
@@ -797,10 +810,16 @@ class InviterClient(SpecClient):
         stops being pending, and any capture queued for it goes with it."""
         st = self.state
         st.outbox.remove(rec)
-        if rec.pending and st.pending.get(rec.account, ("",))[0] == rec.space:
-            del st.pending[rec.account]
+        if rec.pending:
+            st.abandoned.add((rec.account, rec.space))
+            if st.pending.get(rec.account, ("",))[0] == rec.space:
+                del st.pending[rec.account]
         st.outbox = [r for r in st.outbox
                      if not (r.captures and r.account == rec.account and r.space == rec.space)]
+
+    def _pending_published(self, capture: InviteRecord) -> bool:
+        return any(r.inviter == self.own.account and r.pending and r.account == capture.account
+                   and r.space == capture.space for r in self.world.invites)
 
     def _vouched_line(self, b: Binding) -> bool:
         """Whether b is vouched, or was accepted by approval, through any
@@ -851,7 +870,7 @@ class InviterClient(SpecClient):
         # The first devices met after this installation's pending invite are
         # captured: vouched now, authorized in that invite's space once the
         # capture record is published.
-        if met and x in st.pending:
+        if met and x in st.pending and (x, st.pending[x][0]) not in st.abandoned:
             space, _credited, _ck = st.pending.pop(x)
             st.vouched |= met
             self._prepare(InviteRecord(self.own.account, space, x, frozenset(met), frozenset(met),

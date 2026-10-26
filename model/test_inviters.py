@@ -8,7 +8,7 @@ Run: python3 -I -m unittest discover -s model
 
 import unittest
 
-from nbd_trust import PENDING_INVITE_TTL, REENROLL_HOLD, Binding, InviterClient, World
+from nbd_trust import PENDING_INVITE_TTL, REENROLL_HOLD, Binding, InviteRecord, InviterClient, World
 
 BOOK = "book-club"
 GARDEN = "garden"
@@ -439,6 +439,88 @@ class Imports(Base):
         self.a1.invite(GARDEN, "bob")
         self.assertTrue(self.a1.standing(bob, GARDEN))
         self.assertTrue(self.alice.standing(bob, GARDEN))  # learned from a1's record
+
+    def test_stale_import_does_not_reopen_an_abandoned_pending_invite(self):
+        # Astra's fifth review: a backup taken while the invite was pending
+        # is imported after the invite was abandoned.
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        stale = self.alice.export_state()
+        self.w.admit(BOOK, "bob")
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.alice.import_state(stale)
+        self.assertEqual(self.alice.state.pending, {})
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.assertFalse(any(r.captures for r in self.w.invites))
+
+    def test_resurrected_pending_state_cannot_capture(self):
+        # Defense in depth: even if stale pending state came back by some
+        # other path, an abandoned invite captures nothing.
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        entry = dict(self.alice.state.pending)
+        self.w.admit(BOOK, "bob")
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.alice.state.pending.update(entry)  # resurrected
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.assertFalse(any(r.captures for r in self.alice.state.outbox + self.w.invites))
+
+    def test_capture_never_publishes_without_its_published_invite(self):
+        # Defense in depth: a capture queued with no published pending invite
+        # behind it (say, restored alone) stays unsent.
+        bob = self.w.add_device(B("bob", "b0"))
+        self.alice.state.outbox.append(
+            InviteRecord("alice", BOOK, "bob", frozenset({bob}), frozenset({bob}), captures=True))
+        self.alice.sync()
+        self.assertFalse(any(r.captures for r in self.w.invites))
+
+    def test_pending_invites_do_not_transfer(self):
+        self.alice.invite(BOOK, "bob")
+        self.a1.import_state(self.alice.export_state())
+        self.assertEqual(self.a1.state.pending, {})
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.a1.standing(bob, BOOK))  # a1 meets Bob as a first contact
+        self.assertTrue(self.alice.standing(bob, BOOK))  # the inviting installation captures
+
+    def test_abandonment_transfers(self):
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        self.w.admit(BOOK, "bob")
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.a1.import_state(self.alice.export_state())
+        self.assertIn(("bob", BOOK), self.a1.state.abandoned)
+
+    def test_installation_trusting_the_chain_adopts_a_replacements_authorization(self):
+        # Astra's fifth review: the laptop already trusts Bob's replacement
+        # through the same approval chain the phone vouched for.
+        (b0,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertTrue(self.a1.standing(b0, BOOK))  # adopted the phone's vouch
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.alice.accepted(b1) and self.a1.accepted(b1))
+        self.w.delete_device(b0)
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {b1})
+        self.assertTrue(self.a1.standing(b1, GARDEN))
+
+    def test_import_judges_a_replacements_authorization_after_its_evidence(self):
+        (b0,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertTrue(self.a1.standing(b0, BOOK))
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.alice.accepted(b1))  # a1 has not seen the approval
+        self.w.delete_device(b0)
+        self.alice.invite(GARDEN, "bob")
+        self.w.invites.clear()  # withheld: only the import carries it
+        self.w.approvals.clear()
+        self.a1.import_state(self.alice.export_state())
+        self.assertTrue(self.a1.standing(b1, GARDEN))
 
     def test_only_the_inviting_installation_captures(self):
         self.alice.invite(BOOK, "bob")
