@@ -1,10 +1,11 @@
 // Scenarios for the inviters proposal (proposal-inviters.md), run under the
 // "inviters" policy: only the member who invited an account may grant to its
-// devices on first contact, and only in the space they invited it to. Every
+// devices on first contact, and only in spaces they invited it to. Every
 // other member holds first-contact devices for 72 hours of its own time.
 
 import type { Installation } from "../../protocol/installation";
 import { REENROLL_HOLD } from "../../protocol/trust";
+import { COL } from "../../protocol/types";
 import type { World } from "../../world/world";
 import { type Ctx, type Scenario, type Step, check } from "../scenario";
 
@@ -156,11 +157,12 @@ const crossSpace: Scenario = {
   ],
 };
 
+let reinvited = false;
 const known: Scenario = {
   id: "inviters-known",
   policy: "inviters",
   title: "15. Inviters: inviting a known account changes nothing",
-  summary: "An invite vouches only for devices the inviter meets for the first time in making it. Inviting an account the inviter already pins, even one it is still holding, and inviting it again, change no standing.",
+  summary: "An invite vouches only for devices the inviter meets for the first time through an invite. Inviting an account the inviter already pins, even one it is still holding, vouches for nothing, and an account that is already a member can't be invited again.",
   steps: [
     ...bookClub(["carol"]),
     takeover,
@@ -199,14 +201,15 @@ const known: Scenario = {
       ],
     },
     {
-      title: "Alice invites Bob to Book club again",
-      narration: "A second invite is not a first contact either. Nothing changes.",
+      title: "Alice tries to invite Bob to Book club again",
+      narration: "An invite counts only if it admits the account, and Bob is already a member, so her app publishes nothing. A vouch can never be carried into a space whose members were already holding the account's devices.",
       run: (w, c) => {
-        c.inst.alicePhone.invite(c.space.club, c.did.bob);
+        const before = w.provenance.invites.length;
+        reinvited = c.inst.alicePhone.invite(c.space.club, c.did.bob) || w.provenance.invites.length !== before;
         w.settle();
       },
-      expect: (w, c) => [
-        check("The re-invite vouched for nothing", lastInvite(w, c.inst.alicePhone)?.devices.length === 0),
+      expect: (_w, c) => [
+        check("No invite record was made", !reinvited),
         check("The attacker has no Book club key", !hasKey(c.inst.attacker, c.space.club)),
       ],
     },
@@ -391,4 +394,241 @@ const residual: Scenario = {
   ],
 };
 
-export const inviterScenarios: Scenario[] = [newcomer, crossSpace, known, linkedPhone, offline, residual];
+const retry: Scenario = {
+  id: "inviters-retry",
+  policy: "inviters",
+  title: "19. Inviters: an invite that fails to send",
+  summary: "Alice's first attempt to publish her invite of Bob fails after her app has already met him. The invite was saved with its vouch decision and signed bytes, so the retry still vouches, and Alice grants at once when Bob joins.",
+  steps: [
+    {
+      title: "Alice and Bob install the app; Alice creates Book club",
+      narration: "Alice's app has never met Bob.",
+      run: (w, c) => {
+        install(w, c, "alice", "bob");
+        c.space.club = c.inst.alicePhone.createSpace("Book club");
+        w.settle();
+      },
+    },
+    {
+      title: "Alice invites Bob while her PDS rejects writes",
+      narration: "Her app meets Bob's phone, decides the invite vouches for it, and saves the signed record before uploading. The upload fails. Bob is not admitted yet, and Alice's app has no standing for him: both start only once the record is published.",
+      run: (w, c) => {
+        w.fault(c.inst.alicePhone, "reject", 1, COL.invite);
+        c.inst.alicePhone.invite(c.space.club, c.did.bob);
+      },
+      expect: (w, c) => [
+        check("Alice's app pinned Bob's phone", c.inst.alicePhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("The saved invite vouches for it", c.inst.alicePhone.inviteOutbox[0]?.record.vouched === true),
+        check("Bob is not admitted yet", !w.host.membership(c.space.club, c.did.bob)?.eligible),
+        check("Alice has no standing for Bob yet", !standing(c.inst.alicePhone, c.inst.bobPhone, c.space.club)),
+      ],
+    },
+    {
+      title: "Alice's app resends the same invite, and Bob joins",
+      narration: "On its next sync her app resends the exact bytes. It never re-derives the record: a fresh one would see that she already pins Bob and vouch for nothing. Bob is admitted, and Alice's app grants to him at once.",
+      run: (w, c) => {
+        w.settle();
+        c.inst.bobPhone.join(c.space.club);
+        w.settle();
+      },
+      expect: (w, c) => [
+        check("The published invite vouched for Bob's phone", lastInvite(w, c.inst.alicePhone)?.devices.includes(c.inst.bobPhone.binding.device.deviceId) ?? false),
+        check("Alice has standing for Bob's phone", standing(c.inst.alicePhone, c.inst.bobPhone, c.space.club)),
+        check("Bob holds the key, from Alice", keyFrom(c.inst.bobPhone, c.space.club).startsWith("did:plc:alice")),
+      ],
+    },
+  ],
+};
+
+/** Alice and Carol share Book club; Bob has an account but no app yet. */
+const beforeInstall: Step = {
+  title: "Alice invites Bob, who hasn't installed the app",
+  narration: "Bob's account has no devices, and Alice's app has never met him, so the invite is pending: a record with no devices that admits Bob. Alice's app remembers it and starts counting its seven-day window.",
+  run: (w, c) => {
+    install(w, c, "alice", "carol");
+    c.did.bob = w.account("bob", "pds.bob.example");
+    c.space.club = c.inst.alicePhone.createSpace("Book club");
+    c.inst.alicePhone.invite(c.space.club, c.did.carol);
+    c.inst.carolPhone.join(c.space.club);
+    w.settle();
+    c.inst.alicePhone.invite(c.space.club, c.did.bob);
+    w.settle();
+  },
+  expect: (w, c) => [
+    check("Bob is admitted", !!w.host.membership(c.space.club, c.did.bob)?.eligible),
+    check("Alice's invite is pending", lastInvite(w, c.inst.alicePhone)?.pending === true),
+  ],
+};
+
+const bobInstalls = (title: string, narration: string): Step => ({
+  title,
+  narration,
+  run: (w, c) => {
+    c.inst.bobPhone = w.install(c.did.bob, "phone");
+    c.inst.bobPhone.join(c.space.club);
+    w.settle();
+  },
+});
+
+const pending: Scenario = {
+  id: "inviters-pending",
+  policy: "inviters",
+  title: "20. Inviters: inviting someone before they install",
+  summary: "Alice invites Bob before he has the app. When his phone appears, Alice's app meets it for the first time, captures the pending invite, and grants at once, as if Bob had been installed when she invited him.",
+  steps: [
+    beforeInstall,
+    {
+      ...bobInstalls("The next day, Bob installs the app and joins",
+        "Alice's app meets Bob's phone on first use while its pending invite is unexpired: it vouches for the phone and publishes a capture record naming it. Her app grants at once. Carol's app met Bob as a fellow member and holds."),
+      run: (w, c) => {
+        w.advance(24);
+        bobInstalls("", "").run(w, c);
+      },
+      expect: (w, c) => [
+        check("Alice's app captured the pending invite", lastInvite(w, c.inst.alicePhone)?.captures !== null),
+        check("Alice has standing for Bob's phone", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.club) === "vouched"),
+        check("Bob holds the key, from Alice", keyFrom(c.inst.bobPhone, c.space.club).startsWith("did:plc:alice")),
+        check("Carol has no standing for Bob's phone", !standing(c.inst.carolPhone, c.inst.bobPhone, c.space.club)),
+      ],
+    },
+  ],
+};
+
+const pendingExpiry: Scenario = {
+  id: "inviters-pending-expiry",
+  policy: "inviters",
+  title: "21. Inviters: a pending invite expires",
+  summary: "Bob installs the app eight days after Alice invited him. Her pending invite has expired, so his phone is an ordinary first contact, and every member's app holds it.",
+  steps: [
+    beforeInstall,
+    {
+      ...bobInstalls("Eight days later, Bob installs the app and joins",
+        "The invite still admits Bob, but its window has passed: Alice's app captures nothing and holds Bob's phone like everyone else's."),
+      run: (w, c) => {
+        w.advance(8 * 24);
+        bobInstalls("", "").run(w, c);
+      },
+      expect: (w, c) => [
+        check("Nothing was captured", lastInvite(w, c.inst.alicePhone)?.captures === null),
+        check("Alice has no standing for Bob's phone", !standing(c.inst.alicePhone, c.inst.bobPhone, c.space.club)),
+        check("Bob has no key", !hasKey(c.inst.bobPhone, c.space.club)),
+      ],
+    },
+    {
+      title: "72 hours later",
+      narration: "Alice's and Carol's first-contact holds for Bob's phone end, and Bob gets the key.",
+      run: (w) => w.advance(72),
+      expect: (_w, c) => [check("Bob holds the key", hasKey(c.inst.bobPhone, c.space.club))],
+    },
+  ],
+};
+
+const pendingTakeover: Scenario = {
+  id: "inviters-pending-takeover",
+  policy: "inviters",
+  title: "22. Inviters: a takeover in the pending window",
+  summary: "Between Alice's pending invite and Bob installing, someone with Bob's password enrolls the account's first device. Alice's app captures it and grants to it. This is the remaining exposure, widened to the pending window, and the goal check accepts it.",
+  steps: [
+    beforeInstall,
+    {
+      title: "An attacker enrolls Bob's first device",
+      narration: "Alice's app meets the attacker's device first, while the pending invite is unexpired, and vouches for it. Nothing distinguishes it from Bob installing.",
+      run: (w, c) => {
+        w.advance(12);
+        c.inst.attacker = w.takeover(c.did.bob);
+        c.inst.attacker.join(c.space.club);
+        w.settle();
+      },
+      expect: (w, c) => [
+        check("Alice's app captured the pending invite with the attacker's device", lastInvite(w, c.inst.alicePhone)?.devices.includes(c.inst.attacker.binding.device.deviceId) ?? false),
+        check("The attacker holds the key, from Alice", keyFrom(c.inst.attacker, c.space.club).startsWith("did:plc:alice")),
+        check("Carol has no standing for it", !standing(c.inst.carolPhone, c.inst.attacker, c.space.club)),
+      ],
+    },
+    {
+      title: "Bob installs the app",
+      narration: "His phone is a second, unlinked device on his account. Members' apps decline it, and his phone alarms about the device it doesn't recognise: detection, after disclosure.",
+      run: (w, c) => {
+        c.inst.bobPhone = w.install(c.did.bob, "phone");
+        c.inst.bobPhone.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Alice does not accept Bob's phone", !c.inst.alicePhone.trust.isAccepted(c.inst.bobPhone.binding)),
+        check("Bob's phone alarms", c.inst.bobPhone.trust.state.alarms.some((a) => a.kind === "unapproved-own")),
+      ],
+    },
+  ],
+};
+
+const secondSpace: Scenario = {
+  id: "inviters-second-space",
+  policy: "inviters",
+  title: "23. Inviters: a new space with someone you invited",
+  summary: "Alice first met Bob by inviting him to Book club. When she starts Garden and invites him, her vouch follows: she grants at once.",
+  steps: [
+    ...bookClub(),
+    {
+      title: "Alice creates Garden and invites Bob",
+      narration: "The invite meets nobody new and vouches for nothing. But Alice's app first met Bob's phone through her own invite, so it has standing in every space her account admits Bob to, Garden included.",
+      run: (w, c) => {
+        c.space.garden = c.inst.alicePhone.createSpace("Garden");
+        c.inst.alicePhone.invite(c.space.garden, c.did.bob);
+        c.inst.bobPhone.join(c.space.garden);
+        w.settle();
+      },
+      expect: (w, c) => [
+        check("The Garden invite vouched for nothing new", lastInvite(w, c.inst.alicePhone)?.devices.length === 0),
+        check("Alice has standing for Bob's phone in Garden", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.garden) === "vouched"),
+        check("Bob holds Garden's key, from Alice", keyFrom(c.inst.bobPhone, c.space.garden).startsWith("did:plc:alice")),
+      ],
+    },
+  ],
+};
+
+const fellowMember: Scenario = {
+  id: "inviters-fellow-member",
+  policy: "inviters",
+  title: "24. Inviters: a new space with someone you met as a member",
+  summary: "Alice met Carol as a fellow member of Dave's space, not through an invite. When Alice starts Garden with Carol, her app waits out the rest of its first-contact hold for Carol's phone.",
+  steps: [
+    {
+      title: "Dave invites Alice and Carol to Pottery",
+      narration: "Alice's and Carol's apps meet each other on joining and start first-contact holds for each other.",
+      run: (w, c) => {
+        install(w, c, "alice", "carol", "dave");
+        c.space.pottery = c.inst.davePhone.createSpace("Pottery");
+        for (const n of ["alice", "carol"]) {
+          c.inst.davePhone.invite(c.space.pottery, c.did[n]);
+          c.inst[`${n}Phone`].join(c.space.pottery);
+        }
+        w.settle();
+      },
+      expect: (_w, c) => [check("Alice's app holds Carol's phone for 72 hours", near(left(c.inst.alicePhone, c.inst.carolPhone), REENROLL_HOLD))],
+    },
+    {
+      title: "A day later, Alice creates Garden and invites Carol",
+      narration: "Alice's app already pins Carol, so the invite vouches for nothing, and her hold keeps running: \"Your device will share with Carol from Day 4.\"",
+      run: (w, c) => {
+        w.advance(24);
+        c.space.garden = c.inst.alicePhone.createSpace("Garden");
+        c.inst.alicePhone.invite(c.space.garden, c.did.carol);
+        c.inst.carolPhone.join(c.space.garden);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("Alice has no standing for Carol's phone in Garden", !standing(c.inst.alicePhone, c.inst.carolPhone, c.space.garden)),
+        check("Carol has no Garden key", !hasKey(c.inst.carolPhone, c.space.garden)),
+        check("48 hours remain", near(left(c.inst.alicePhone, c.inst.carolPhone), 48)),
+      ],
+    },
+    {
+      title: "Two days later",
+      narration: "Alice's hold for Carol's phone ends, and her app grants.",
+      run: (w) => w.advance(48),
+      expect: (_w, c) => [check("Carol holds Garden's key, from Alice", keyFrom(c.inst.carolPhone, c.space.garden).startsWith("did:plc:alice"))],
+    },
+  ],
+};
+
+export const inviterScenarios: Scenario[] = [newcomer, crossSpace, known, linkedPhone, offline, residual, retry, pending, pendingExpiry, pendingTakeover, secondSpace, fellowMember];

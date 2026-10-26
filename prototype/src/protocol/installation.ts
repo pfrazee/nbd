@@ -11,7 +11,7 @@ import {
 } from "./grants";
 import { type Issuance, move } from "./publish";
 import { type Snapshot, type WriteOp, recordsIn, verifySnapshot } from "./repo";
-import { type TrustState, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust, invitePayload } from "./trust";
+import { type TrustState, PENDING_INVITE_TTL, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust, invitePayload } from "./trust";
 import {
   type Approval, type Binding, COL, type Configuration, type Did, type Envelope, type Evidence, type Invite, type KeyRequest,
   type Membership, type Policy, type SpaceKeyGrant, asCbor, bindingId, label, sameBinding, withoutProof,
@@ -42,12 +42,24 @@ export interface Network {
   readonly policy: Policy;
   /** Spaces in which `did`'s own PDS holds a repo for it. */
   accountSpaces(did: Did): string[];
-  /** Ground truth for the checks: an invite record was published. */
+  /** Ground truth for the checks: an invite record was signed and saved. */
+  invitePrepared?(by: Binding, rkey: string): void;
+  /** Ground truth for the checks: an attempt to publish an invite record. */
   invited?(e: InviteEvent): void;
 }
 
-/** What an inviting installation did, for the goal check and traces. */
-export type InviteEvent = { by: Binding; space: string; record: Invite; firstMet: boolean; vouched: Binding[] };
+/** A signed invite or capture record, saved with its vouch decision before
+ * any upload. `firstMet`: the installation had no pin for the account when
+ * it made the record. */
+export type OutboxInvite = { space: string; account: Did; record: Invite; rkey: string; vouch: Binding[]; firstMet: boolean };
+
+/** What an inviting installation did, for the goal check and traces:
+ * `stage` is the first attempt when the invite was made, or a later resend
+ * from the outbox; `abandoned` if the record no longer admitted its account. */
+export type InviteEvent = {
+  by: Binding; space: string; record: Invite; rkey: string; firstMet: boolean; vouched: Binding[];
+  stage: "attempt" | "flush"; published: boolean; abandoned: boolean;
+};
 
 export type Message =
   | { author: Did; rkey: string; text: string; device: string; at: number }
@@ -69,7 +81,8 @@ type SpaceLocal = {
   sawOtherHolder: boolean;
 };
 
-export type InstallationState = { trust: TrustState; spaces: Map<string, SpaceLocal> };
+/** `invites`: the outbox, restored only onto the same device. */
+export type InstallationState = { trust: TrustState; spaces: Map<string, SpaceLocal>; invites?: { device: string; outbox: OutboxInvite[] } };
 
 export class Installation {
   readonly binding: Binding;
@@ -175,12 +188,16 @@ export class Installation {
 
   exportState(): InstallationState {
     this.trust.tick();
-    return { trust: cloneTrust(this.trust.state), spaces: new Map([...this.spaces].map(([k, s]) => [k, { ...s, issuances: new Map(s.issuances), stopped: [...s.stopped], outbox: [...s.outbox] }])) };
+    return {
+      trust: cloneTrust(this.trust.state), spaces: new Map([...this.spaces].map(([k, s]) => [k, { ...s, issuances: new Map(s.issuances), stopped: [...s.stopped], outbox: [...s.outbox] }])),
+      invites: { device: this.binding.device.deviceId, outbox: [...this.inviteOutbox] },
+    };
   }
 
   importState(s: InstallationState): void {
     this.imports++;
     this.trust.importFrom(cloneTrust(s.trust));
+    if (s.invites?.device === this.binding.device.deviceId) this.inviteOutbox = [...s.invites.outbox];
     for (const [uri, sp] of s.spaces) {
       const mine = this.spaces.get(uri);
       if (!mine) this.spaces.set(uri, { ...sp, issuances: new Map(), stopped: [], outbox: [], requested: null });
@@ -226,9 +243,12 @@ export class Installation {
     st.holds.clear();
     st.candidatesSeen.clear();
     st.views.clear();
-    st.vouches.clear();
+    st.vouched.clear();
+    st.admitted.clear();
+    st.pending.clear();
     st.approvers.clear();
     st.fcHolds.clear();
+    this.inviteOutbox = [];
     this.lostState = true;
   }
 
@@ -240,39 +260,112 @@ export class Installation {
   }
 
   /** Admit `account` to `space`. Under the inviters policy this first meets
-   * the account and publishes an invite record, and admits only if the
-   * record was published. Returns whether the account was admitted. */
+   * the account and saves a signed invite record, then publishes it and
+   * admits the account; a record that fails to publish is resent byte for
+   * byte on later syncs (proposal-inviters.md#durable-invites). An invite
+   * counts only if it admits the account, so none is made for a member.
+   * Returns whether the account was admitted now. */
   invite(space: string, account: Did): boolean {
-    if (this.net.policy === "inviters" && !this.publishInvite(space, account)) return false;
-    this.net.host.setMembership(this.did, space, account, true);
-    return true;
+    if (this.net.policy !== "inviters") {
+      this.net.host.setMembership(this.did, space, account, true);
+      return true;
+    }
+    if (this.net.host.membership(space, account)?.eligible) return false;
+    // Inviting again while an invite of the account to the space is unsent
+    // resumes that invite: no second record.
+    const unsent = this.inviteOutbox.find((e) => !e.record.captures && e.space === space && e.account === account);
+    if (unsent) {
+      this.flushInvites();
+      return !this.inviteOutbox.includes(unsent);
+    }
+    const entry = this.prepareInvite(space, account);
+    this.inviteOutbox.push(entry);
+    this.flushInvites(entry);
+    return !this.inviteOutbox.includes(entry);
   }
 
+  /** Invites saved but not yet published, oldest first. */
+  inviteOutbox: OutboxInvite[] = [];
+
   /** proposal-inviters.md#invite-records: sync the account's repo, pin it on
-   * first use if this installation has no pin for it, and publish an
-   * immutable invite record in this account's repo for the space. It vouches
-   * only for bindings first met in making it. */
-  private publishInvite(space: string, account: Did): boolean {
+   * first use if this installation has no pin for it, decide whether the
+   * invite vouches, and sign the record, once. An account with no devices
+   * that this installation never pinned gets a pending invite. */
+  private prepareInvite(space: string, account: Did): OutboxInvite {
     const knew = this.trust.knew(account);
     this.trust.tick();
     this.observeAccount(account);
     this.contacts.add(account); // keep the pin current, whatever the pinning mode
     const st = this.trust.state;
     const live = this.trust.live(account);
+    const view = st.views.get(account);
+    const pending = !knew && !!view && view.present.size === 0;
     const met = knew ? [] : live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
+    const entry = this.signInvite(space, account, live, met, pending, null, !knew);
+    if (pending) this.trust.addPending(entry.rkey, space, account, this.binding.device.deviceId);
+    return entry;
+  }
+
+  private signInvite(space: string, account: Did, bindings: Binding[], met: Binding[], pending: boolean, captures: string | null, firstMet: boolean): OutboxInvite {
     const unsigned = {
-      version: 1 as const, space, account, bindings: live, vouched: met.length > 0,
+      version: 1 as const, space, account, bindings, vouched: met.length > 0, pending, captures,
       issuer: { account: this.did, deviceId: this.binding.device.deviceId },
     };
     const record: Invite = { ...unsigned, proof: sign(this.signKey.secretKey, invitePayload(unsigned)) };
     const rkey = ref(asCbor(record));
-    const value: Cbor = { $type: COL.invite, value: asCbor(record) };
-    // A write whose acknowledgement was lost may still have landed.
-    if (!this.write([{ action: "create", collection: COL.invite, rkey, value }], space) && !this.ownSpaceRecords(space, COL.invite).some(([k]) => k === rkey))
-      return false;
-    for (const b of met) this.trust.vouch(space, b);
-    this.net.invited?.({ by: this.binding, space, record, firstMet: !knew, vouched: met });
-    return true;
+    this.net.invitePrepared?.(this.binding, rkey);
+    return { space, account, record, rkey, vouch: met, firstMet };
+  }
+
+  /** Publish saved invites in order, resending their exact bytes, and stop
+   * at the first that fails. `current` is an invite being made now. */
+  private flushInvites(current?: OutboxInvite): void {
+    const report = (e: OutboxInvite, published: boolean, abandoned = false) =>
+      this.net.invited?.({ by: this.binding, space: e.space, record: e.record, rkey: e.rkey, firstMet: e.firstMet, vouched: e.vouch,
+        stage: e === current ? "attempt" : "flush", published, abandoned });
+    while (this.inviteOutbox.length) {
+      const e = this.inviteOutbox[0];
+      const { record, rkey, vouch } = e;
+      // A write whose acknowledgement was lost may still have landed.
+      const landed = () => this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === rkey);
+      if (!record.captures && this.net.host.membership(e.space, e.account)?.eligible && !landed()) {
+        // Someone else admitted the account meanwhile: the record would no
+        // longer admit it, so it is abandoned unsent.
+        this.inviteOutbox.shift();
+        report(e, false, true);
+        continue;
+      }
+      if (!this.write([{ action: "create", collection: COL.invite, rkey, value: { $type: COL.invite, value: asCbor(record) } }], e.space) && !landed()) {
+        if (current && this.inviteOutbox.includes(current)) report(current, false);
+        return;
+      }
+      this.inviteOutbox.shift();
+      report(e, true);
+      // Admission and vouched standing start once the record is published.
+      for (const b of vouch) this.trust.vouch(e.space, b);
+      this.trust.admit(e.account, e.space);
+      if (!record.captures) this.net.host.setMembership(this.did, e.space, e.account, true);
+    }
+  }
+
+  /** proposal-inviters.md#pending-invites: the first time this installation
+   * pins an account it made a pending invite for, it vouches for the devices
+   * it met on first use and publishes a capture record, if the invite has
+   * not expired. */
+  private capturePending(): void {
+    const st = this.trust.state;
+    for (const [rkey, p] of st.pending) {
+      if (p.done || !this.trust.knew(p.account)) continue;
+      p.done = true;
+      if (p.issuer !== this.binding.device.deviceId) continue; // only the device that made it
+      if (p.credited >= PENDING_INVITE_TTL) continue; // expired: an ordinary first contact
+      const live = this.trust.live(p.account);
+      const met = live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
+      if (!met.length) continue;
+      const entry = this.signInvite(p.space, p.account, live, met, false, rkey, true);
+      this.inviteOutbox.push(entry);
+      this.flushInvites(entry);
+    }
   }
 
   /** Records of one collection in this account's own repo for a space. */
@@ -286,17 +379,19 @@ export class Installation {
     return recordsIn(snap, collection);
   }
 
-  /** Take vouches from this account's invite records: a valid record signed
-   * by an own device this installation accepted (even if since removed),
-   * for an account it has never pinned. */
+  /** Learn from this account's invite records, each signed by an own device
+   * this installation accepted (even if since removed): every record tells
+   * it a space its account admitted the invited account to, and a vouched
+   * one carries the vouch to an installation that never pinned the account. */
   private adoptOwnInvites(): void {
     const st = this.trust.state;
     for (const space of this.net.accountSpaces(this.did))
       for (const [, v] of this.ownSpaceRecords(space, COL.invite)) {
         const rec = (v as { value?: Invite }).value;
-        if (!rec || rec.version !== 1 || rec.space !== space || !rec.vouched || rec.issuer?.account !== this.did || !Array.isArray(rec.bindings)) continue;
+        if (!rec || rec.version !== 1 || rec.space !== space || rec.issuer?.account !== this.did || !Array.isArray(rec.bindings)) continue;
         const issuer = [...st.accepted.values()].find((a) => a.binding.account === this.did && a.binding.device.deviceId === rec.issuer.deviceId)?.binding;
         if (!issuer || !(rec.proof instanceof Uint8Array) || !verify(rec.proof, invitePayload(withoutProof(rec)), issuer.device.authPubkey)) continue;
+        this.trust.admit(rec.account, space);
         if (this.trust.adoptInvite(rec)) this.contacts.add(rec.account);
       }
   }
@@ -365,9 +460,11 @@ export class Installation {
     if (this.net.policy === "inviters") {
       // Credit time up to now before any observation can revoke.
       this.trust.tick();
+      this.flushInvites();
       this.adoptOwnInvites();
     }
     for (const did of this.trackedAccounts()) this.observeAccount(did);
+    if (this.net.policy === "inviters") this.capturePending();
     for (const sp of this.spaces.values()) this.syncSpace(sp);
     return this.fingerprint() !== before;
   }
@@ -596,7 +693,7 @@ export class Installation {
     const st = this.trust.state;
     const holds = [...st.holds].map(([d, h]) => `${d}:${h.candidate.join(",")}:${h.credited >= REENROLL_HOLD}`).join(";");
     const keys = [...this.spaces.values()].map((s) => `${s.uri}:${!!s.key}:${s.requested}:${[...s.issuances.values()].map((i) => i.state).join("")}:${s.stopped.length}`).join(";");
-    return [st.accepted.size, st.revoked.size, holds, keys, this.writes, st.alarms.length, st.notices.length].join("|");
+    return [st.accepted.size, st.revoked.size, holds, keys, this.writes, st.alarms.length, st.notices.length, this.inviteOutbox.length].join("|");
   }
 }
 

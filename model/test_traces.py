@@ -66,6 +66,7 @@ def replay_inviters(trace):
     w = World()
     viewer = B(trace["viewer"])
     client = InviterClient(w, viewer)
+    client.auto_flush = False  # the trace records each resend
     seen = []
     for n, step in enumerate(trace["steps"]):
         for op in step["ops"]:
@@ -85,12 +86,38 @@ def replay_inviters(trace):
                     client.clock_offset += op["h"]
             elif op["op"] == "invite":
                 if B(op["by"]) == viewer:
-                    rec = client.invite(op["space"], op["account"])
-                    if rec.vouched != op["vouched"]:
-                        raise AssertionError(f"step {n}: model vouched {rec.vouched} for {op}")
-                else:
+                    w.fail_writes = not op["published"]
+                    if op["captures"]:
+                        # The viewer met a pending invite's account: the model
+                        # must capture the same devices, publishing alike.
+                        before = len(w.invites) + len(client.state.outbox)
+                        client.sync()
+                        client._first_use(op["account"])
+                        made = (w.invites + client.state.outbox)[before:]
+                        want = InviteRecord(viewer.account, op["space"], op["account"],
+                                            frozenset(B(x) for x in op["bindings"]), True,
+                                            captures=True)
+                        where = w.invites if op["published"] else client.state.outbox
+                        if made != [want] or want not in where:
+                            raise AssertionError(f"step {n}: model capture {made} for {op}")
+                    else:
+                        rec = client.invite(op["space"], op["account"])
+                        got = None if rec is None else (rec.vouched, rec.pending,
+                                                        rec in client.state.outbox)
+                        if got != (op["vouched"], op["pending"], not op["published"]):
+                            raise AssertionError(f"step {n}: model invite {rec} for {op}")
+                    w.fail_writes = False
+                elif op.get("published", True):
                     w.invite(InviteRecord(op["by"][0], op["space"], op["account"],
-                                          frozenset(B(x) for x in op["bindings"]), op["vouched"]))
+                                          frozenset(B(x) for x in op["bindings"]), op["vouched"],
+                                          op.get("pending", False), op.get("captures", False)))
+            elif op["op"] == "flush":
+                oldest = client.state.outbox[0] if client.state.outbox else None
+                client.flush(one=True)
+                if oldest is None or oldest in client.state.outbox:
+                    raise AssertionError(f"step {n}: model had nothing to resend for {op}")
+                if (oldest in w.invites) == op.get("abandoned", False):
+                    raise AssertionError(f"step {n}: model {'abandoned' if oldest not in w.invites else 'published'} {oldest} for {op}")
             else:
                 raise ValueError(op)
         tracked = set(step["tracked"])

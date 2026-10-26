@@ -32,7 +32,7 @@ const MUTATIONS = {
   "start-over list never closes": ["} else if (!(so && !so.done && so.list!.has(id))) {", "} else if (!(so && so.list!.has(id))) {"],
   // The inviters policy (proposal-inviters.md).
   "inviters: grants ignore standing": [GRANTS, "if (!basis) return fail(", "if (false) return fail("],
-  "inviters: vouch scoped account-wide": ["if (st.vouches.get(space)?.has(id)) return \"vouched\";", "if ([...st.vouches.values()].some((v) => v.has(id))) return \"vouched\";"],
+  "inviters: vouch scoped to one space again": ["if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return \"vouched\";", "if (st.vouched.get(id) === space) return \"vouched\";"],
   "inviters: known account vouched": [CLIENT, "const met = knew ? [] : live.filter(", "const met = live.filter("],
   "inviters: import ends a hold": ["if (b && !knew.has(b.account)) this.vouch(space, b);", "if (b) this.vouch(space, b);"],
   "inviters: invite records override pins": ["if (!rec.vouched || this.knew(rec.account)) return false;", "if (!rec.vouched) return false;"],
@@ -40,7 +40,12 @@ const MUTATIONS = {
   "inviters: approved devices start no hold": ["            this.startFirstContactHold(ap.target);\n", ""],
   "inviters: removal erases credit": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint); else h.credited = 0;"],
   "inviters: revoked bindings keep crediting": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "h.credited += Math.max(0, now - h.checkpoint);"],
-  "inviters: removals observed before crediting": [CLIENT, "      this.trust.tick();\n      this.adoptOwnInvites();", "      this.adoptOwnInvites();"],
+  "inviters: removals observed before crediting": [CLIENT, "      this.trust.tick();\n      this.flushInvites();", "      this.flushInvites();"],
+  "inviters: invite published for an existing member": [CLIENT, "    if (this.net.host.membership(space, account)?.eligible) return false;\n", ""],
+  "inviters: a retry re-derives the record": [CLIENT, "const { record, rkey, vouch } = e;", "const { record, rkey, vouch } = e === current ? e : this.prepareInvite(e.space, e.account);"],
+  "inviters: pending invites never expire": [CLIENT, "      if (p.credited >= PENDING_INVITE_TTL) continue; // expired: an ordinary first contact\n", ""],
+  "inviters: a re-invite prepares a second record": [CLIENT, "    if (unsent) {", "    if (false) {"],
+  "inviters: a capture by a non-inviting installation": [CLIENT, "      if (p.issuer !== this.binding.device.deviceId) continue; // only the device that made it\n", ""],
 };
 
 const all = process.argv.includes("--all");

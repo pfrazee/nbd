@@ -8,7 +8,7 @@ Run: python3 -I -m unittest discover -s model
 
 import unittest
 
-from nbd_trust import REENROLL_HOLD, Binding, InviterClient, World
+from nbd_trust import PENDING_INVITE_TTL, REENROLL_HOLD, Binding, InviterClient, World
 
 BOOK = "book-club"
 GARDEN = "garden"
@@ -78,11 +78,27 @@ class Vouching(Base):
         self.assertEqual(rec.bindings, {bob})
         self.assertFalse(self.alice.standing(bob, BOOK))
 
-    def test_reinvite_vouches_for_nothing_new(self):
+    def test_vouch_follows_the_inviters_later_invites(self):
+        # Astra: a second new space with someone Alice invited is instant.
         (bob,) = self.account("bob", "b0")
         self.alice.invite(BOOK, "bob")
-        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)
-        self.assertFalse(self.alice.standing(bob, GARDEN))
+        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)  # nothing new vouched
+        self.assertTrue(self.alice.standing(bob, GARDEN))
+
+    def test_member_met_another_way_waits_in_a_new_space(self):
+        # Astra: Alice met Carol as a fellow member, not by inviting her.
+        (carol,) = self.account("carol", "c0")
+        self.assertTrue(self.alice.accepted(carol))
+        self.alice.invite(GARDEN, "carol")
+        self.assertFalse(self.alice.standing(carol, GARDEN))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.alice.standing(carol, GARDEN))
+
+    def test_no_invite_for_an_existing_member(self):
+        (bob,) = self.account("bob", "b0")
+        self.w.admit(BOOK, "bob")
+        self.assertIsNone(self.dave.invite(BOOK, "bob"))
+        self.assertFalse(self.dave.standing(bob, BOOK))
 
     def test_approved_device_inherits_vouched_scope(self):
         (bob,) = self.account("bob", "b0")
@@ -125,6 +141,8 @@ class Takeover(Base):
         self.assertTrue(self.dave.standing(m, GARDEN))
         self.w.admit(BOOK, "dave")
         self.assertFalse(self.dave.standing(m, BOOK))
+        self.assertIsNone(self.dave.invite(BOOK, "bob"))  # Bob is already a member there
+        self.assertFalse(self.dave.standing(m, BOOK))
 
     def test_inviting_a_held_pin_does_not_end_its_hold(self):
         # Dave met the taken-over Bob yesterday in another space; inviting
@@ -160,6 +178,82 @@ class Takeover(Base):
         self.assertFalse(self.dave.accepted(m))  # re-enrollment hold
         self.w.now += REENROLL_HOLD
         self.assertTrue(self.dave.standing(m, BOOK))  # re-enrolled: every space
+
+
+class PendingInvites(Base):
+    def test_invite_before_install_captures_the_first_device(self):
+        # Astra: Bob is invited before installing; Alice is online when he joins.
+        rec = self.alice.invite(BOOK, "bob")
+        self.assertTrue(rec.pending)
+        self.assertTrue(self.w.eligible("bob", BOOK))
+        self.w.now += 30
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertTrue(self.alice.standing(bob, BOOK))
+        capture = self.w.invites[-1]
+        self.assertTrue(capture.captures and capture.vouched)
+        self.assertEqual(capture.bindings, {bob})
+
+    def test_expired_pending_invite_captures_nothing(self):
+        self.alice.invite(BOOK, "bob")
+        self.w.now += PENDING_INVITE_TTL
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.alice.standing(bob, BOOK))
+
+    def test_pending_capture_follows_later_invites(self):
+        self.alice.invite(BOOK, "bob")
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertTrue(self.alice.standing(bob, BOOK))
+        self.alice.invite(GARDEN, "bob")
+        self.assertTrue(self.alice.standing(bob, GARDEN))
+
+    def test_limitation_takeover_enrolling_first_is_captured(self):
+        # The remaining exposure, over the pending window.
+        self.alice.invite(BOOK, "bob")
+        m = self.w.add_device(B("bob", "m"))
+        self.assertTrue(self.alice.standing(m, BOOK))
+
+    def test_capture_needs_the_capture_record_published(self):
+        self.alice.invite(BOOK, "bob")
+        self.w.fail_writes = True
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.w.fail_writes = False
+        self.assertTrue(self.alice.standing(bob, BOOK))
+
+    def test_newcomer_still_holds_a_captured_device(self):
+        self.alice.invite(BOOK, "bob")
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertTrue(self.alice.standing(bob, BOOK))
+        self.assertFalse(self.dave.standing(bob, BOOK))
+
+
+class DurableInvites(Base):
+    def test_failed_write_retries_the_vouched_record(self):
+        # Astra: pinning before a failed write must not turn the retry into
+        # an unvouched invite.
+        (bob,) = self.account("bob", "b0")
+        self.w.fail_writes = True
+        rec = self.alice.invite(BOOK, "bob")
+        self.assertTrue(rec.vouched)
+        self.assertFalse(self.w.eligible("bob", BOOK))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.assertIs(self.alice.invite(BOOK, "bob"), rec)  # the same prepared record
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.assertEqual(self.w.invites, [rec])
+        self.assertTrue(self.alice.standing(bob, BOOK))
+
+    def test_record_that_would_no_longer_admit_is_dropped(self):
+        (bob,) = self.account("bob", "b0")
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        self.w.admit(BOOK, "bob")  # someone else admitted Bob meanwhile
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.assertEqual(self.w.invites, [])
+        self.assertFalse(self.alice.standing(bob, BOOK))
 
 
 class Approvals(Base):
@@ -238,6 +332,15 @@ class Imports(Base):
         self.alice.invite(BOOK, "bob")
         self.assertTrue(self.a1.standing(bob, BOOK))
         self.assertFalse(self.a1.standing(bob, GARDEN))
+        self.a1.invite(GARDEN, "bob")
+        self.assertTrue(self.a1.standing(bob, GARDEN))
+        self.assertTrue(self.alice.standing(bob, GARDEN))  # learned from a1's record
+
+    def test_only_the_inviting_installation_captures(self):
+        self.alice.invite(BOOK, "bob")
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.a1.standing(bob, BOOK))  # a1 met Bob first, as a first contact
+        self.assertTrue(self.alice.standing(bob, BOOK))
 
     def test_invite_record_does_not_end_a_running_hold(self):
         (bob,) = self.account("bob", "b0")

@@ -67,13 +67,18 @@ export type SpaceKeyGrant = {
 
 /** An invite record in the inviting account's space repo
  * (proposal-inviters.md#invite-records). `vouched` is true only if the
- * inviting device first met `bindings` in making the invite. */
+ * inviting device first met `bindings` through this invite. A pending
+ * invite (`pending`, no bindings) admits an account that has no devices
+ * yet; a capture record (`captures`: the pending record's rkey) later names
+ * the devices the inviting device first met for it. */
 export type Invite = {
   version: 1;
   space: string;
   account: Did;
   bindings: Binding[];
   vouched: boolean;
+  pending: boolean;
+  captures: string | null;
   issuer: DeviceIdentity;
   proof: Uint8Array;
 };

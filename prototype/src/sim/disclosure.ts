@@ -8,9 +8,11 @@
 // Permitted paths, for issuer I, attacker device X of account A:
 // - First contact: I first knew A no earlier than X appeared (non-goal 1).
 //   Under the inviters policy (proposal-inviters.md) only one first contact
-//   excuses a grant: I's account vouched for X in this space, at an invite
-//   where the inviting installation first met A, and I had no pin for A
-//   before that invite. Every other first contact must wait out a hold.
+//   excuses a grant: I's account vouched for X, by an invite or capture
+//   record made when the inviting installation first met A; I had no pin
+//   for A before that record was made; and I's account published an invite
+//   record admitting A to this space, before or after. Every other first
+//   contact must wait out a hold.
 // - Elapsed hold: X appeared at least REENROLL_HOLD ago (goal 3).
 // - Compromised signer: a compromised key approved X while A still had a
 //   device the attacker does not control, so it was not a full reset. A
@@ -104,16 +106,17 @@ export class DisclosureCheck {
     const approvals = p.approvals.filter((a) => a.target === x);
     if (approvals.some((a) => a.compromised && a.standing)) return null; // compromised signer, not a reset
     if (approvals.some((a) => p.attacker.has(a.signer) && this.liveAt(issuer, account, a.signer))) return null; // chain
-    if (w.policy === "inviters") return `${who} in ${g.space} ${(w.t - appeared).toFixed(1)}h after it appeared, with no vouch there`;
+    if (w.policy === "inviters") return `${who} in ${g.space} ${(w.t - appeared).toFixed(1)}h after it appeared, without a vouch admitted there`;
     return `${who} ${(w.t - appeared).toFixed(1)}h after it appeared, though it already knew ${account.slice(8)}`;
   }
 
-  /** I's account vouched for device X of `account` in `space` at an invite
-   * where it first met the account, and I first knew the account no earlier
-   * than that invite (an installation that already pinned it takes no vouch). */
+  /** I's account vouched for device X of `account` through an invite (or
+   * capture) made when it first met the account, I first knew the account no
+   * earlier than that (an installation that already pinned it takes no
+   * vouch), and I's account admitted the account to `space`. */
   private vouched(i: Installation, space: string, account: string, x: string, knew: number): boolean {
-    return this.world.provenance.invites.some((v) => v.firstMet && v.inviter === i.did && v.space === space
-      && v.account === account && v.devices.includes(x) && knew > v.seq);
+    const facts = this.world.provenance.invites.filter((v) => v.inviter === i.did && v.account === account);
+    return facts.some((v) => v.firstMet && v.devices.includes(x) && knew > v.seq) && facts.some((v) => v.admits && v.space === space);
   }
 
   private liveAt(i: Installation, account: string, deviceId: string): boolean {

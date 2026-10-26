@@ -15,17 +15,23 @@ import { Rng } from "../protocol/crypto";
 import type { Installation } from "../protocol/installation";
 import { commitment } from "../protocol/grants";
 import { type Binding, COL, type Policy, bindingId } from "../protocol/types";
-import type { TraceBinding, TraceOp } from "../world/world";
+import type { InviteOp, TraceBinding, TraceOp } from "../world/world";
 import { World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
 
 export type Action = (string | number | boolean)[];
 /** `tracked` and `standing` (space label -> bindings) only under inviters. */
-export type TraceStep = { ops: TraceOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]> };
+/** A trace op as fixtures record it: a viewer's resend of its oldest saved
+ * invite is `{op: "flush"}`, or `{op: "flush", abandoned: true}` if that
+ * invite no longer admitted its account and was dropped unsent. */
+export type TraceStepOp = Exclude<TraceOp, { op: "flush" }> | { op: "flush"; abandoned?: true };
+export type TraceStep = { ops: TraceStepOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]> };
 export type Trace = { seed: string; policy?: Policy; spaces?: string[]; viewer: TraceBinding; actions?: Action[]; steps: TraceStep[] };
 
 const ACCOUNTS = ["alice", "bob", "carol"];
-const INVITER_ACCOUNTS = ["alice", "bob", "carol", "dave"];
+/** Erin starts with an account and no devices, so invites of her are pending. */
+const INVITER_ACCOUNTS = ["alice", "bob", "carol", "dave", "erin"];
+const NO_DEVICE = "erin";
 /** Space labels in inviters traces, in the order of `Walk.spaces`. */
 const SPACE_LABELS = ["A", "B"];
 const WAITS = [1, 24, 48, 71, 72, 100];
@@ -46,7 +52,8 @@ export class Walk {
     if (shared) w.trace = [];
     const inviters = policy === "inviters";
     this.accounts = inviters ? INVITER_ACCOUNTS : ACCOUNTS;
-    const phones = this.accounts.map((a) => w.install(w.account(a, a === "alice" ? "pds.example" : `pds.${a}.example`), "phone"));
+    const dids = this.accounts.map((a) => w.account(a, a === "alice" ? "pds.example" : `pds.${a}.example`));
+    const phones = dids.filter((d) => d !== did(NO_DEVICE)).map((d) => w.install(d, "phone"));
     this.viewer = phones[0];
     if (inviters) {
       // Alice and Bob share Club; Carol and Dave share Garden. Alice starts
@@ -92,7 +99,7 @@ export class Walk {
       ["takeover", 1], ["steal", 1], ["approve", 2], ["recreate", 2], ["attackerAdd", 1], ["skew", 1],
       ["forget", 1], ["fault", 1], ["rotate", 1],
     ];
-    if (this.policy === "inviters") kinds.push(["invite", 3]);
+    if (this.policy === "inviters") kinds.push(["invite", 3], ["faultInvite", 2]);
     if (!this.shared)
       kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
         ["tamper", 1], ["migrate", 1]);
@@ -126,8 +133,13 @@ export class Walk {
         const admin = w.host.admin(this.spaces[s]);
         const by = insts.filter((i) => i.did === admin && i.spaces.has(this.spaces[s])
           && (!this.shared || i.did !== this.viewer.did || this.viewer.trust.state.accepted.has(bindingId(i.binding))));
-        const to = this.accounts.filter((a) => did(a) !== admin);
-        return by.length ? ["invite", pick(by).id, s, pick(to)] : ["wait", 1];
+        const to = this.accounts.filter((a) => did(a) !== admin && !w.host.membership(this.spaces[s], did(a))?.eligible);
+        return by.length && to.length ? ["invite", pick(by).id, s, pick(to)] : ["wait", 1];
+      }
+      case "faultInvite": {
+        // Invite publication fails, so invites are saved and resent.
+        const admins = insts.filter((i) => this.spaces.some((s) => w.host.admin(s) === i.did));
+        return admins.length ? ["fault", pick(admins).id, pick(["reject", "lost-ack"]), 1 + rng.int(3), COL.invite] : ["wait", 1];
       }
       case "forget":
         return ["forget", pick(insts).id, rng.int(this.spaces.length)];
@@ -281,9 +293,22 @@ export class Walk {
 
   private record(): void {
     const w = this.world;
-    const pending = w.trace!.splice(0);
-    const invites = pending.flatMap((o) => (o.op === "invite" ? [{ ...o, space: SPACE_LABELS[this.spaces.indexOf(o.space)] }] : []));
-    const ops = [...this.repoOps(), ...invites, ...pending.filter((o) => o.op === "wait" || o.op === "skew")];
+    // Repo operations, then invites, resends, and time in the order they
+    // happened. The viewer's invite attempts appear whether or not they
+    // published, and its resends as flush ops; other devices' records appear
+    // once published.
+    const v = this.viewer.binding.device.deviceId;
+    const labelled = (o: InviteOp): InviteOp => ({ ...o, space: SPACE_LABELS[this.spaces.indexOf(o.space)] });
+    const timed = w.trace!.splice(0).flatMap((o): TraceStepOp[] => {
+      if (o.op === "wait" || o.op === "skew") return [o];
+      if (o.op === "invite") return o.by[1] === v || o.published ? [labelled(o)] : [];
+      if (o.op === "flush") {
+        if (o.by[1] === v) return [o.abandoned ? { op: "flush", abandoned: true } : { op: "flush" }];
+        return o.published ? [labelled(o.invite)] : [];
+      }
+      return [];
+    });
+    const ops: TraceStepOp[] = [...(this.repoOps() as TraceStepOp[]), ...timed];
     const tb = (b: Binding): TraceBinding => [b.account.slice(8), b.device.deviceId];
     const all = w.allBindings();
     const accepted = all.filter((b: Binding) => this.viewer.trust.isAccepted(b)).map(tb);

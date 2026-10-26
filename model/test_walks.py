@@ -40,7 +40,8 @@ import random
 import unittest
 from typing import Dict, List, Optional, Set
 
-from nbd_trust import REENROLL_HOLD, Approval, Binding, InviterClient, SpecClient, World
+from nbd_trust import (PENDING_INVITE_TTL, REENROLL_HOLD, Approval, Binding, InviterClient,
+                       SpecClient, World)
 
 ACCOUNTS = ("alice", "bob", "carol")
 WALKS = int(os.environ.get("NBD_WALKS", "1500"))
@@ -371,45 +372,81 @@ SPACES = ("s1", "s2")
 
 class InviterWalk(Walk):
     """The same walk over InviterClient (proposal-inviters.md), adding
-    invites into two spaces and standing queries. Extra invariants:
+    invites into two spaces, an account (erin) that starts with no devices
+    and later installs, failing writes and retries, and standing queries.
+    Extra invariants, checked against the walk's own record of each client's
+    first contacts rather than client state:
 
-    - Vouches are never lost, and a new vouch is for a space and binding
-      named by a vouched invite record of the client's own account, for an
-      account the client had never pinned before that step.
+    - A published vouched invite record names only bindings some own client
+      accepted on first use in the step it first met the account, and that
+      step was its invite of the account, or its first contact within
+      PENDING_INVITE_TTL of its pending invite of a device-less account.
+    - A client's vouched bindings and admitted spaces come only from
+      published own invite records, and a vouch reaches a client that
+      already knew the account only by its own publication.
+    - Vouches and admitted spaces are never lost. No invite record is
+      published for an account already a member of the space.
     - First-contact credit never exceeds real time since any installation
       first accepted the binding, never decreases, and starts at zero unless
       imported.
     - Standing matches a restatement of its five sources over the client's
-      persisted bases: own, re-enrolled, REENROLL_HOLD credited, vouched in
-      that space, or approved by a binding with standing.
+      persisted bases.
     """
 
     CLIENT = InviterClient
 
     def __init__(self, offset: float):
         super().__init__(offset)
+        self.made["erin"] = []
         self.first_accepted: Dict[Binding, float] = {}
+        self.first: List[Dict[str, tuple]] = [{}, {}]  # client -> account -> (kind, bindings)
+        self.pending: List[Dict[str, float]] = [{}, {}]  # client -> account -> invite time
+        self.seen_invites = 0
 
     def gen(self, rng: random.Random) -> tuple:
         r = rng.random()
         if r < 0.08:
-            return ("invite", rng.randrange(2), rng.choice(("bob", "carol")), rng.choice(SPACES))
-        if r < 0.2:
+            return ("invite", rng.randrange(2), rng.choice(("bob", "carol", "erin")), rng.choice(SPACES))
+        if r < 0.18:
             all_made = [b for bs in self.made.values() for b in bs]
             return ("standing", rng.randrange(2), rng.choice(all_made), rng.choice(SPACES))
+        if r < 0.21:
+            return ("writes", rng.random() < 0.5)
+        if r < 0.24 and not self.world.present_devices("erin"):
+            return ("install", B("erin", f"e{len(self.made['erin'])}"))
+        if r < 0.26:
+            return ("admit", rng.choice(("bob", "carol", "erin")), rng.choice(SPACES))
         return super().gen(rng)
 
     def extra(self, act: tuple) -> Optional[int]:
-        c = self.clients[act[1]]
+        w = self.world
+        if act[0] == "writes":
+            w.fail_writes = act[1]
+            return None
+        if act[0] == "install":
+            self._add(act[1])
+            return None
+        if act[0] == "admit":
+            w.admit(act[2], act[1])
+            return None
+        i, c = act[1], self.clients[act[1]]
         if act[0] == "invite":
-            c.invite(act[3], act[2])
+            account = act[2]
+            if (not w.eligible(account, act[3]) and not c._knew(account)
+                    and not w.present_devices(account)):
+                since = self.pending[i].get(account)
+                if since is None or w.now - since >= PENDING_INVITE_TTL - EPS:
+                    self.pending[i][account] = w.now  # a new pending window
+            self.invite_rejected = w.eligible(account, act[3])
+            c.invite(act[3], account)
         elif act[0] == "standing":
             self.answer = c.standing(act[2], act[3])
-        return act[1]
+        return i
 
     def snapshot(self, c) -> object:
         st = c.state
-        return ({s: set(v) for s, v in st.vouches.items()}, dict(st.fc_holds))
+        return (set(st.vouched), {a: set(v) for a, v in st.invited.items()}, dict(st.fc_holds),
+                len(self.world.invites))
 
     def _check(self, i, c, before, synced, imported, queried) -> Optional[str]:
         # An installation may adopt an account from its own account's invite
@@ -422,20 +459,46 @@ class InviterWalk(Walk):
 
     def extra_check(self, i, c, before, extra_before, act, synced, imported) -> Optional[str]:
         w, st = self.world, c.state
-        vouches0, fc0 = extra_before
+        vouched0, invited0, fc0, n_invites = extra_before
         knew = {b.account for b in before[0]}
         for b in st.accepted:
             self.first_accepted.setdefault(b, w.now)
-        for s, bs in vouches0.items():
-            if not bs <= st.vouches.get(s, set()):
-                return f"vouches lost in {s}"
-        for s, bs in st.vouches.items():
-            for b in bs - vouches0.get(s, set()):
-                if b.account in knew:
-                    return f"vouched {b} in {s} though {b.account} was already pinned"
-                if not any(r.inviter == c.own.account and r.space == s and r.vouched
-                           and b in r.bindings for r in w.invites):
-                    return f"vouched {b} in {s} with no vouched invite record"
+        # The walk's own record of how this client first met each account.
+        for x in {b.account for b in st.accepted} - knew - {c.own.account}:
+            got = frozenset(b for b, ev in st.accepted.items() if b.account == x and ev == "first use")
+            if synced and act[0] == "invite" and act[2] == x:
+                kind = "invite"
+            elif x in self.pending[i] and w.now - self.pending[i][x] < PENDING_INVITE_TTL - EPS:
+                kind = "capture"
+            else:
+                kind = "other"
+            self.first[i][x] = (kind, got)
+        if i == 1:  # once per step, after both clients are recorded
+            for rec in w.invites[self.seen_invites:]:
+                if rec.inviter == "alice" and rec.vouched and not any(
+                        f.get(rec.account, ("", frozenset()))[0] in ("invite", "capture")
+                        and rec.bindings <= f[rec.account][1] for f in self.first):
+                    return f"vouched invite record {rec} not made at a first contact through an invite"
+            if (act[0] == "invite" and self.invite_rejected
+                    and any(r.space == act[3] and r.account == act[2] and not r.captures
+                            for r in w.invites[self.seen_invites:])):
+                return f"published an invite for {act[2]}, already a member of {act[3]}"
+            self.seen_invites = len(w.invites)
+        own = [r for r in w.invites if r.inviter == c.own.account]
+        if not vouched0 <= st.vouched:
+            return "vouches lost"
+        for b in st.vouched - vouched0:
+            if not any(r.vouched and b in r.bindings for r in own):
+                return f"vouched {b} with no published own vouched invite record"
+            if b.account in knew and not any(
+                    r.vouched and b in r.bindings for r in w.invites[n_invites:]):
+                return f"vouched {b} though {b.account} was already pinned"
+        for a, spaces in st.invited.items():
+            if not invited0.get(a, set()) <= spaces:
+                return f"admitted spaces lost for {a}"
+            for s in spaces - invited0.get(a, set()):
+                if not any(r.account == a and r.space == s and not r.captures for r in own):
+                    return f"admitted {a} to {s} with no own invite record"
         for b, (credited, _ck) in st.fc_holds.items():
             if credited > w.now - self.first_accepted[b] + EPS:
                 return f"first-contact credit for {b} is {credited}h, more than real time"
@@ -463,11 +526,10 @@ def _standing_ref(c, b: Binding, s: str, seen: Set[Binding]) -> bool:
         return True
     if st.fc_holds.get(b, (0.0, 0.0))[0] >= REENROLL_HOLD:
         return True
-    if b in st.vouches.get(s, set()):
+    if b in st.vouched and s in st.invited.get(b.account, set()):
         return True
     signer = st.approvers.get(b)
     return signer is not None and _standing_ref(c, signer, s, seen)
-
 
 class InviterWalks(unittest.TestCase):
     def test_random_inviter_walks_keep_invariants(self):

@@ -23,14 +23,27 @@ export type TraceOp =
   | { op: "delete"; b: TraceBinding }
   | { op: "wait"; h: number }
   | { op: "skew"; who: string; h: number }
-  /** An invite record was published (inviters policy). `space` is the
-   * space URI here; fuzz traces replace it with the walk's space label. */
-  | { op: "invite"; by: TraceBinding; space: string; account: string; bindings: TraceBinding[]; vouched: boolean };
+  /** An attempt to publish an invite or capture record (inviters policy).
+   * `space` is the space URI here; fuzz traces replace it with the walk's
+   * space label and keep only what the model's replay needs. */
+  | InviteOp
+  /** A resend of the oldest saved invite (`invite` is what was resent). */
+  | { op: "flush"; by: TraceBinding; abandoned: boolean; published: boolean; invite: InviteOp };
+
+export type InviteOp = {
+  op: "invite"; by: TraceBinding; space: string; account: string; bindings: TraceBinding[];
+  vouched: boolean; pending: boolean; captures: boolean; published: boolean;
+};
 
 /** Ground truth about one published invite record. `firstMet`: the inviting
- * installation had no pin for the account before the invite; `devices` are
- * the device IDs it then vouched for. */
-export type InviteFact = { space: string; inviter: Did; device: string; account: Did; firstMet: boolean; devices: string[]; at: number; seq: number };
+ * installation had no pin for the account when it made the record; `devices`
+ * are the device IDs it vouched for; `admits`: the account was not a member
+ * of the space when it was published; `seq`: when the record was made;
+ * `captures`: the rkey of the pending record a capture completes. */
+export type InviteFact = {
+  space: string; inviter: Did; device: string; account: Did; firstMet: boolean; devices: string[]; admits: boolean;
+  pending: boolean; rkey: string; captures: string | null; at: number; seq: number;
+};
 
 /** Ground truth for the disclosure check: who really controls each device. */
 export type Provenance = {
@@ -97,12 +110,33 @@ export class World implements Network {
     return out;
   }
 
+  /** When each invite record was made, as an event sequence position. */
+  private invitesMade = new Map<string, number>();
+
+  invitePrepared(_by: Binding, rkey: string): void {
+    if (!this.invitesMade.has(rkey)) this.invitesMade.set(rkey, this.tick());
+  }
+
+  /** Called before a published record admits its account. */
   invited(e: InviteEvent): void {
     const r = e.record;
-    const devices = e.vouched.map((b) => b.device.deviceId);
-    this.provenance.invites.push({ space: e.space, inviter: e.by.account, device: e.by.device.deviceId, account: r.account, firstMet: e.firstMet, devices, at: this.t, seq: this.tick() });
-    this.trace?.push({ op: "invite", by: tb(e.by), space: e.space, account: r.account.replace("did:plc:", ""), bindings: r.bindings.map(tb), vouched: r.vouched });
-    this.note(`${label(e.by)} invited ${r.account} to ${this.host.spaceName(e.space)}${r.vouched ? `, vouching for ${r.bindings.length} device(s)` : ""}`);
+    const op: InviteOp = {
+      op: "invite", by: tb(e.by), space: e.space, account: r.account.replace("did:plc:", ""), bindings: r.bindings.map(tb),
+      vouched: r.vouched, pending: r.pending, captures: r.captures !== null, published: e.published,
+    };
+    this.trace?.push(e.stage === "attempt" ? op : { op: "flush", by: tb(e.by), abandoned: e.abandoned, published: e.published, invite: op });
+    const what = r.captures ? "captured the pending invite of" : r.pending ? "invited (pending)" : "invited";
+    if (!e.published) {
+      this.note(`${label(e.by)} ${e.abandoned ? "abandoned its invite of" : "could not publish its invite of"} ${r.account} to ${this.host.spaceName(e.space)}`);
+      return;
+    }
+    const admits = r.captures === null && !this.host.membership(e.space, r.account)?.eligible;
+    this.provenance.invites.push({
+      space: e.space, inviter: e.by.account, device: e.by.device.deviceId, account: r.account, firstMet: e.firstMet,
+      devices: e.vouched.map((b) => b.device.deviceId), admits, pending: r.pending, rkey: e.rkey, captures: r.captures,
+      at: this.t, seq: this.invitesMade.get(e.rkey) ?? this.tick(),
+    });
+    this.note(`${label(e.by)} ${what} ${r.account} to ${this.host.spaceName(e.space)}${r.vouched ? `, vouching for ${r.bindings.length} device(s)` : ""}`);
   }
 
   now(): number {

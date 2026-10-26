@@ -5,7 +5,7 @@
 
 import { verify } from "../src/protocol/crypto";
 import { invitePayload } from "../src/protocol/trust";
-import { type Invite, COL, type Policy, withoutProof } from "../src/protocol/types";
+import { type Invite, COL, type Policy, bindingId, withoutProof } from "../src/protocol/types";
 import { recordsIn } from "../src/protocol/repo";
 import { Run } from "../src/sim/scenario";
 import { scenarios } from "../src/sim/scenarios";
@@ -51,12 +51,12 @@ describe("policy flag", () => {
 });
 
 describe("invite records", () => {
-  it("are signed by the inviting device and vouch only at first contact", () => {
+  it("are signed by the inviting device, and none is made for a member", () => {
     const { w, alice, bob, space } = club("r1");
-    alice.invite(space, bob.did); // a re-invite
+    expect(alice.invite(space, bob.did)).toBe(false); // a re-invite admits nothing
     const recs = recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)
       .map(([, v]) => (v as { value: Invite }).value);
-    expect(recs.map((r) => r.vouched).sort()).toEqual([false, true]);
+    expect(recs.map((r) => [r.vouched, r.pending, r.captures])).toEqual([[true, false, null]]);
     for (const r of recs) {
       expect(r.issuer).toEqual({ account: alice.did, deviceId: alice.binding.device.deviceId });
       expect(r.bindings.map((b) => b.device.deviceId)).toEqual([bob.binding.device.deviceId]);
@@ -75,7 +75,74 @@ describe("invite records", () => {
     w.settle();
     expect([...laptop.trust.state.accepted.values()].find((a) => a.binding.account === bob.did)?.evidence).toMatch(/^invited by/);
     expect(laptop.trust.standingBasis(bob.binding, space)).toBe("vouched");
-    expect(laptop.trust.standing(bob.binding, alice.createSpace("Garden"))).toBe(false);
+    const garden = alice.createSpace("Garden");
+    expect(laptop.trust.standing(bob.binding, garden)).toBe(false);
+    // The vouch follows the account's later invites, from any own device.
+    alice.invite(garden, bob.did);
+    w.settle();
+    expect(laptop.trust.standingBasis(bob.binding, garden)).toBe("vouched");
+  });
+
+  it("are not made for an account a host console already admitted", () => {
+    const w = new World("r5", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const space = alice.createSpace("Book club");
+    w.host.setMembership(alice.did, space, bob.did, true); // no invite record
+    bob.join(space);
+    w.settle();
+    expect(alice.trust.standing(bob.binding, space)).toBe(false);
+    m.before();
+    expect(alice.invite(space, bob.did)).toBe(false);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    expect(w.provenance.invites).toEqual([]);
+    expect(alice.trust.standing(bob.binding, space)).toBe(false);
+    expect(bob.spaces.get(space)?.key).toBeFalsy();
+  });
+
+  it("inviting again while an invite is unsent resumes it", () => {
+    const w = new World("r7", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const space = alice.createSpace("Book club");
+    w.fault(alice, "reject", 2, COL.invite);
+    expect(alice.invite(space, bob.did)).toBe(false);
+    expect(alice.invite(space, bob.did)).toBe(false); // the resend fails too
+    expect(alice.inviteOutbox.length).toBe(1);
+    expect(alice.invite(space, bob.did)).toBe(true);
+    expect(alice.inviteOutbox.length).toBe(0);
+    const recs = recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)
+      .map(([, v]) => (v as { value: Invite }).value);
+    expect(recs.map((r) => r.vouched)).toEqual([true]);
+    expect(alice.trust.standingBasis(bob.binding, space)).toBe("vouched");
+  });
+
+  it("pending invites are captured only by the device that made them", () => {
+    const w = new World("r6", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const did = w.account("bob");
+    const space = alice.createSpace("Book club");
+    expect(alice.invite(space, did)).toBe(true); // pending: Bob has no devices
+    const tablet = w.install(alice.did, "tablet", { link: alice });
+    tablet.join(space);
+    w.setOnline(alice, false);
+    m.before();
+    const bob = w.install(did, "phone");
+    bob.join(space);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    expect(tablet.trust.isAccepted(bob.binding)).toBe(true);
+    expect(tablet.trust.standing(bob.binding, space)).toBe(false); // the tablet only holds
+    expect(bob.spaces.get(space)?.key).toBeFalsy();
+    m.before();
+    w.setOnline(alice, true);
+    expect(m.after()).toEqual([]);
+    expect(alice.trust.standingBasis(bob.binding, space)).toBe("vouched");
+    expect(bob.spaces.get(space)?.keyFrom).toMatch(/^did:plc:alice\/.*phone|^did:plc:alice/);
+    expect(tablet.trust.standing(bob.binding, space)).toBe(false); // it pinned Bob first
   });
 
   it("do not end a hold already running on an installation that pins the account", () => {
@@ -107,7 +174,7 @@ describe("invite records", () => {
     m.before();
     alice.importState(fresh.exportState());
     expect(m.after().filter((v) => /vouch/.test(v))).toEqual([]);
-    expect(alice.trust.state.vouches.get(garden)?.size ?? 0).toBe(0);
+    expect(alice.trust.state.vouched.has(bindingId(attacker.binding))).toBe(false);
     expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
   });
 
@@ -177,7 +244,7 @@ describe("goal check under inviters", () => {
     m.before();
     dave.join(space);
     w.settle();
-    expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* with no vouch there/);
+    expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* without a vouch admitted there/);
   });
 
   it("flags an inviter that first met the account before the invite", () => {
