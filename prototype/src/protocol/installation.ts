@@ -43,7 +43,7 @@ export interface Network {
   /** Spaces in which `did`'s own PDS holds a repo for it. */
   accountSpaces(did: Did): string[];
   /** Ground truth for the checks: an invite record was signed and saved. */
-  invitePrepared?(by: Binding, rkey: string): void;
+  invitePrepared?(by: Binding, rkey: string, record: Invite, firstMet: boolean, vouched: Binding[]): void;
   /** Ground truth for the checks: an attempt to publish an invite record. */
   invited?(e: InviteEvent): void;
 }
@@ -280,17 +280,29 @@ export class Installation {
       return !this.inviteOutbox.includes(unsent);
     }
     const entry = this.prepareInvite(space, account);
-    this.inviteOutbox.push(entry);
-    this.flushInvites(entry);
+    this.enqueueInvite(entry);
     return !this.inviteOutbox.includes(entry);
+  }
+
+  /** Save a new record: it goes out at once only if no older record is
+   * unsent, and otherwise waits its turn. */
+  private enqueueInvite(entry: OutboxInvite): void {
+    const queued = this.inviteOutbox.length > 0;
+    this.inviteOutbox.push(entry);
+    if (queued) this.reportInvite(entry, "attempt", false);
+    else this.flushInvites(entry);
+  }
+
+  private reportInvite(e: OutboxInvite, stage: "attempt" | "flush", published: boolean, abandoned = false): void {
+    this.net.invited?.({ by: this.binding, space: e.space, record: e.record, rkey: e.rkey, firstMet: e.firstMet, vouched: e.vouch, stage, published, abandoned });
   }
 
   /** Invites saved but not yet published, oldest first. */
   inviteOutbox: OutboxInvite[] = [];
 
   /** proposal-inviters.md#invite-records: sync the account's repo, pin it on
-   * first use if this installation has no pin for it, decide whether the
-   * invite vouches, and sign the record, once. An account with no devices
+   * first use if this installation has no pin for it, decide what the invite
+   * vouches for and authorizes, save the vouch, and sign the record, once. An account with no devices
    * that this installation never pinned gets a pending invite. */
   private prepareInvite(space: string, account: Did): OutboxInvite {
     const knew = this.trust.knew(account);
@@ -303,9 +315,11 @@ export class Installation {
     const pending = !knew && !!view && view.present.size === 0;
     const met = knew ? [] : live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
     // It authorizes what it first met now and the listed bindings already
-    // vouched here, nothing else: a later vouch never reaches back.
-    const authorizes = [...met, ...live.filter((b) => !met.includes(b) && st.vouched.has(bindingId(b)))];
+    // vouched here or linked from one that is, nothing else: a later vouch
+    // never reaches back.
+    const authorizes = [...met, ...live.filter((b) => !met.includes(b) && this.trust.descendsFromVouched(b))];
     const entry = this.signInvite(space, account, live, authorizes, met, pending, null, !knew);
+    for (const b of met) this.trust.vouch(space, b); // the vouch is saved with the prepared record
     if (pending) this.trust.addPending(entry.rkey, space, account, this.binding.device.deviceId);
     return entry;
   }
@@ -317,16 +331,14 @@ export class Installation {
     };
     const record: Invite = { ...unsigned, proof: sign(this.signKey.secretKey, invitePayload(unsigned)) };
     const rkey = ref(asCbor(record));
-    this.net.invitePrepared?.(this.binding, rkey);
+    this.net.invitePrepared?.(this.binding, rkey, record, firstMet, met);
     return { space, account, record, rkey, vouch: met, firstMet };
   }
 
   /** Publish saved invites in order, resending their exact bytes, and stop
    * at the first that fails. `current` is an invite being made now. */
   private flushInvites(current?: OutboxInvite): void {
-    const report = (e: OutboxInvite, published: boolean, abandoned = false) =>
-      this.net.invited?.({ by: this.binding, space: e.space, record: e.record, rkey: e.rkey, firstMet: e.firstMet, vouched: e.vouch,
-        stage: e === current ? "attempt" : "flush", published, abandoned });
+    const report = (e: OutboxInvite, published: boolean, abandoned = false) => this.reportInvite(e, e === current ? "attempt" : "flush", published, abandoned);
     while (this.inviteOutbox.length) {
       const e = this.inviteOutbox[0];
       const { record, rkey, vouch } = e;
@@ -337,6 +349,11 @@ export class Installation {
         // longer admit it, so it is abandoned unsent.
         this.inviteOutbox.shift();
         report(e, false, true);
+        if (record.pending) {
+          // Abandoning a pending invite ends it, with any capture queued for it.
+          this.trust.state.pending.delete(rkey);
+          this.inviteOutbox = this.inviteOutbox.filter((x) => x.record.captures !== rkey);
+        }
         continue;
       }
       if (!this.write([{ action: "create", collection: COL.invite, rkey, value: { $type: COL.invite, value: asCbor(record) } }], e.space) && !landed()) {
@@ -345,8 +362,9 @@ export class Installation {
       }
       this.inviteOutbox.shift();
       report(e, true);
-      // Admission, the vouch, and authorized standing start once the record
-      // is published.
+      // Admission and authorized standing start once the record is
+      // published. (The vouch was saved when the record was made; repeating
+      // it is harmless.)
       for (const b of vouch) this.trust.vouch(e.space, b);
       for (const b of record.authorizes) this.trust.authorize(e.space, b);
       this.trust.admit(e.account, e.space);
@@ -369,8 +387,9 @@ export class Installation {
       const met = live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
       if (!met.length) continue;
       const entry = this.signInvite(p.space, p.account, live, met, met, false, rkey, true);
-      this.inviteOutbox.push(entry);
-      this.flushInvites(entry);
+      for (const b of met) this.trust.vouch(p.space, b);
+      // Queued behind its pending invite if that is still unsent.
+      this.enqueueInvite(entry);
     }
   }
 

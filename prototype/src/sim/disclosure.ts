@@ -10,8 +10,8 @@
 //   Under the inviters policy (proposal-inviters.md) only one first contact
 //   excuses a grant: an invite or capture record of I's account for this
 //   space authorizes X or an approval ancestor D of X; D was first met
-//   through a record of I's account (an invite or capture) made when the
-//   inviting installation first met A; and I had no pin for A before that
+//   through a record of I's account (an invite or capture, published or
+//   not) made when the inviting installation first met A; and I had no pin for A before that
 //   record was made. Every other first contact must wait out a hold.
 // - Elapsed hold: X appeared at least REENROLL_HOLD ago (goal 3).
 // - Compromised signer: a compromised key approved X while A still had a
@@ -111,27 +111,14 @@ export class DisclosureCheck {
   }
 
   /** A record of I's account for `space` authorizes X or an approval
-   * ancestor of X, that device was first met through a record of I's
-   * account, and I first knew the account no earlier than that record was
-   * made (an installation that already pinned it takes no vouch). */
+   * ancestor D of X; D or an approval ancestor of D was first met through a
+   * record of I's account; and I first knew the account no earlier than that
+   * record was made (an installation that already pinned it takes no vouch). */
   private vouched(i: Installation, space: string, account: string, x: string, knew: number): boolean {
     const facts = this.world.provenance.invites.filter((v) => v.inviter === i.did && v.account === account);
-    return [...this.ancestors(x)].some((d) => facts.some((v) => v.space === space && v.authorizes.includes(d))
-      && facts.some((v) => v.firstMet && v.devices.includes(d) && knew > v.seq));
-  }
-
-  /** X and every device whose approval chain reaches it. */
-  private ancestors(x: string): Set<string> {
-    const out = new Set([x]);
-    for (let added = true; added; ) {
-      added = false;
-      for (const a of this.world.provenance.approvals)
-        if (out.has(a.target) && !out.has(a.signer)) {
-          out.add(a.signer);
-          added = true;
-        }
-    }
-    return out;
+    const made = this.world.provenance.prepared.filter((v) => v.inviter === i.did && v.account === account);
+    return [...approvalAncestors(this.world, x)].some((d) => facts.some((v) => v.space === space && v.authorizes.includes(d))
+      && [...approvalAncestors(this.world, d)].some((m) => made.some((v) => v.firstMet && v.devices.includes(m) && knew > v.seq)));
   }
 
   private liveAt(i: Installation, account: string, deviceId: string): boolean {
@@ -139,4 +126,18 @@ export class DisclosureCheck {
       .find((x) => x.account === account && x.device.deviceId === deviceId);
     return !!b && i.trust.isAccepted(b) && !i.trust.state.revoked.has(bindingId(b));
   }
+}
+
+/** Device X and every device whose approval chain reaches it, by ground truth. */
+export function approvalAncestors(world: World, x: string): Set<string> {
+  const out = new Set([x]);
+  for (let added = true; added; ) {
+    added = false;
+    for (const a of world.provenance.approvals)
+      if (out.has(a.target) && !out.has(a.signer)) {
+        out.add(a.signer);
+        added = true;
+      }
+  }
+  return out;
 }

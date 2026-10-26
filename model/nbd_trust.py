@@ -719,7 +719,7 @@ class InviterClient(SpecClient):
         live = {b for b in st.accepted if b.account == account and self._usable(b)}
         st.vouched |= met  # decided now, durably, with the record
         rec = InviteRecord(self.own.account, space, account, frozenset(live),
-                           frozenset(live & st.vouched), pending)
+                           frozenset(b for b in live if self._vouched_line(b)), pending)
         self._prepare(rec)
         return rec
 
@@ -730,8 +730,10 @@ class InviterClient(SpecClient):
         dropped unsent."""
         st = self.state
         for rec in list(st.outbox):
+            if rec not in st.outbox:
+                continue  # dropped with an abandoned invite
             if not rec.captures and self.world.eligible(rec.account, rec.space):
-                st.outbox.remove(rec)
+                self._abandon(rec)
             elif self.world.publish_invite(rec):
                 st.outbox.remove(rec)
                 self._published(rec)
@@ -774,7 +776,7 @@ class InviterClient(SpecClient):
                 if b.account not in knew:
                     st.vouched.add(b)
             for sp, bs in other.authorized.items():
-                st.authorized.setdefault(sp, set()).update(b for b in bs if b in st.vouched)
+                st.authorized.setdefault(sp, set()).update(b for b in bs if self._vouched_line(b))
             for t, s in other.approvers.items():
                 st.approvers.setdefault(t, s)
         super().import_state(other)
@@ -782,11 +784,34 @@ class InviterClient(SpecClient):
     # ---- rules -----------------------------------------------------------
 
     def _prepare(self, rec: InviteRecord) -> None:
-        """Save a signed record durably, then try to publish it at once."""
+        """Save a signed record durably, then publish it at once unless older
+        records are still unsent, which go first."""
+        queued = bool(self.state.outbox)
         self.state.outbox.append(rec)
-        if self.world.publish_invite(rec):
+        if not queued and self.world.publish_invite(rec):
             self.state.outbox.remove(rec)
             self._published(rec)
+
+    def _abandon(self, rec: InviteRecord) -> None:
+        """Drop an unsent invite that would no longer admit. A pending one
+        stops being pending, and any capture queued for it goes with it."""
+        st = self.state
+        st.outbox.remove(rec)
+        if rec.pending and st.pending.get(rec.account, ("",))[0] == rec.space:
+            del st.pending[rec.account]
+        st.outbox = [r for r in st.outbox
+                     if not (r.captures and r.account == rec.account and r.space == rec.space)]
+
+    def _vouched_line(self, b: Binding) -> bool:
+        """Whether b is vouched, or was accepted by approval, through any
+        chain, from a vouched binding."""
+        st, seen = self.state, set()
+        while b is not None and b not in seen:
+            if b in st.vouched:
+                return True
+            seen.add(b)
+            b = st.approvers.get(b)
+        return False
 
     def _published(self, rec: InviteRecord) -> None:
         self.state.authorized.setdefault(rec.space, set()).update(rec.authorizes)
@@ -844,7 +869,7 @@ class InviterClient(SpecClient):
         this installation has never pinned, a record that authorizes devices
         pins them as vouched, like a pin copied by pairing; for one it has,
         it takes a record's authorization only of bindings it already holds
-        as vouched."""
+        as vouched, or linked from one."""
         st = self.state
         for rec in self.world.invites:
             if rec.inviter != self.own.account or not rec.authorizes:
@@ -856,7 +881,8 @@ class InviterClient(SpecClient):
                         st.revoked.add(b)
                     self._start_fc_hold(b)
                 st.vouched |= rec.authorizes
-            st.authorized.setdefault(rec.space, set()).update(rec.authorizes & st.vouched)
+            st.authorized.setdefault(rec.space, set()).update(
+                b for b in rec.authorizes if self._vouched_line(b))
 
     def _tick(self) -> None:
         """Credit elapsed local time to re-enrollment holds, to the

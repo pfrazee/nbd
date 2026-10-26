@@ -7,7 +7,7 @@ import { type KeyPair, Rng, sign } from "../protocol/crypto";
 import { Installation, type InstallationState, type InviteEvent, type Network } from "../protocol/installation";
 import type { RecordPath, Snapshot, WriteOp } from "../protocol/repo";
 import { approvalPayload } from "../protocol/trust";
-import { type Approval, type Binding, COL, type Did, type Policy, asCbor, label } from "../protocol/types";
+import { type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, label } from "../protocol/types";
 import { Adversary } from "./adversary";
 import { Host } from "./host";
 import { Pds, type Session } from "./pds";
@@ -57,6 +57,9 @@ export type Provenance = {
    * attacker does not control, so it was not a full reset. */
   approvals: { signer: string; target: string; at: number; compromised: boolean; standing: boolean }[];
   invites: InviteFact[];
+  /** Every invite or capture record made, published or not: who made it,
+   * whether it first met the account, and the device IDs it vouched for. */
+  prepared: { inviter: Did; device: string; account: Did; space: string; rkey: string; firstMet: boolean; devices: string[]; seq: number }[];
 };
 
 const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
@@ -79,7 +82,7 @@ export class World implements Network {
   /** Write faults per installation: "reject" fails before applying; "lost-ack"
    * applies the write, then fails as a lost acknowledgement would. */
   readonly faults = new Map<string, { mode: "reject" | "lost-ack"; collection?: string; count: number }>();
-  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [], invites: [] };
+  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [], invites: [], prepared: [] };
   /** Orders events that happen at the same world time. */
   private seq = 0;
 
@@ -115,8 +118,14 @@ export class World implements Network {
   /** When each invite record was made, as an event sequence position. */
   private invitesMade = new Map<string, number>();
 
-  invitePrepared(_by: Binding, rkey: string): void {
-    if (!this.invitesMade.has(rkey)) this.invitesMade.set(rkey, this.tick());
+  invitePrepared(by: Binding, rkey: string, record: Invite, firstMet: boolean, vouched: Binding[]): void {
+    if (this.invitesMade.has(rkey)) return;
+    const seq = this.tick();
+    this.invitesMade.set(rkey, seq);
+    this.provenance.prepared.push({
+      inviter: by.account, device: by.device.deviceId, account: record.account, space: record.space, rkey, firstMet,
+      devices: vouched.map((b) => b.device.deviceId), seq,
+    });
   }
 
   /** Called before a published record admits its account. */

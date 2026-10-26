@@ -10,8 +10,8 @@
 // meeting the account, reaching only installations that had not pinned it
 // before; an admitted space only from an invite record that admitted the
 // account; a capture only from the device that made the pending invite;
-// every binding a published record authorizes was first met through it or
-// vouched for its maker when it was made; each authorization an installation
+// every binding a published record authorizes was first met through it, or
+// vouched for its maker when it was made, or linked from one that was; each authorization an installation
 // holds traces to a published own record for that space naming the binding,
 // which it holds as vouched; and new standing is explained by such an
 // authorization, an approval from a binding with standing there, or an
@@ -21,7 +21,7 @@ import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
 import { type Binding, bindingId, label } from "../protocol/types";
 import type { World } from "../world/world";
-import { DisclosureCheck } from "./disclosure";
+import { DisclosureCheck, approvalAncestors } from "./disclosure";
 
 const EPS = 1e-9;
 
@@ -114,14 +114,17 @@ export class InvariantMonitor {
       if (!p || p.device !== f.device) out.push(`${f.inviter}/${f.device.slice(0, 6)} captured a pending invite ${p ? `made by ${p.device.slice(0, 6)}` : "it never published"}`);
     }
     // A record authorizes only devices first met through it, or vouched for
-    // its maker when it was made: first met through an earlier published
-    // record of the account that its maker knew of.
+    // its maker when it was made (first met through an earlier record of the
+    // account, published or not, that its maker knew of), or linked by
+    // approval from such a device.
     for (const f of facts.slice(this.factsSeen)) {
       const maker = [...this.world.installations.values()].find((i) => i.binding.device.deviceId === f.device);
       const knew = (maker && this.knownSince.get(maker.id)?.get(f.account)) ?? Infinity;
       for (const d of f.authorizes) {
         if (f.devices.includes(d)) continue;
-        if (!facts.some((g) => g.inviter === f.inviter && g.account === f.account && g.firstMet && g.devices.includes(d) && g.publishedSeq < f.seq && knew > g.seq))
+        const line = approvalAncestors(this.world, d);
+        if (!this.world.provenance.prepared.some((g) => g.inviter === f.inviter && g.account === f.account && g.firstMet
+          && g.devices.some((m) => line.has(m)) && g.seq < f.seq && knew > g.seq))
           out.push(`${f.inviter}/${f.device.slice(0, 6)}'s invite to ${f.space} authorizes ${d.slice(0, 6)}, which was not vouched for it`);
       }
     }
@@ -268,7 +271,7 @@ export class InvariantMonitor {
         continue;
       }
       const knew = since?.get(b.account) ?? Infinity;
-      if (!w.provenance.invites.some((v) => v.firstMet && v.inviter === i.did && v.account === b.account && v.devices.includes(b.device.deviceId) && knew > v.seq))
+      if (!w.provenance.prepared.some((v) => v.firstMet && v.inviter === i.did && v.account === b.account && v.devices.includes(b.device.deviceId) && knew > v.seq))
         out.push(`vouched for ${label(b)} with no invite that first met ${b.account} before this installation knew it`);
     }
     // An admitted space comes only from a published record that admitted the account.
@@ -279,12 +282,13 @@ export class InvariantMonitor {
           out.push(`counts ${account} as admitted to ${space} with no invite record that admitted it`);
       }
     // An authorization traces to a published own record for that space
-    // naming the binding, which this installation holds as vouched.
+    // naming the binding, which this installation holds as vouched or as
+    // linked from a vouched binding.
     for (const [space, ids] of st.authorized)
       for (const id of ids) {
         if (before?.authorized.has(`${space}|${id}`)) continue;
         const b = st.accepted.get(id)?.binding;
-        if (!b || !st.vouched.has(id)) out.push(`authorized ${b ? label(b) : id.slice(0, 8)} in ${space} without holding it as vouched`);
+        if (!b || !this.vouchedLine(i, id)) out.push(`authorized ${b ? label(b) : id.slice(0, 8)} in ${space} without holding it, or a device that linked it, as vouched`);
         else if (!w.provenance.invites.some((v) => v.inviter === i.did && v.space === space && v.authorizes.includes(b.device.deviceId)))
           out.push(`authorized ${label(b)} in ${space} with no record of its account authorizing it there`);
       }
@@ -296,6 +300,21 @@ export class InvariantMonitor {
           out.push(`standing for ${label(a.binding)} in ${space} without an authorizing record there, an approval with standing, or an elapsed hold`);
       }
     return out;
+  }
+
+  /** `id` is vouched here, or its verified approval chain reaches a vouched binding. */
+  private vouchedLine(i: Installation, id: string): boolean {
+    const st = i.trust.state;
+    const seen = new Set<string>();
+    const walk = (x: string): boolean => {
+      if (seen.has(x)) return false;
+      seen.add(x);
+      if (st.vouched.has(x)) return true;
+      const b = st.accepted.get(x)?.binding;
+      const aps = b ? st.views.get(b.account)?.approvals ?? [] : [];
+      return aps.some((ap) => bindingId(ap.target) === x && st.accepted.has(bindingId(ap.signer)) && walk(bindingId(ap.signer)));
+    };
+    return walk(id);
   }
 
   /** Standing, restated: own, re-enrolled, an elapsed first-contact hold,

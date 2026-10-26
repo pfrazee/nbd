@@ -190,6 +190,69 @@ describe("invite records", () => {
   });
 });
 
+describe("durable invites (Astra's fourth review)", () => {
+  it("an abandoned pending invite captures nothing", () => {
+    const w = new World("d1", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const did = w.account("bob");
+    const space = alice.createSpace("Book club");
+    w.fault(alice, "reject", 1, COL.invite);
+    expect(alice.invite(space, did)).toBe(false); // pending, unsent
+    w.host.setMembership(alice.did, space, did, true); // a host console admits Bob
+    m.before();
+    w.settle(); // the retry finds Bob a member and abandons the invite
+    expect(alice.inviteOutbox.length).toBe(0);
+    expect(alice.trust.state.pending.size).toBe(0);
+    const bob = w.install(did, "phone");
+    bob.join(space);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    expect(w.provenance.invites.some((f) => f.captures)).toBe(false);
+    expect(alice.trust.standing(bob.binding, space)).toBe(false);
+    expect(bob.spaces.get(space)?.key).toBeFalsy();
+  });
+
+  it("a second invite prepared before the first is published authorizes what the first vouched for", () => {
+    const w = new World("d2", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const club = alice.createSpace("Book club");
+    const garden = alice.createSpace("Garden");
+    w.fault(alice, "reject", 1, COL.invite);
+    m.before();
+    expect(alice.invite(club, bob.did)).toBe(false);
+    expect(alice.invite(garden, bob.did)).toBe(false); // queued behind the first, unsent
+    expect(alice.inviteOutbox.map((e) => e.record.authorizes.length)).toEqual([1, 1]);
+    w.settle();
+    bob.join(club);
+    bob.join(garden);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    for (const s of [club, garden]) {
+      expect(alice.trust.standingBasis(bob.binding, s)).toBe("authorized");
+      expect(bob.spaces.get(s)?.keyFrom).toMatch(/^did:plc:alice/);
+    }
+  });
+
+  it("a replacement phone is authorized in the next space its owner is invited to", () => {
+    const { w, m, alice, bob, space } = club("d3");
+    const phone2 = w.install(bob.did, "new-phone", { link: bob });
+    w.removeDevice(bob);
+    const garden = alice.createSpace("Garden");
+    m.before();
+    alice.invite(garden, bob.did);
+    phone2.join(garden);
+    w.settle();
+    expect(m.after()).toEqual([]);
+    expect(w.provenance.invites.at(-1)?.authorizes).toEqual([phone2.binding.device.deviceId]);
+    expect(alice.trust.standingBasis(phone2.binding, garden)).toBe("authorized");
+    expect(phone2.spaces.get(garden)?.keyFrom).toMatch(/^did:plc:alice/);
+    expect(alice.trust.standing(phone2.binding, space)).toBe(true); // linked by the authorized phone
+  });
+});
+
 describe("first-contact holds", () => {
   it("a device linked while its signer had standing keeps it after the signer is removed", () => {
     const { w, alice, bob, space } = club("h1");

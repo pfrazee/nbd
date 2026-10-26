@@ -478,9 +478,16 @@ class InviterWalk(Walk):
             self.first[i][x] = (kind, got)
         if i == 1:  # once per step, after both clients are recorded
             for rec in w.invites[self.seen_invites:]:
-                if rec.inviter == "alice" and rec.authorizes and not any(
-                        f.get(rec.account, ("", frozenset()))[0] in ("invite", "capture")
-                        and rec.authorizes <= f[rec.account][1] for f in self.first):
+                firsts = set()
+                for f in self.first:
+                    kind, got = f.get(rec.account, ("", frozenset()))
+                    if kind in ("invite", "capture"):
+                        firsts |= got
+                approvers = {}
+                for cl in self.clients:
+                    approvers.update(cl.state.approvers)
+                if rec.inviter == "alice" and not all(
+                        _approval_ancestors(approvers, b) & firsts for b in rec.authorizes):
                     return f"invite record {rec} authorizes devices not first met through an invite"
             if (act[0] == "invite" and self.invite_rejected
                     and any(r.space == act[3] and r.account == act[2] and not r.captures
@@ -504,7 +511,7 @@ class InviterWalk(Walk):
             for b in bs - authorized0.get(sp, set()):
                 if not any(r.space == sp and b in r.authorizes for r in own):
                     return f"authorized {b} in {sp} with no own record for {sp} authorizing it"
-                if b not in st.vouched:
+                if not c._vouched_line(b):
                     return f"authorized {b} in {sp} though it is not vouched here"
         for b, (credited, _ck) in st.fc_holds.items():
             if credited > w.now - self.first_accepted[b] + EPS:
@@ -521,6 +528,16 @@ class InviterWalk(Walk):
             if self.answer != want:
                 return f"standing({b}, {s}) is {self.answer}; its sources say {want}"
         return None
+
+
+def _approval_ancestors(approvers: Dict[Binding, Binding], b: Binding) -> Set[Binding]:
+    """b and the chain of signers whose approvals the clients accepted it by
+    (acceptance persists with its evidence, even if the record is deleted)."""
+    seen = set()
+    while b is not None and b not in seen:
+        seen.add(b)
+        b = approvers.get(b)
+    return seen
 
 
 def _standing_ref(c, b: Binding, s: str, seen: Set[Binding]) -> bool:

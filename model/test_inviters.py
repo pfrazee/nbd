@@ -257,18 +257,83 @@ class NoRetroactiveAuthorization(Base):
         self.assertTrue(self.alice.standing(m, GARDEN))
         self.assertFalse(self.alice.standing(m, BOOK))
 
-    def test_later_invite_authorizes_only_listed_vouched_devices(self):
-        # A device Bob links after the second invite still inherits through
-        # approval; one Alice met some other way is never authorized.
+    def test_later_invite_authorizes_vouched_devices_and_their_descendants(self):
+        # A device Bob linked from a vouched one is authorized too; one Alice
+        # met some other way never is.
         (bob,) = self.account("bob", "b0")
         self.alice.invite(BOOK, "bob")
         b1 = self.w.add_device(B("bob", "b1"))
         self.w.approve(bob, b1)
-        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob})
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob, b1})
+        self.assertTrue(self.alice.standing(b1, GARDEN))
+        (carol,) = self.account("carol", "c0")
+        self.assertTrue(self.alice.accepted(carol))
+        self.assertEqual(self.alice.invite(GARDEN, "carol").authorizes, set())
+
+    def test_replacement_phone_is_authorized_in_the_next_space(self):
+        # Astra's fourth review: Bob replaces his phone and removes the
+        # original before Alice's hold on it ends, then Alice invites him on.
+        (b0,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.alice.standing(b1, BOOK))
+        self.w.delete_device(b0)
+        self.w.now += 10
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {b1})
         self.assertTrue(self.alice.standing(b1, GARDEN))
 
 
 class DurableInvites(Base):
+    def test_abandoned_pending_invite_cannot_capture(self):
+        # Astra's fourth review: the pending invite never publishes, a host
+        # console admits Bob, and the retry drops the stale invite.
+        self.w.fail_writes = True
+        self.assertTrue(self.alice.invite(BOOK, "bob").pending)
+        self.w.admit(BOOK, "bob")
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.assertEqual(self.alice.state.outbox, [])
+        bob = self.w.add_device(B("bob", "b0"))
+        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.assertFalse(any(r.captures for r in self.w.invites))
+
+    def test_queued_capture_is_dropped_with_its_abandoned_invite(self):
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        bob = self.w.add_device(B("bob", "b0"))
+        self.alice.accepted(bob)  # first contact: a capture queues behind the invite
+        self.assertEqual(len(self.alice.state.outbox), 2)
+        self.w.admit(BOOK, "bob")
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.assertEqual(self.alice.state.outbox, [])
+        self.assertEqual(self.w.invites, [])
+        self.assertFalse(self.alice.standing(bob, BOOK))
+
+    def test_capture_waits_for_its_pending_invite(self):
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        self.w.fail_writes = False
+        bob = self.w.add_device(B("bob", "b0"))
+        self.alice.state.outbox and self.alice._first_use("bob")  # capture prepared, invite unsent
+        self.assertEqual(self.w.invites, [])  # the capture does not jump the queue
+        self.alice.sync()
+        self.assertEqual([r.captures for r in self.w.invites], [False, True])
+        self.assertTrue(self.alice.standing(bob, BOOK))
+
+    def test_second_invite_before_the_first_publishes_is_authorized(self):
+        # Astra's fourth review: the vouch is saved when the first record is
+        # prepared, not when it publishes.
+        (bob,) = self.account("bob", "b0")
+        self.w.fail_writes = True
+        self.alice.invite(BOOK, "bob")
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob})
+        self.w.fail_writes = False
+        self.alice.sync()
+        self.assertTrue(self.alice.standing(bob, BOOK))
+        self.assertTrue(self.alice.standing(bob, GARDEN))
+
     def test_failed_write_retries_the_vouched_record(self):
         # Astra: pinning before a failed write must not turn the retry into
         # an unvouched invite.

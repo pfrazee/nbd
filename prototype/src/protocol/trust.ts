@@ -441,6 +441,19 @@ export class Trust {
     if (!this.state.vouched.has(bindingId(b))) this.state.vouched.set(bindingId(b), space);
   }
 
+  /** Whether `b` is vouched here, or was accepted by approval, directly or
+   * through a chain, from a binding that is (revoked or not): what a new
+   * invite may authorize, so a replacement phone stays authorized. */
+  descendsFromVouched(b: Binding): boolean {
+    const st = this.state;
+    const seen = new Set<string>();
+    for (let id: string | undefined = bindingId(b); id && !seen.has(id); id = st.approvers.get(id)) {
+      if (st.vouched.has(id)) return true;
+      seen.add(id);
+    }
+    return false;
+  }
+
   /** A published record of this installation's own account authorizes `b`
    * in `space`. */
   authorize(space: string, b: Binding): void {

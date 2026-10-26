@@ -72,11 +72,21 @@ MUTATIONS = {
         "        if b in st.authorized.get(space, set()):",
         "        if b in st.vouched and any(r.inviter == self.own.account and r.space == space\n                                   and r.account == b.account for r in self.world.invites):"),
     "invites authorize unvouched devices": (
-        "frozenset(live & st.vouched), pending)", "frozenset(live), pending)"),
+        "frozenset(b for b in live if self._vouched_line(b)), pending)", "frozenset(live), pending)"),
     "captures authorize nothing": (
         "frozenset(met), frozenset(met),\n", "frozenset(met), frozenset(),\n"),
+    "abandoning keeps the pending invite": (
+        "        if rec.pending and st.pending.get(rec.account, (\"\",))[0] == rec.space:\n            del st.pending[rec.account]\n",
+        ""),
+    "abandoning keeps queued captures": (
+        "        st.outbox = [r for r in st.outbox\n                     if not (r.captures and r.account == rec.account and r.space == rec.space)]",
+        "        pass"),
+    "records jump the queue": (
+        "if not queued and self.world.publish_invite(rec):", "if self.world.publish_invite(rec):"),
+    "authorizes ignores descendants": (
+        "            seen.add(b)\n            b = st.approvers.get(b)", "            seen.add(b)\n            b = None"),
     "pinned installations adopt any authorization": (
-        "update(rec.authorizes & st.vouched)", "update(rec.authorizes)"),
+        "                b for b in rec.authorizes if self._vouched_line(b))", "                b for b in rec.authorizes)"),
     "known account vouched": (
         "        if not knew:\n            met =", "        if True:\n            met ="),
     "imported vouch ends a hold": (
@@ -91,12 +101,12 @@ MUTATIONS = {
         "            if rec.space == space and rec.account == account and not rec.captures:\n                return rec",
         "            if False:\n                return rec"),
     "standing before publication": (
-        "        self.state.outbox.append(rec)\n        if self.world.publish_invite(rec):",
-        "        self.state.outbox.append(rec)\n        self._published(rec)\n        if self.world.publish_invite(rec):"),
+        "        self.state.outbox.append(rec)\n        if not queued",
+        "        self.state.outbox.append(rec)\n        self._published(rec)\n        if not queued"),
 
     "stale records still published": (
-        "            if not rec.captures and self.world.eligible(rec.account, rec.space):\n                st.outbox.remove(rec)\n            elif",
-        "            if False:\n                st.outbox.remove(rec)\n            elif"),
+        "            if not rec.captures and self.world.eligible(rec.account, rec.space):\n                self._abandon(rec)\n            elif",
+        "            if False:\n                self._abandon(rec)\n            elif"),
     "no pending invites": (
         "if not met and not self.world.present_devices(account):", "if False:"),
     "pending invites never expire": ("            if credited >= PENDING_INVITE_TTL:", "            if False:"),
