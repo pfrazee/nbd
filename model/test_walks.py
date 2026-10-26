@@ -377,14 +377,17 @@ class InviterWalk(Walk):
     Extra invariants, checked against the walk's own record of each client's
     first contacts rather than client state:
 
-    - A published vouched invite record names only bindings some own client
+    - A published invite record authorizes only bindings some own client
       accepted on first use in the step it first met the account, and that
       step was its invite of the account, or its first contact within
       PENDING_INVITE_TTL of its pending invite of a device-less account.
-    - A client's vouched bindings and admitted spaces come only from
-      published own invite records, and a vouch reaches a client that
-      already knew the account only by its own publication.
-    - Vouches and admitted spaces are never lost. No invite record is
+    - A client's vouched bindings come only from its own first contact
+      through an invite or capture, or from a published own record that
+      authorizes them, adopted while it had never pinned the account.
+    - A binding is authorized in a space only if a published own record for
+      that space authorizes it, and only if the client holds it as vouched:
+      a later vouch never extends an earlier record (Astra's third review).
+    - Vouches and authorizations are never lost. No invite record is
       published for an account already a member of the space.
     - First-contact credit never exceeds real time since any installation
       first accepted the binding, never decreases, and starts at zero unless
@@ -445,7 +448,7 @@ class InviterWalk(Walk):
 
     def snapshot(self, c) -> object:
         st = c.state
-        return (set(st.vouched), {a: set(v) for a, v in st.invited.items()}, dict(st.fc_holds),
+        return (set(st.vouched), {sp: set(v) for sp, v in st.authorized.items()}, dict(st.fc_holds),
                 len(self.world.invites))
 
     def _check(self, i, c, before, synced, imported, queried) -> Optional[str]:
@@ -459,7 +462,7 @@ class InviterWalk(Walk):
 
     def extra_check(self, i, c, before, extra_before, act, synced, imported) -> Optional[str]:
         w, st = self.world, c.state
-        vouched0, invited0, fc0, n_invites = extra_before
+        vouched0, authorized0, fc0, n_invites = extra_before
         knew = {b.account for b in before[0]}
         for b in st.accepted:
             self.first_accepted.setdefault(b, w.now)
@@ -475,10 +478,10 @@ class InviterWalk(Walk):
             self.first[i][x] = (kind, got)
         if i == 1:  # once per step, after both clients are recorded
             for rec in w.invites[self.seen_invites:]:
-                if rec.inviter == "alice" and rec.vouched and not any(
+                if rec.inviter == "alice" and rec.authorizes and not any(
                         f.get(rec.account, ("", frozenset()))[0] in ("invite", "capture")
-                        and rec.bindings <= f[rec.account][1] for f in self.first):
-                    return f"vouched invite record {rec} not made at a first contact through an invite"
+                        and rec.authorizes <= f[rec.account][1] for f in self.first):
+                    return f"invite record {rec} authorizes devices not first met through an invite"
             if (act[0] == "invite" and self.invite_rejected
                     and any(r.space == act[3] and r.account == act[2] and not r.captures
                             for r in w.invites[self.seen_invites:])):
@@ -488,17 +491,21 @@ class InviterWalk(Walk):
         if not vouched0 <= st.vouched:
             return "vouches lost"
         for b in st.vouched - vouched0:
-            if not any(r.vouched and b in r.bindings for r in own):
-                return f"vouched {b} with no published own vouched invite record"
-            if b.account in knew and not any(
-                    r.vouched and b in r.bindings for r in w.invites[n_invites:]):
-                return f"vouched {b} though {b.account} was already pinned"
-        for a, spaces in st.invited.items():
-            if not invited0.get(a, set()) <= spaces:
-                return f"admitted spaces lost for {a}"
-            for s in spaces - invited0.get(a, set()):
-                if not any(r.account == a and r.space == s and not r.captures for r in own):
-                    return f"admitted {a} to {s} with no own invite record"
+            kind, firsts = self.first[i].get(b.account, ("", frozenset()))
+            mine = b.account not in knew and kind in ("invite", "capture") and b in firsts
+            adopted = b.account not in knew and (
+                any(b in r.authorizes for r in own)
+                or (imported is not None and b in imported.vouched))
+            if not (mine or adopted):
+                return f"vouched {b} neither first met through an invite nor adopted unpinned"
+        for sp, bs in st.authorized.items():
+            if not authorized0.get(sp, set()) <= bs:
+                return f"authorizations lost in {sp}"
+            for b in bs - authorized0.get(sp, set()):
+                if not any(r.space == sp and b in r.authorizes for r in own):
+                    return f"authorized {b} in {sp} with no own record for {sp} authorizing it"
+                if b not in st.vouched:
+                    return f"authorized {b} in {sp} though it is not vouched here"
         for b, (credited, _ck) in st.fc_holds.items():
             if credited > w.now - self.first_accepted[b] + EPS:
                 return f"first-contact credit for {b} is {credited}h, more than real time"
@@ -526,7 +533,7 @@ def _standing_ref(c, b: Binding, s: str, seen: Set[Binding]) -> bool:
         return True
     if st.fc_holds.get(b, (0.0, 0.0))[0] >= REENROLL_HOLD:
         return True
-    if b in st.vouched and s in st.invited.get(b.account, set()):
+    if b in st.authorized.get(s, set()):
         return True
     signer = st.approvers.get(b)
     return signer is not None and _standing_ref(c, signer, s, seen)

@@ -66,15 +66,25 @@ MUTATIONS = {
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),
     # InviterClient (proposal-inviters.md).
     "vouch counts in every space": (
-        "        if b in st.vouched and space in st.invited.get(b.account, set()):",
-        "        if b in st.vouched:"),
+        "        if b in st.authorized.get(space, set()):",
+        "        if any(b in v for v in st.authorized.values()):"),
+    "a later vouch extends an older invite": (
+        "        if b in st.authorized.get(space, set()):",
+        "        if b in st.vouched and any(r.inviter == self.own.account and r.space == space\n                                   and r.account == b.account for r in self.world.invites):"),
+    "invites authorize unvouched devices": (
+        "frozenset(live & st.vouched), pending)", "frozenset(live), pending)"),
+    "captures authorize nothing": (
+        "frozenset(met), frozenset(met),\n", "frozenset(met), frozenset(),\n"),
+    "pinned installations adopt any authorization": (
+        "update(rec.authorizes & st.vouched)", "update(rec.authorizes)"),
     "known account vouched": (
         "        if not knew:\n            met =", "        if True:\n            met ="),
     "imported vouch ends a hold": (
         "                if b.account not in knew:\n                    st.vouched.add(b)",
         "                if True:\n                    st.vouched.add(b)"),
     "invite record ends a hold": (
-        "if not rec.vouched or self._knew(rec.account):", "if not rec.vouched:"),
+        "            if not self._knew(rec.account):\n                for b in rec.authorizes:",
+        "            if True:\n                for b in rec.authorizes:"),
     "invite for an existing member": (
         "        if self.world.eligible(account, space):\n            return None\n", ""),
     "retry re-derives the record": (
@@ -91,8 +101,8 @@ MUTATIONS = {
         "if not met and not self.world.present_devices(account):", "if False:"),
     "pending invites never expire": ("            if credited >= PENDING_INVITE_TTL:", "            if False:"),
     "other installations capture": (
-        "            if not rec.captures:\n                st.invited.setdefault(rec.account, set()).add(rec.space)\n            if not rec.vouched",
-        "            if not rec.captures:\n                st.invited.setdefault(rec.account, set()).add(rec.space)\n            if rec.pending and not self._knew(rec.account):\n                st.pending.setdefault(rec.account, (rec.space, 0.0, self.local_now()))\n            if not rec.vouched"),
+        "            if rec.inviter != self.own.account or not rec.authorizes:\n                continue",
+        "            if rec.inviter == self.own.account and rec.pending and not self._knew(rec.account):\n                st.pending.setdefault(rec.account, (rec.space, 0.0, self.local_now()))\n            if rec.inviter != self.own.account or not rec.authorizes:\n                continue"),
     "first-contact hold keyed to the account": (
         "        fc = st.fc_holds.get(b)\n",
         "        fc = max((v for k, v in st.fc_holds.items() if k.account == b.account), default=None)\n"),

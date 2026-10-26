@@ -24,8 +24,8 @@ This sketch states the changes against the baseline. Terms follow [local trust](
 
 A client's acceptance of a binding is unchanged: first use, approval, or a completed re-enrollment hold. This proposal adds a second property, **grant standing**, which [grant authorization](core.md#grant-authorization) G3 requires of the recipient binding before this client issues a grant in a given space. A binding has grant standing for a client when it is:
 
-1. **Vouched, in spaces its account was invited to.** The client first accepted it on first use as part of an invite by its own account: while making the invite, or by capturing a [pending invite](#pending-invites). That makes the binding **vouched** for this client. A vouched binding has standing in every space that the client's own account has published an [invite record](#invite-records) admitting its account to, whether that invite came before or after the vouch.
-2. **Approved.** Accepted by approval from a binding with grant standing. It inherits that binding's scope: a device linked by a vouched device has standing in the same spaces, and a device linked by a held, re-enrolled, or own device has standing in every space.
+1. **Authorized, in a space.** A published [invite record](#invite-records) or capture record of the client's own account, for that space, names the binding in its `authorizes` list. A record authorizes only bindings that were **vouched** for the client when the record was made: bindings it first accepted on first use as part of an invite by its own account, either while making this invite or an earlier one, or by capturing a [pending invite](#pending-invites). Authorization is fixed when the record is made. A later vouch never extends an earlier record, whether that record vouched for nothing, named other devices, or was a pending invite that expired.
+2. **Approved.** Accepted by approval from a binding with grant standing. It inherits that binding's scope: a device linked by an authorized device has standing in the spaces that device was authorized in, and a device linked by a held, re-enrolled, or own device has standing in every space.
 3. **Held.** The client has credited `REENROLL_HOLD` (72 hours) of elapsed time to it since accepting it, by first use, approval, or an [invite record](#invite-records), under the existing [hold timing](device-enrollment.md#hold-timing). This is the **first-contact hold**. Every binding accepted those ways starts its own, even one that already has standing through rule 1 or 2: otherwise a device linked during its signer's hold would have no standing at all once the signer was removed. Revocation stops the hold's credit but keeps what it earned, so a device the revoked binding linked while it had standing keeps that standing. Clients credit elapsed time before applying an observation, so a removal costs no credit earned before it was learned. Standing from a completed hold applies in every space.
 4. **Re-enrolled.** Accepted through a completed re-enrollment hold. Applies in every space.
 5. **Own.** An accepted binding of the client's own account. Grants among a user's own devices are unchanged.
@@ -36,15 +36,15 @@ A binding without grant standing is still accepted: the client can receive keys 
 
 ### Invites vouch only at first contact
 
-**An invite vouches only for bindings the inviter meets for the first time through an invite.** Inviting an account the inviter already pins lists the bindings the inviter currently accepts for audit, and vouches for nothing new. Its only effect on standing is that bindings the inviter already vouched for, by first meeting them through an earlier invite, gain standing in this space too. Pins the inviter made any other way, including ones whose first-contact hold is still running, stay held. Invitations never shorten a first-contact hold or a re-enrollment hold.
+**An invite vouches only for bindings the inviter meets for the first time through an invite.** Inviting an account the inviter already pins lists the bindings the inviter currently accepts for audit, and vouches for nothing new. It authorizes, in its own space, those listed bindings that the inviter had already vouched for, by first meeting them through an earlier invite. Pins the inviter made any other way, including ones whose first-contact hold is still running, are listed but not authorized, and stay held. Invitations never shorten a first-contact hold or a re-enrollment hold.
 
 So no action lets a member skip a hold their own app has started. The only way to grant to a binding early is to be the one who first met it through an invite, or to [verify](#verification) it. Inviting the same person into a second space adds no first contact: the inviter took that risk once, at the first invite, and the second space is one their own account chose to admit the person to.
 
-An invite counts only if it admits the account. A client never publishes an invite record for an account that is already a member of the space, so a vouch cannot be carried into a space whose members were already holding the account's devices.
+An invite counts only if it admits the account. A client never publishes an invite record for an account that is already a member of the space, so a vouch cannot be carried into a space whose members were already holding the account's devices. Nor can a vouch reach back into a space the account was admitted to earlier: each record authorizes exactly what was vouched when it was made. Without that, a vouch made through an invite to one space would also authorize every space the inviter's account had ever admitted the account to, including through an unvouched invite made by another of the inviter's installations, or a pending invite that expired.
 
 ### Pending invites
 
-An invite is **pending** when the inviter has never pinned the account and the account has no devices yet, as when someone is invited before installing an NBD app. The inviting installation publishes the invite record with no bindings and `pending: true`, which admits the account, and remembers the pending invite. The first time it then accepts that account's devices on first use, it vouches for them, and publishes a **capture record**: an invite record naming them, with `vouched: true` and a `captures` reference to the pending record. The inviter's other installations adopt the capture as they adopt any vouched invite.
+An invite is **pending** when the inviter has never pinned the account and the account has no devices yet, as when someone is invited before installing an NBD app. The inviting installation publishes the invite record with no bindings and `pending: true`, which admits the account, and remembers the pending invite. The first time it then accepts that account's devices on first use, it vouches for them, and publishes a **capture record**: an invite record for the pending invite's space naming them in `authorizes`, with a `captures` reference to the pending record. A capture completes only the invite it references. The inviter's other installations adopt the capture as they adopt any invite that authorizes devices.
 
 A pending invite expires after `PENDING_INVITE_TTL` of elapsed time credited by the inviting installation, measured like a hold ([hold timing](device-enrollment.md#hold-timing)); this proposal suggests seven days. An expired pending invite captures nothing, and the account's devices are an ordinary first contact. Only the installation that made the pending invite captures it, since the capture is its own first contact.
 
@@ -52,7 +52,7 @@ Capturing widens the remaining exposure from an instant to a window. If the acco
 
 ### Durable invites
 
-Pinning on first use, deciding whether the invite vouches, and signing the record are one durable local operation: the client saves the pins, the vouch decision, and the exact signed record together before any upload. If publication fails, the client retries the same bytes until the write is acknowledged or the user abandons the invite, as for [grant publication](audit.md#publication). It never re-derives the record, so a retry cannot turn a vouched invite into an unvouched one because the first attempt already pinned the account. Inviting the same account to the same space again while an invite is still unsent resumes that invite rather than preparing a second record. Unsent records are resent oldest first. An unsent invite whose account has meanwhile become a member is dropped, since it would no longer admit. Vouched standing in the space starts only once the record is published.
+Pinning on first use, deciding what the invite authorizes, and signing the record are one durable local operation: the client saves the pins, the vouch, and the exact signed record together before any upload. If publication fails, the client retries the same bytes until the write is acknowledged or the user abandons the invite, as for [grant publication](audit.md#publication). It never re-derives the record, so a retry cannot drop an authorization because the first attempt already pinned the account. Inviting the same account to the same space again while an invite is still unsent resumes that invite rather than preparing a second record. Unsent records are resent oldest first. An unsent invite whose account has meanwhile become a member is dropped, since it would no longer admit. Authorized standing in the space starts only once the record is published.
 
 ### Invite records
 
@@ -64,7 +64,7 @@ When a client adds an account to a space, it resolves that account's devices, pi
   space: string,          // Exact space URI.
   account: string,        // Invited account DID.
   bindings: Binding[],    // The invited account's bindings this client accepted at the invite.
-  vouched: boolean,       // True only if this client first met these bindings through this invite.
+  authorizes: Binding[],  // Listed bindings that were vouched for this client when it made the record.
   pending: boolean,       // True if the account had no devices yet; bindings is then empty.
   captures: string | null,// For a capture record, the pending invite record it completes.
   issuer: DeviceIdentity, // The inviting device.
@@ -74,7 +74,7 @@ When a client adds an account to a space, it resolves that account's devices, pi
 
 The record does three things:
 
-- **It carries the vouch to the inviter's other installations.** They treat a valid vouched invite or capture from their own account like a pin copied by [pairing](device-enrollment.md#backup-and-transfer): if the installation has no pin for that account yet, it pins the bindings as vouched. An installation that already pins the account keeps its own state, including any hold it is running. Every own invite record, vouched or not, tells the installation which spaces its account admitted the account to. A PDS can withhold a record but not forge it.
+- **It carries the authorization to the inviter's other installations.** They treat a valid invite or capture from their own account that authorizes devices like a pin copied by [pairing](device-enrollment.md#backup-and-transfer): if the installation has no pin for that account yet, it pins the authorized bindings as vouched, authorized in that record's space. An installation that already pins the account takes a record's authorization only for bindings it already holds as vouched, and otherwise keeps its own state, including any hold it is running. A PDS can withhold a record but not forge it.
 - **It makes vouching auditable.** Every member can see who vouched for whom, in which space, and for which devices. If an account turns out to have been taken over, the record names where its first-contact grant came from.
 - **It lets the invited account check it.** The invited account's own installations [audit](audit.md#direct-sync) invite records naming their account and alarm on listed bindings they never accepted, just as they do for grants.
 
@@ -95,7 +95,9 @@ None beyond the baseline. The inviter is established by the inviter's own signed
 | Alice, who has never met Bob, invites Bob after the takeover. | Alice grants at once. | Alice grants at once. **This is the remaining exposure.** |
 | Alice invites Bob before he installs, and the takeover enrolls the first device. | Alice grants at once. | Alice grants at once, if the pending invite has not expired. The same exposure, over the pending window. |
 | Alice met the taken-over Bob yesterday in another space, then invites him. | Alice grants at once. | Alice holds: the invite is not her first contact. |
-| Alice invited Bob into one space, then invites him into a new one. | Alice grants at once. | Alice grants at once in both: she first met Bob through an invite. |
+| Alice invited Bob into one space, then invites him into a new one. | Alice grants at once. | Alice grants at once in both: she first met Bob through an invite, and the new invite authorizes his vouched devices. |
+| Alice's phone knew Bob and invited him to Book club. After the takeover, Alice's laptop, which never met Bob, invites him to Garden. | Both grant at once once they meet the new device. | The laptop grants in Garden at once (the remaining exposure). In Book club both hold: the phone's invite authorized nothing, and a later vouch never extends it. |
+| Alice invited Bob before he installed, and the pending invite expired. Later she first meets his device by inviting him to Garden. | Alice grants at once. | Alice grants at once in Garden. In the first space she holds: the expired invite authorized nothing. |
 | Alice, who knew Bob from before the takeover, invites Bob. | Alice holds. | Alice holds. |
 | A malicious PDS shows Dave a substituted device for Bob. | Dave grants at once; detected after disclosure, if at all. | Dave holds. With [hold notices](#hold-notices), Bob's installations can alarm before disclosure. |
 
@@ -138,7 +140,7 @@ Alice invites Bob, who has an account but no NBD app yet.
 
 ### Inviting someone you already know
 
-Alice invites Bob, whom she already knows from another space. If she first met Bob by inviting him somewhere, she grants at once here too. If she met him some other way, nothing about trust changes: if her app's hold for Bob's devices is over, she grants at once; if it is still running, she keeps holding, and the invite says so: "Your device will share with Bob from Friday." The invite record lists Bob's devices without vouching for them.
+Alice invites Bob, whom she already knows from another space. If she first met Bob by inviting him somewhere, she grants at once here too: the new invite authorizes the devices she vouched for then, and the ones they have since linked. If she met him some other way, nothing about trust changes: if her app's hold for Bob's devices is over, she grants at once; if it is still running, she keeps holding, and the invite says so: "Your device will share with Bob from Friday." The invite record lists Bob's devices without authorizing them.
 
 ### When an invite fails to send
 
@@ -219,6 +221,17 @@ A newcomer could compare its own first-contact view of an account with the bindi
 ## Before changing the baseline
 
 The rule should be modeled before it changes the specification.
+
+**Revision after Astra's third review.** Astra found that the second revision let a later vouch retroactively authorize an older admission. Alice's phone, which already knew Bob, invited him to Book club unvouched. After Bob's account was taken over, Alice's laptop, which had never met Bob, vouched for the attacker's device by inviting him to Garden. The laptop then had standing in Book club too, with zero hours elapsed. An expired pending invite could be reopened the same way. Each record now authorizes exactly the devices vouched when it was made ([rule 1](#grant-standing)).
+
+- **Python model and prototype: done.** Both now read standing only from records' `authorizes` lists, and both have Astra's two-device case and the expired pending case as tests.
+- **Stronger checks.** The invariants in both now check that every authorization traces to a published own record for that space naming the device. The prototype's disclosure check excuses an early grant only through such a record.
+- **Mutations.** In each, a mutation restoring the old rule is caught. In the Python model the random walks catch it on their own, so the checks that missed this regression now detect it. The model catches 44 mutations and the prototype 35.
+- **Cross-check.** All 40 regenerated traces agree at every step, including each step's authorized devices. None of them re-invites someone into a second space, so that path rests on unit tests in both.
+- **Tamarin: done.** Standing in a space now comes only from an authorization emitted by an invite or capture to that space, of a binding vouched no later than that invite.
+  - The scope lemmas are strengthened to match: every grant rests on standing whose root, the binding or an approval ancestor, was authorized in that space no earlier than its vouch, or completed a hold.
+  - Built with `-D=RETRO`, which restores the old rule, the model finds Astra's attack: an uncaptured invite authorized after the fact by a vouch made through another space's invite.
+  - All 23 `check.sh` entries verify, the base lemmas among them.
 
 **Revision after Astra's second review.** [Pending invites](#pending-invites), [durable invites](#durable-invites), and vouches that follow the inviter's later invites were added after the first round of results below.
 

@@ -37,10 +37,12 @@ LEMMAS=(
   "INVITERS|inviters_executable_held_grant|-D=INVITERS"
   "INVITERS|inviters_grant_targets_justified|-D=INVITERS $ORACLE"
   "INVITERS|key_leaks_only_via_holders_or_grants|-D=INVITERS --heuristic=i"
+  "INVITERS|inviters_root_is_ancestor|-D=INVITERS"
   "INVITERS|inviters_standing_scoped|-D=INVITERS"
   "INVITERS|inviters_grant_scope|-D=INVITERS"
   "UNSCOPED|cross_space_vouch_attack|-D=INVITERS -D=UNSCOPED"
   "REINVITE|reinvite_carries_vouch|-D=INVITERS -D=REINVITE"
+  "RETRO|retro_vouch_attack|-D=INVITERS -D=RETRO"
 )
 
 # Stop a command after $1 seconds (macOS has no timeout(1)).

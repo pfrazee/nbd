@@ -20,12 +20,13 @@ import { World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
 
 export type Action = (string | number | boolean)[];
-/** `tracked` and `standing` (space label -> bindings) only under inviters. */
+/** `tracked`, `standing`, and `authorized` (space label -> bindings) only
+ * under inviters. */
 /** A trace op as fixtures record it: a viewer's resend of its oldest saved
  * invite is `{op: "flush"}`, or `{op: "flush", abandoned: true}` if that
  * invite no longer admitted its account and was dropped unsent. */
 export type TraceStepOp = Exclude<TraceOp, { op: "flush" }> | { op: "flush"; abandoned?: true };
-export type TraceStep = { ops: TraceStepOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]> };
+export type TraceStep = { ops: TraceStepOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]>; authorized?: Record<string, TraceBinding[]> };
 export type Trace = { seed: string; policy?: Policy; spaces?: string[]; viewer: TraceBinding; actions?: Action[]; steps: TraceStep[] };
 
 const ACCOUNTS = ["alice", "bob", "carol"];
@@ -319,8 +320,13 @@ export class Walk {
     }
     const tracked = this.viewer.trackedAccounts().map((d) => d.slice(8)).sort();
     const standing: Record<string, TraceBinding[]> = {};
-    this.spaces.forEach((s, n) => (standing[SPACE_LABELS[n]] = all.filter((b) => this.viewer.trust.standing(b, s)).map(tb)));
-    this.trace!.steps.push({ ops, accepted, holds, tracked, standing });
+    const authorized: Record<string, TraceBinding[]> = {};
+    this.spaces.forEach((s, n) => {
+      standing[SPACE_LABELS[n]] = all.filter((b) => this.viewer.trust.standing(b, s)).map(tb);
+      const ids = this.viewer.trust.state.authorized.get(s);
+      authorized[SPACE_LABELS[n]] = all.filter((b) => ids?.has(bindingId(b))).map(tb);
+    });
+    this.trace!.steps.push({ ops, accepted, holds, tracked, standing, authorized });
   }
 }
 

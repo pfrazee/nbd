@@ -243,6 +243,7 @@ export class Installation {
     st.holds.clear();
     st.candidatesSeen.clear();
     st.views.clear();
+    st.authorized.clear();
     st.vouched.clear();
     st.admitted.clear();
     st.pending.clear();
@@ -301,14 +302,17 @@ export class Installation {
     const view = st.views.get(account);
     const pending = !knew && !!view && view.present.size === 0;
     const met = knew ? [] : live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
-    const entry = this.signInvite(space, account, live, met, pending, null, !knew);
+    // It authorizes what it first met now and the listed bindings already
+    // vouched here, nothing else: a later vouch never reaches back.
+    const authorizes = [...met, ...live.filter((b) => !met.includes(b) && st.vouched.has(bindingId(b)))];
+    const entry = this.signInvite(space, account, live, authorizes, met, pending, null, !knew);
     if (pending) this.trust.addPending(entry.rkey, space, account, this.binding.device.deviceId);
     return entry;
   }
 
-  private signInvite(space: string, account: Did, bindings: Binding[], met: Binding[], pending: boolean, captures: string | null, firstMet: boolean): OutboxInvite {
+  private signInvite(space: string, account: Did, bindings: Binding[], authorizes: Binding[], met: Binding[], pending: boolean, captures: string | null, firstMet: boolean): OutboxInvite {
     const unsigned = {
-      version: 1 as const, space, account, bindings, vouched: met.length > 0, pending, captures,
+      version: 1 as const, space, account, bindings, authorizes, pending, captures,
       issuer: { account: this.did, deviceId: this.binding.device.deviceId },
     };
     const record: Invite = { ...unsigned, proof: sign(this.signKey.secretKey, invitePayload(unsigned)) };
@@ -341,8 +345,10 @@ export class Installation {
       }
       this.inviteOutbox.shift();
       report(e, true);
-      // Admission and vouched standing start once the record is published.
+      // Admission, the vouch, and authorized standing start once the record
+      // is published.
       for (const b of vouch) this.trust.vouch(e.space, b);
+      for (const b of record.authorizes) this.trust.authorize(e.space, b);
       this.trust.admit(e.account, e.space);
       if (!record.captures) this.net.host.setMembership(this.did, e.space, e.account, true);
     }
@@ -362,7 +368,7 @@ export class Installation {
       const live = this.trust.live(p.account);
       const met = live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
       if (!met.length) continue;
-      const entry = this.signInvite(p.space, p.account, live, met, false, rkey, true);
+      const entry = this.signInvite(p.space, p.account, live, met, met, false, rkey, true);
       this.inviteOutbox.push(entry);
       this.flushInvites(entry);
     }

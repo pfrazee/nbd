@@ -32,10 +32,11 @@ const MUTATIONS = {
   "start-over list never closes": ["} else if (!(so && !so.done && so.list!.has(id))) {", "} else if (!(so && so.list!.has(id))) {"],
   // The inviters policy (proposal-inviters.md).
   "inviters: grants ignore standing": [GRANTS, "if (!basis) return fail(", "if (false) return fail("],
-  "inviters: vouch scoped to one space again": ["if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return \"vouched\";", "if (st.vouched.get(id) === space) return \"vouched\";"],
+  "inviters: a new invite drops earlier vouches": [CLIENT, "const authorizes = [...met, ...live.filter((b) => !met.includes(b) && st.vouched.has(bindingId(b)))];", "const authorizes = [...met];"],
+  "inviters: a later vouch extends older admissions": ["if (st.authorized.get(space)?.has(id)) return \"authorized\";", "if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return \"authorized\";"],
   "inviters: known account vouched": [CLIENT, "const met = knew ? [] : live.filter(", "const met = live.filter("],
   "inviters: import ends a hold": ["if (b && !knew.has(b.account)) this.vouch(space, b);", "if (b) this.vouch(space, b);"],
-  "inviters: invite records override pins": ["if (!rec.vouched || this.knew(rec.account)) return false;", "if (!rec.vouched) return false;"],
+  "inviters: invite records override pins": ["      } else if (!st.vouched.has(bindingId(b))) continue;\n", "      }\n"],
   "inviters: hold keyed to account instead of binding": ["const fcKey = (b: Binding): string => bindingId(b);", "const fcKey = (b: Binding): string => b.account;"],
   "inviters: approved devices start no hold": ["            this.startFirstContactHold(ap.target);\n", ""],
   "inviters: removal erases credit": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint); else h.credited = 0;"],

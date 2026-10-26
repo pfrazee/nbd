@@ -95,21 +95,24 @@ def replay_inviters(trace):
                         client._first_use(op["account"])
                         made = (w.invites + client.state.outbox)[before:]
                         want = InviteRecord(viewer.account, op["space"], op["account"],
-                                            frozenset(B(x) for x in op["bindings"]), True,
-                                            captures=True)
+                                            frozenset(B(x) for x in op["bindings"]),
+                                            frozenset(B(x) for x in op["authorizes"]), captures=True)
                         where = w.invites if op["published"] else client.state.outbox
                         if made != [want] or want not in where:
                             raise AssertionError(f"step {n}: model capture {made} for {op}")
                     else:
                         rec = client.invite(op["space"], op["account"])
-                        got = None if rec is None else (rec.vouched, rec.pending,
+                        got = None if rec is None else (rec.authorizes, rec.pending,
                                                         rec in client.state.outbox)
-                        if got != (op["vouched"], op["pending"], not op["published"]):
+                        want = (frozenset(B(x) for x in op["authorizes"]), op["pending"],
+                                not op["published"])
+                        if got != want:
                             raise AssertionError(f"step {n}: model invite {rec} for {op}")
                     w.fail_writes = False
                 elif op.get("published", True):
                     w.invite(InviteRecord(op["by"][0], op["space"], op["account"],
-                                          frozenset(B(x) for x in op["bindings"]), op["vouched"],
+                                          frozenset(B(x) for x in op["bindings"]),
+                                          frozenset(B(x) for x in op["authorizes"]),
                                           op.get("pending", False), op.get("captures", False)))
             elif op["op"] == "flush":
                 oldest = client.state.outbox[0] if client.state.outbox else None
@@ -125,9 +128,12 @@ def replay_inviters(trace):
         accepted = sorted(repr(b) for b in mine if client.accepted(b))
         holds = sorted(x for x in tracked if client.hold_pending(x))
         standing = {s: sorted(repr(b) for b in mine if client.standing(b, s)) for s in trace["spaces"]}
+        authorized = {s: sorted(repr(b) for b in client.state.authorized.get(s, set()))
+                      for s in trace["spaces"]}
         expected = (sorted(repr(B(p)) for p in step["accepted"]), sorted(step["holds"]),
-                    {s: sorted(repr(B(p)) for p in step["standing"].get(s, [])) for s in trace["spaces"]})
-        yield n, expected, (accepted, holds, standing)
+                    {s: sorted(repr(B(p)) for p in step["standing"].get(s, [])) for s in trace["spaces"]},
+                    {s: sorted(repr(B(p)) for p in step["authorized"].get(s, [])) for s in trace["spaces"]})
+        yield n, expected, (accepted, holds, standing, authorized)
 
 
 class Traces(unittest.TestCase):

@@ -56,7 +56,7 @@ describe("invite records", () => {
     expect(alice.invite(space, bob.did)).toBe(false); // a re-invite admits nothing
     const recs = recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)
       .map(([, v]) => (v as { value: Invite }).value);
-    expect(recs.map((r) => [r.vouched, r.pending, r.captures])).toEqual([[true, false, null]]);
+    expect(recs.map((r) => [r.authorizes.length, r.pending, r.captures])).toEqual([[1, false, null]]);
     for (const r of recs) {
       expect(r.issuer).toEqual({ account: alice.did, deviceId: alice.binding.device.deviceId });
       expect(r.bindings.map((b) => b.device.deviceId)).toEqual([bob.binding.device.deviceId]);
@@ -74,13 +74,13 @@ describe("invite records", () => {
     alice.invite(space, bob.did);
     w.settle();
     expect([...laptop.trust.state.accepted.values()].find((a) => a.binding.account === bob.did)?.evidence).toMatch(/^invited by/);
-    expect(laptop.trust.standingBasis(bob.binding, space)).toBe("vouched");
+    expect(laptop.trust.standingBasis(bob.binding, space)).toBe("authorized");
     const garden = alice.createSpace("Garden");
     expect(laptop.trust.standing(bob.binding, garden)).toBe(false);
     // The vouch follows the account's later invites, from any own device.
     alice.invite(garden, bob.did);
     w.settle();
-    expect(laptop.trust.standingBasis(bob.binding, garden)).toBe("vouched");
+    expect(laptop.trust.standingBasis(bob.binding, garden)).toBe("authorized");
   });
 
   it("are not made for an account a host console already admitted", () => {
@@ -115,8 +115,8 @@ describe("invite records", () => {
     expect(alice.inviteOutbox.length).toBe(0);
     const recs = recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)
       .map(([, v]) => (v as { value: Invite }).value);
-    expect(recs.map((r) => r.vouched)).toEqual([true]);
-    expect(alice.trust.standingBasis(bob.binding, space)).toBe("vouched");
+    expect(recs.map((r) => r.authorizes.length)).toEqual([1]);
+    expect(alice.trust.standingBasis(bob.binding, space)).toBe("authorized");
   });
 
   it("pending invites are captured only by the device that made them", () => {
@@ -140,7 +140,7 @@ describe("invite records", () => {
     m.before();
     w.setOnline(alice, true);
     expect(m.after()).toEqual([]);
-    expect(alice.trust.standingBasis(bob.binding, space)).toBe("vouched");
+    expect(alice.trust.standingBasis(bob.binding, space)).toBe("authorized");
     expect(bob.spaces.get(space)?.keyFrom).toMatch(/^did:plc:alice\/.*phone|^did:plc:alice/);
     expect(tablet.trust.standing(bob.binding, space)).toBe(false); // it pinned Bob first
   });
@@ -167,7 +167,7 @@ describe("invite records", () => {
     expect(fresh.trust.knew(bob.did)).toBe(false);
     fresh.invite(garden, bob.did);
     w.settle();
-    expect(fresh.trust.standingBasis(attacker.binding, garden)).toBe("vouched");
+    expect(fresh.trust.standingBasis(attacker.binding, garden)).toBe("authorized");
     // The phone pins Bob and holds his reset; neither the record nor an
     // import from the tablet may give it standing.
     expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
@@ -244,7 +244,7 @@ describe("goal check under inviters", () => {
     m.before();
     dave.join(space);
     w.settle();
-    expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* without a vouch admitted there/);
+    expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* with no record authorizing it there/);
   });
 
   it("flags an inviter that first met the account before the invite", () => {
@@ -263,7 +263,7 @@ describe("goal check under inviters", () => {
     w.settle();
     const garden = alice.createSpace("Garden");
     alice.invite(garden, bob.did);
-    alice.trust.vouch(garden, attacker.binding); // the bug
+    alice.trust.authorize(garden, attacker.binding); // the bug
     m.before();
     attacker.join(garden);
     w.settle();

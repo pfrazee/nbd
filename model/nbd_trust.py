@@ -57,15 +57,17 @@ class Grant:
 @dataclass(frozen=True)
 class InviteRecord:
     """An invite record in the inviter account's space repo (proposal-inviters.md).
-    `vouched` is true only if the inviting device first met `bindings`
-    through this invite. A pending invite names no bindings; its capture
-    record (`captures`) names the devices first met afterwards."""
+    `bindings` lists the invited account's devices the inviter accepted;
+    `authorizes` names those that were vouched for the inviting device when
+    it made the record, which may grant there before a hold ends. A pending
+    invite names no bindings; its capture record (`captures`) authorizes the
+    devices first met afterwards, in the pending invite's space."""
 
     inviter: str
     space: str
     account: str
     bindings: FrozenSet[Binding]
-    vouched: bool
+    authorizes: FrozenSet[Binding]
     pending: bool = False
     captures: bool = False
 
@@ -655,8 +657,8 @@ class SpecClient:
 class InviterState(SpecState):
     """Persisted state for InviterClient: grant standing's own bases."""
 
-    vouched: Set[Binding] = field(default_factory=set)  # first met through a published own invite
-    invited: Dict[str, Set[str]] = field(default_factory=dict)  # account -> spaces own account admitted it to
+    vouched: Set[Binding] = field(default_factory=set)  # first met through an own invite or capture
+    authorized: Dict[str, Set[Binding]] = field(default_factory=dict)  # space -> bindings own records authorize
     approvers: Dict[Binding, Binding] = field(default_factory=dict)  # target -> signer that accepted it
     # binding -> (credited hours, local-clock checkpoint) since this client accepted it
     fc_holds: Dict[Binding, Tuple[float, float]] = field(default_factory=dict)
@@ -668,7 +670,7 @@ class InviterState(SpecState):
         base = SpecState.copy(self)
         return InviterState(base.accepted, base.revoked, base.holds, base.candidates_seen,
                             base.alarms, set(self.vouched),
-                            {a: set(v) for a, v in self.invited.items()},
+                            {sp: set(v) for sp, v in self.authorized.items()},
                             dict(self.approvers), dict(self.fc_holds), dict(self.pending),
                             list(self.outbox))
 
@@ -676,10 +678,10 @@ class InviterState(SpecState):
 class InviterClient(SpecClient):
     """The inviters proposal (proposal-inviters.md): acceptance as in
     SpecClient, plus grant standing, which gates what this client grants.
-    A binding has standing in a space when it is vouched (first met through
-    an invite by this client's account, including a pending invite's
-    capture) and this client's account admitted its account to that space,
-    was approved by a binding with standing (inheriting its scope), has had
+    A binding has standing in a space when a published invite or capture
+    record of this client's account for that space authorizes it (each
+    record authorizes exactly the bindings vouched, that is first met
+    through an own invite or capture, when it was made), was approved by a binding with standing (inheriting its scope), has had
     REENROLL_HOLD credited since this client accepted it (the first-contact
     hold), was re-enrolled, or is the client's own. Invites are prepared
     durably and published later if a write fails."""
@@ -715,7 +717,9 @@ class InviterClient(SpecClient):
                 if account not in st.pending:
                     st.pending[account] = (space, 0.0, self.local_now())
         live = {b for b in st.accepted if b.account == account and self._usable(b)}
-        rec = InviteRecord(self.own.account, space, account, frozenset(live), bool(met), pending)
+        st.vouched |= met  # decided now, durably, with the record
+        rec = InviteRecord(self.own.account, space, account, frozenset(live),
+                           frozenset(live & st.vouched), pending)
         self._prepare(rec)
         return rec
 
@@ -769,8 +773,8 @@ class InviterClient(SpecClient):
             for b in other.vouched:
                 if b.account not in knew:
                     st.vouched.add(b)
-            for a, spaces in other.invited.items():
-                st.invited.setdefault(a, set()).update(spaces)
+            for sp, bs in other.authorized.items():
+                st.authorized.setdefault(sp, set()).update(b for b in bs if b in st.vouched)
             for t, s in other.approvers.items():
                 st.approvers.setdefault(t, s)
         super().import_state(other)
@@ -785,11 +789,7 @@ class InviterClient(SpecClient):
             self._published(rec)
 
     def _published(self, rec: InviteRecord) -> None:
-        st = self.state
-        if rec.vouched:
-            st.vouched |= rec.bindings
-        if not rec.captures:
-            st.invited.setdefault(rec.account, set()).add(rec.space)
+        self.state.authorized.setdefault(rec.space, set()).update(rec.authorizes)
 
     def _source(self, b: Binding, space: str, seen: Set[Binding]) -> bool:
         """Standing's sources, ignoring b's own revocation so approval chains
@@ -806,7 +806,7 @@ class InviterClient(SpecClient):
         fc = st.fc_holds.get(b)
         if fc is not None and fc[0] >= REENROLL_HOLD:
             return True
-        if b in st.vouched and space in st.invited.get(b.account, set()):
+        if b in st.authorized.get(space, set()):
             return True
         signer = st.approvers.get(b)
         return signer is not None and self._source(signer, space, seen)
@@ -824,10 +824,12 @@ class InviterClient(SpecClient):
         for b in met:
             self._start_fc_hold(b)
         # The first devices met after this installation's pending invite are
-        # captured: vouched, once the capture record is published.
+        # captured: vouched now, authorized in that invite's space once the
+        # capture record is published.
         if met and x in st.pending:
             space, _credited, _ck = st.pending.pop(x)
-            self._prepare(InviteRecord(self.own.account, space, x, frozenset(met), True,
+            st.vouched |= met
+            self._prepare(InviteRecord(self.own.account, space, x, frozenset(met), frozenset(met),
                                        captures=True))
 
     def _approved(self, ap: Approval) -> None:
@@ -838,24 +840,23 @@ class InviterClient(SpecClient):
         self._start_fc_hold(ap.target)
 
     def _own_invites(self) -> None:
-        """Own invite records tell this installation which spaces its account
-        admitted each account to. A vouched one also carries its vouch here,
-        like a pin copied by pairing, but only for an account this
-        installation has never pinned."""
+        """Own invite records carry their authorizations here. For an account
+        this installation has never pinned, a record that authorizes devices
+        pins them as vouched, like a pin copied by pairing; for one it has,
+        it takes a record's authorization only of bindings it already holds
+        as vouched."""
         st = self.state
         for rec in self.world.invites:
-            if rec.inviter != self.own.account:
+            if rec.inviter != self.own.account or not rec.authorizes:
                 continue
-            if not rec.captures:
-                st.invited.setdefault(rec.account, set()).add(rec.space)
-            if not rec.vouched or self._knew(rec.account):
-                continue
-            for b in rec.bindings:
-                st.accepted[b] = "invited"
-                if not self.world.present(b):
-                    st.revoked.add(b)
-                self._start_fc_hold(b)
-            st.vouched |= rec.bindings
+            if not self._knew(rec.account):
+                for b in rec.authorizes:
+                    st.accepted[b] = "invited"
+                    if not self.world.present(b):
+                        st.revoked.add(b)
+                    self._start_fc_hold(b)
+                st.vouched |= rec.authorizes
+            st.authorized.setdefault(rec.space, set()).update(rec.authorizes & st.vouched)
 
     def _tick(self) -> None:
         """Credit elapsed local time to re-enrollment holds, to the

@@ -374,7 +374,7 @@ const residual: Scenario = {
         w.settle();
       },
       expect: (_w, c) => [
-        check("Alice vouched for the attacker's device", c.inst.alicePhone.trust.standingBasis(c.inst.attacker.binding, c.space.club) === "vouched"),
+        check("Alice vouched for the attacker's device", c.inst.alicePhone.trust.standingBasis(c.inst.attacker.binding, c.space.club) === "authorized"),
         check("The attacker holds the key, from Alice", keyFrom(c.inst.attacker, c.space.club).startsWith("did:plc:alice")),
       ],
     },
@@ -418,7 +418,7 @@ const retry: Scenario = {
       },
       expect: (w, c) => [
         check("Alice's app pinned Bob's phone", c.inst.alicePhone.trust.isAccepted(c.inst.bobPhone.binding)),
-        check("The saved invite vouches for it", c.inst.alicePhone.inviteOutbox[0]?.record.vouched === true),
+        check("The saved invite vouches for it", c.inst.alicePhone.inviteOutbox[0]?.record.authorizes.length === 1),
         check("Bob is not admitted yet", !w.host.membership(c.space.club, c.did.bob)?.eligible),
         check("Alice has no standing for Bob yet", !standing(c.inst.alicePhone, c.inst.bobPhone, c.space.club)),
       ],
@@ -486,7 +486,7 @@ const pending: Scenario = {
       },
       expect: (w, c) => [
         check("Alice's app captured the pending invite", lastInvite(w, c.inst.alicePhone)?.captures !== null),
-        check("Alice has standing for Bob's phone", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.club) === "vouched"),
+        check("Alice has standing for Bob's phone", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.club) === "authorized"),
         check("Bob holds the key, from Alice", keyFrom(c.inst.bobPhone, c.space.club).startsWith("did:plc:alice")),
         check("Carol has no standing for Bob's phone", !standing(c.inst.carolPhone, c.inst.bobPhone, c.space.club)),
       ],
@@ -579,7 +579,8 @@ const secondSpace: Scenario = {
       },
       expect: (w, c) => [
         check("The Garden invite vouched for nothing new", lastInvite(w, c.inst.alicePhone)?.devices.length === 0),
-        check("Alice has standing for Bob's phone in Garden", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.garden) === "vouched"),
+        check("It authorizes Bob's phone, which Alice already vouched for", lastInvite(w, c.inst.alicePhone)?.authorizes.includes(c.inst.bobPhone.binding.device.deviceId) ?? false),
+        check("Alice has standing for Bob's phone in Garden", c.inst.alicePhone.trust.standingBasis(c.inst.bobPhone.binding, c.space.garden) === "authorized"),
         check("Bob holds Garden's key, from Alice", keyFrom(c.inst.bobPhone, c.space.garden).startsWith("did:plc:alice")),
       ],
     },
@@ -631,4 +632,98 @@ const fellowMember: Scenario = {
   ],
 };
 
-export const inviterScenarios: Scenario[] = [newcomer, crossSpace, known, linkedPhone, offline, residual, retry, pending, pendingExpiry, pendingTakeover, secondSpace, fellowMember];
+const lateVouch: Scenario = {
+  id: "inviters-late-vouch",
+  policy: "inviters",
+  title: "25. Inviters: a later vouch doesn't reach back",
+  summary: "Alice's phone knew Bob and invited him to Book club without vouching. After Bob's account is taken over, her laptop, which never met Bob, vouches for the attacker's device by inviting him to Garden. That vouch authorizes Garden only, not the phone's earlier Book club invite (Astra's third review).",
+  steps: [
+    {
+      title: "Alice links a laptop; Carol's Pottery introduces Alice's phone to Bob",
+      narration: "The laptop was linked before the phone met Bob, and never joins Pottery, so it has never met Bob.",
+      run: (w, c) => {
+        install(w, c, "alice", "bob", "carol");
+        c.inst.aliceLaptop = w.install(c.did.alice, "laptop", { link: c.inst.alicePhone });
+        c.space.pottery = c.inst.carolPhone.createSpace("Pottery");
+        for (const n of ["alice", "bob"]) {
+          c.inst.carolPhone.invite(c.space.pottery, c.did[n]);
+          c.inst[`${n}Phone`].join(c.space.pottery);
+        }
+        w.settle();
+      },
+      expect: (_w, c) => [check("The laptop has never met Bob", !c.inst.aliceLaptop.trust.knew(c.did.bob))],
+    },
+    {
+      title: "Alice's phone invites Bob to Book club",
+      narration: "Her phone already pins Bob from Pottery, so the invite lists his phone and authorizes nothing.",
+      run: (w, c) => {
+        c.space.club = c.inst.alicePhone.createSpace("Book club");
+        c.inst.alicePhone.invite(c.space.club, c.did.bob);
+        c.inst.bobPhone.join(c.space.club);
+        w.settle();
+      },
+      expect: (w, c) => [check("The invite authorizes nothing", lastInvite(w, c.inst.alicePhone)?.authorizes.length === 0)],
+    },
+    {
+      ...takeover,
+      narration: "The attacker resets Bob's account and asks for Book club's key. Alice's phone knew Bob, so it holds for re-enrollment.",
+    },
+    {
+      title: "Alice's laptop invites Bob to Garden, then joins Book club",
+      narration: "The laptop meets the attacker's device for the first time through its own invite, so its Garden invite authorizes that device, and the attacker gets Garden's key at once: the remaining exposure. The laptop then joins Book club and gets its key from the phone. Its vouch never reaches back to the phone's earlier Book club invite, which authorized nothing, so the laptop holds there.",
+      run: (w, c) => {
+        c.space.garden = c.inst.aliceLaptop.createSpace("Garden");
+        c.inst.aliceLaptop.invite(c.space.garden, c.did.bob);
+        c.inst.attacker.join(c.space.garden);
+        w.settle();
+        c.inst.aliceLaptop.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [
+        check("The attacker holds Garden's key, from the laptop", keyFrom(c.inst.attacker, c.space.garden).startsWith("did:plc:alice")),
+        check("The laptop holds Book club's key", hasKey(c.inst.aliceLaptop, c.space.club)),
+        check("The laptop has no standing for the attacker's device in Book club", !standing(c.inst.aliceLaptop, c.inst.attacker, c.space.club)),
+        check("The attacker has no Book club key", !hasKey(c.inst.attacker, c.space.club)),
+      ],
+    },
+  ],
+};
+
+const expiredThenVouch: Scenario = {
+  id: "inviters-expired-then-vouch",
+  policy: "inviters",
+  title: "26. Inviters: an expired pending invite stays expired",
+  summary: "Alice's pending invite of Bob to Book club expires. Later, the first device on Bob's account is an attacker's, and Alice first meets it by inviting Bob to Garden. That invite authorizes Garden only: the expired invite authorized nothing, and a later vouch never extends it.",
+  steps: [
+    beforeInstall,
+    {
+      title: "Eight days later, an attacker enrolls Bob's first device while Alice's phone is offline",
+      narration: "The pending invite has expired. Carol's app meets the attacker's device as a fellow member and holds it.",
+      run: (w, c) => {
+        w.advance(8 * 24);
+        w.setOnline(c.inst.alicePhone, false);
+        c.inst.attacker = w.takeover(c.did.bob);
+        c.inst.attacker.join(c.space.club);
+        w.settle();
+      },
+      expect: (_w, c) => [check("Carol has no standing for the attacker's device", !standing(c.inst.carolPhone, c.inst.attacker, c.space.club))],
+    },
+    {
+      title: "Alice creates Garden and invites Bob, then her phone comes online",
+      narration: "Alice's phone meets the attacker's device for the first time through the Garden invite, which authorizes it there. Her expired Book club invite captures nothing, and Garden's authorization doesn't reach it: her phone holds in Book club.",
+      run: (w, c) => {
+        c.space.garden = c.inst.alicePhone.createSpace("Garden");
+        c.inst.alicePhone.invite(c.space.garden, c.did.bob);
+        c.inst.attacker.join(c.space.garden);
+        w.setOnline(c.inst.alicePhone, true);
+      },
+      expect: (_w, c) => [
+        check("Alice has standing for the attacker's device in Garden", standing(c.inst.alicePhone, c.inst.attacker, c.space.garden)),
+        check("Alice has none in Book club", !standing(c.inst.alicePhone, c.inst.attacker, c.space.club)),
+        check("The attacker has no Book club key", !hasKey(c.inst.attacker, c.space.club)),
+      ],
+    },
+  ],
+};
+
+export const inviterScenarios: Scenario[] = [newcomer, crossSpace, known, linkedPhone, offline, residual, retry, pending, pendingExpiry, pendingTakeover, secondSpace, fellowMember, lateVouch, expiredThenVouch];

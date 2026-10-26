@@ -42,7 +42,7 @@ class Vouching(Base):
     def test_inviter_grants_at_once(self):
         (bob,) = self.account("bob", "b0")
         rec = self.alice.invite(BOOK, "bob")
-        self.assertTrue(rec.vouched)
+        self.assertEqual(rec.authorizes, {bob})
         self.assertTrue(self.alice.standing(bob, BOOK))
 
     def test_vouch_is_scoped_to_the_invited_space(self):
@@ -74,7 +74,7 @@ class Vouching(Base):
         (bob,) = self.account("bob", "b0")
         self.assertTrue(self.alice.accepted(bob))
         rec = self.alice.invite(BOOK, "bob")
-        self.assertFalse(rec.vouched)
+        self.assertEqual(rec.authorizes, set())
         self.assertEqual(rec.bindings, {bob})
         self.assertFalse(self.alice.standing(bob, BOOK))
 
@@ -82,7 +82,7 @@ class Vouching(Base):
         # Astra: a second new space with someone Alice invited is instant.
         (bob,) = self.account("bob", "b0")
         self.alice.invite(BOOK, "bob")
-        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)  # nothing new vouched
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob})  # already vouched
         self.assertTrue(self.alice.standing(bob, GARDEN))
 
     def test_member_met_another_way_waits_in_a_new_space(self):
@@ -111,7 +111,7 @@ class Vouching(Base):
     def test_declined_first_use_vouches_for_nothing(self):
         self.account("bob", "b0")
         self.w.add_device(B("bob", "m"))  # a second root
-        self.assertFalse(self.alice.invite(BOOK, "bob").vouched)
+        self.assertEqual(self.alice.invite(BOOK, "bob").authorizes, set())
 
 
 class Takeover(Base):
@@ -137,7 +137,7 @@ class Takeover(Base):
         (bob,) = self.account("bob", "b0")
         self.alice.invite(BOOK, "bob")
         m = self.take_over("bob")
-        self.assertTrue(self.dave.invite(GARDEN, "bob").vouched)
+        self.assertEqual(self.dave.invite(GARDEN, "bob").authorizes, {m})
         self.assertTrue(self.dave.standing(m, GARDEN))
         self.w.admit(BOOK, "dave")
         self.assertFalse(self.dave.standing(m, BOOK))
@@ -151,14 +151,14 @@ class Takeover(Base):
         m = self.take_over("bob")
         self.assertTrue(self.dave.accepted(m))
         self.w.now += 24
-        self.assertFalse(self.dave.invite(GARDEN, "bob").vouched)
+        self.assertEqual(self.dave.invite(GARDEN, "bob").authorizes, set())
         self.assertFalse(self.dave.standing(m, GARDEN))
 
     def test_inviter_who_knew_the_account_holds(self):
         (bob,) = self.account("bob", "b0")
         self.assertTrue(self.alice.accepted(bob))
         m = self.take_over("bob")
-        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, set())
         self.assertFalse(self.alice.standing(m, GARDEN))
 
     def test_limitation_inviter_who_never_met_the_account_grants_at_once(self):
@@ -190,8 +190,9 @@ class PendingInvites(Base):
         bob = self.w.add_device(B("bob", "b0"))
         self.assertTrue(self.alice.standing(bob, BOOK))
         capture = self.w.invites[-1]
-        self.assertTrue(capture.captures and capture.vouched)
+        self.assertTrue(capture.captures)
         self.assertEqual(capture.bindings, {bob})
+        self.assertEqual(capture.authorizes, {bob})
 
     def test_expired_pending_invite_captures_nothing(self):
         self.alice.invite(BOOK, "bob")
@@ -229,6 +230,44 @@ class PendingInvites(Base):
         self.assertFalse(self.dave.standing(bob, BOOK))
 
 
+class NoRetroactiveAuthorization(Base):
+    """Astra's third review: a later vouch must never extend what an older,
+    completed invite authorized."""
+
+    def test_laptop_vouch_does_not_reach_the_phones_older_invite(self):
+        a1 = InviterClient(self.w, self.w.add_device(B("alice", "a1")))
+        self.w.approve(self.alice.own, a1.own)
+        self.alice.pair(a1.own)
+        a1.pair(self.alice.own)
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.alice.accepted(bob))
+        self.assertEqual(self.alice.invite(BOOK, "bob").authorizes, set())
+        m = self.take_over("bob")
+        self.assertFalse(self.alice.standing(m, BOOK))  # the phone holds
+        self.assertEqual(a1.invite(GARDEN, "bob").authorizes, {m})
+        self.assertTrue(a1.standing(m, GARDEN))  # the remaining exposure
+        self.assertFalse(a1.standing(m, BOOK))
+        self.assertFalse(self.alice.standing(m, GARDEN))  # the phone never vouched for m
+
+    def test_expired_pending_invite_is_not_reopened_by_a_later_vouch(self):
+        self.alice.invite(BOOK, "bob")
+        self.w.now += PENDING_INVITE_TTL
+        m = self.w.add_device(B("bob", "m"))
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {m})
+        self.assertTrue(self.alice.standing(m, GARDEN))
+        self.assertFalse(self.alice.standing(m, BOOK))
+
+    def test_later_invite_authorizes_only_listed_vouched_devices(self):
+        # A device Bob links after the second invite still inherits through
+        # approval; one Alice met some other way is never authorized.
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(bob, b1)
+        self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob})
+        self.assertTrue(self.alice.standing(b1, GARDEN))
+
+
 class DurableInvites(Base):
     def test_failed_write_retries_the_vouched_record(self):
         # Astra: pinning before a failed write must not turn the retry into
@@ -236,7 +275,7 @@ class DurableInvites(Base):
         (bob,) = self.account("bob", "b0")
         self.w.fail_writes = True
         rec = self.alice.invite(BOOK, "bob")
-        self.assertTrue(rec.vouched)
+        self.assertEqual(rec.authorizes, {bob})
         self.assertFalse(self.w.eligible("bob", BOOK))
         self.assertFalse(self.alice.standing(bob, BOOK))
         self.assertIs(self.alice.invite(BOOK, "bob"), rec)  # the same prepared record

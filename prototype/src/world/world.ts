@@ -32,17 +32,19 @@ export type TraceOp =
 
 export type InviteOp = {
   op: "invite"; by: TraceBinding; space: string; account: string; bindings: TraceBinding[];
-  vouched: boolean; pending: boolean; captures: boolean; published: boolean;
+  authorizes: TraceBinding[]; pending: boolean; captures: boolean; published: boolean;
 };
 
 /** Ground truth about one published invite record. `firstMet`: the inviting
  * installation had no pin for the account when it made the record; `devices`
- * are the device IDs it vouched for; `admits`: the account was not a member
- * of the space when it was published; `seq`: when the record was made;
+ * are the device IDs it first met through this record (newly vouched);
+ * `authorizes`: the device IDs the record authorizes in its space; `admits`:
+ * the account was not a member of the space when it was published; `seq`:
+ * when the record was made, `publishedSeq` when it was published;
  * `captures`: the rkey of the pending record a capture completes. */
 export type InviteFact = {
-  space: string; inviter: Did; device: string; account: Did; firstMet: boolean; devices: string[]; admits: boolean;
-  pending: boolean; rkey: string; captures: string | null; at: number; seq: number;
+  space: string; inviter: Did; device: string; account: Did; firstMet: boolean; devices: string[]; authorizes: string[];
+  admits: boolean; pending: boolean; rkey: string; captures: string | null; at: number; seq: number; publishedSeq: number;
 };
 
 /** Ground truth for the disclosure check: who really controls each device. */
@@ -122,7 +124,7 @@ export class World implements Network {
     const r = e.record;
     const op: InviteOp = {
       op: "invite", by: tb(e.by), space: e.space, account: r.account.replace("did:plc:", ""), bindings: r.bindings.map(tb),
-      vouched: r.vouched, pending: r.pending, captures: r.captures !== null, published: e.published,
+      authorizes: r.authorizes.map(tb), pending: r.pending, captures: r.captures !== null, published: e.published,
     };
     this.trace?.push(e.stage === "attempt" ? op : { op: "flush", by: tb(e.by), abandoned: e.abandoned, published: e.published, invite: op });
     const what = r.captures ? "captured the pending invite of" : r.pending ? "invited (pending)" : "invited";
@@ -133,10 +135,10 @@ export class World implements Network {
     const admits = r.captures === null && !this.host.membership(e.space, r.account)?.eligible;
     this.provenance.invites.push({
       space: e.space, inviter: e.by.account, device: e.by.device.deviceId, account: r.account, firstMet: e.firstMet,
-      devices: e.vouched.map((b) => b.device.deviceId), admits, pending: r.pending, rkey: e.rkey, captures: r.captures,
-      at: this.t, seq: this.invitesMade.get(e.rkey) ?? this.tick(),
+      devices: e.vouched.map((b) => b.device.deviceId), authorizes: r.authorizes.map((b) => b.device.deviceId), admits, pending: r.pending, rkey: e.rkey, captures: r.captures,
+      at: this.t, seq: this.invitesMade.get(e.rkey) ?? this.tick(), publishedSeq: this.tick(),
     });
-    this.note(`${label(e.by)} ${what} ${r.account} to ${this.host.spaceName(e.space)}${r.vouched ? `, vouching for ${r.bindings.length} device(s)` : ""}`);
+    this.note(`${label(e.by)} ${what} ${r.account} to ${this.host.spaceName(e.space)}${r.authorizes.length ? `, authorizing ${r.authorizes.length} device(s)` : ""}`);
   }
 
   now(): number {

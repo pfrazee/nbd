@@ -6,10 +6,10 @@
 // rather than a shared world.
 //
 // Under the inviters policy (proposal-inviters.md) it also keeps grant
-// standing's bases, following InviterClient in model/nbd_trust.py: vouched
-// bindings, the spaces its own account admitted each account to, the
-// approver that accepted each binding, a first-contact hold per binding,
-// and pending invites.
+// standing's bases, following InviterClient in model/nbd_trust.py: the
+// bindings its own account's published records authorize per space, vouched
+// bindings (what a new record may authorize), the approver that accepted
+// each binding, a first-contact hold per binding, and pending invites.
 
 import { verify } from "./crypto";
 import { type Snapshot, recordsIn } from "./repo";
@@ -62,12 +62,14 @@ export type TrustState = {
   notices: Notice[];
   startOver: StartOver | null;
   // Grant standing's bases, kept only under the inviters policy.
+  /** space -> IDs of bindings a published invite or capture record of this
+   * installation's own account authorizes there. Rule 1 standing. */
+  authorized: Map<string, Set<string>>;
   /** binding ID -> the space of the invite through which this installation
-   * first met it. A vouched binding has standing in every space in
-   * `admitted` for its account. */
+   * first met it. Only decides what a new record may authorize. */
   vouched: Map<string, string>;
   /** account -> spaces this installation's account published an invite
-   * record admitting it to. */
+   * record admitting it to (for display; it grants nothing). */
   admitted: Map<Did, Set<string>>;
   /** pending invite record rkey -> the pending invite. */
   pending: Map<string, PendingInvite>;
@@ -81,7 +83,7 @@ export function emptyTrust(): TrustState {
   return {
     accepted: new Map(), revoked: new Map(), holds: new Map(), candidatesSeen: new Map(), views: new Map(),
     approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [], startOver: null,
-    vouched: new Map(), admitted: new Map(), pending: new Map(), approvers: new Map(), fcHolds: new Map(),
+    authorized: new Map(), vouched: new Map(), admitted: new Map(), pending: new Map(), approvers: new Map(), fcHolds: new Map(),
   };
 }
 
@@ -97,6 +99,7 @@ export function cloneTrust(t: TrustState): TrustState {
     alarms: [...t.alarms],
     notices: [...t.notices],
     startOver: t.startOver && { list: t.startOver.list && new Map(t.startOver.list), done: t.startOver.done },
+    authorized: new Map([...t.authorized].map(([s, ids]) => [s, new Set(ids)])),
     vouched: new Map(t.vouched),
     admitted: new Map([...t.admitted].map(([d, s]) => [d, new Set(s)])),
     pending: new Map([...t.pending].map(([k, p]) => [k, { ...p }])),
@@ -195,7 +198,7 @@ export class Trust {
     if (a.binding.account === this.own.account) return "own";
     if (a.evidence === "re-enrolled") return "re-enrolled";
     if ((st.fcHolds.get(fcKey(a.binding))?.credited ?? 0) >= REENROLL_HOLD) return "held";
-    if (st.vouched.has(id) && st.admitted.get(a.binding.account)?.has(space)) return "vouched";
+    if (st.authorized.get(space)?.has(id)) return "authorized";
     const signer = st.approvers.get(id);
     const via = signer === undefined ? null : this.source(signer, space, seen);
     return via && `approved by ${label(st.accepted.get(signer!)!.binding)} (${via})`;
@@ -438,6 +441,14 @@ export class Trust {
     if (!this.state.vouched.has(bindingId(b))) this.state.vouched.set(bindingId(b), space);
   }
 
+  /** A published record of this installation's own account authorizes `b`
+   * in `space`. */
+  authorize(space: string, b: Binding): void {
+    const st = this.state;
+    if (!st.authorized.has(space)) st.authorized.set(space, new Set());
+    st.authorized.get(space)!.add(bindingId(b));
+  }
+
   /** This installation's account published an invite record admitting
    * `account` to `space`. */
   admit(account: Did, space: string): void {
@@ -452,21 +463,27 @@ export class Trust {
       this.state.pending.set(rkey, { space, account, issuer, credited: 0, checkpoint: this.localNow(), done: false });
   }
 
-  /** Take the vouch in an invite record from this installation's own
-   * account, as a pin copied by pairing: only for an account it has never
-   * pinned, so it never ends a hold already running here. Presence is
-   * checked by the next observation of the account. Returns whether it
-   * pinned anything. */
+  /** Take the authorization in an invite or capture record from this
+   * installation's own account. If it never pinned the account, it pins the
+   * authorized bindings as vouched, like a pin copied by pairing (presence
+   * is checked by the next observation). If it already pins the account, it
+   * takes the authorization only for bindings it already holds as vouched,
+   * so a record never ends a hold running here. Returns whether it pinned
+   * anything. */
   adoptInvite(rec: Invite): boolean {
-    if (!rec.vouched || this.knew(rec.account)) return false;
+    if (!rec.authorizes.length) return false;
     const st = this.state;
-    for (const b of rec.bindings) {
+    const fresh = !this.knew(rec.account);
+    for (const b of rec.authorizes) {
       if (b.account !== rec.account) continue;
-      st.accepted.set(bindingId(b), { binding: b, evidence: `invited by ${label(rec.issuer)}` });
-      this.startFirstContactHold(b);
-      this.vouch(rec.space, b);
+      if (fresh) {
+        st.accepted.set(bindingId(b), { binding: b, evidence: `invited by ${label(rec.issuer)}` });
+        this.startFirstContactHold(b);
+        this.vouch(rec.space, b);
+      } else if (!st.vouched.has(bindingId(b))) continue;
+      this.authorize(rec.space, b);
     }
-    return this.knew(rec.account);
+    return fresh && this.knew(rec.account);
   }
 
   // ---- transfer ------------------------------------------------------------
@@ -497,11 +514,17 @@ export class Trust {
         const mine = st.fcHolds.get(id);
         st.fcHolds.set(id, { credited: Math.max(h.credited, mine?.credited ?? 0), checkpoint: now });
       }
-      // A vouch carries only to an installation with no pin for the account.
+      // A vouch carries only to an installation with no pin for the account,
+      // and an authorization only for a binding vouched here.
       for (const [id, space] of other.vouched) {
         const b = other.accepted.get(id)?.binding;
         if (b && !knew.has(b.account)) this.vouch(space, b);
       }
+      for (const [space, ids] of other.authorized)
+        for (const id of ids) {
+          const b = other.accepted.get(id)?.binding;
+          if (b && st.vouched.has(id)) this.authorize(space, b);
+        }
       for (const [d, spaces] of other.admitted) for (const s of spaces) this.admit(d, s);
       // Pending invites transfer as credited time; only their issuing device
       // may ever capture them.
