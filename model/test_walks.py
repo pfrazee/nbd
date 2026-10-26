@@ -377,16 +377,16 @@ class InviterWalk(Walk):
     Extra invariants, checked against the walk's own record of each client's
     first contacts rather than client state:
 
-    - A published invite record authorizes only bindings some own client
-      accepted on first use in the step it first met the account, and that
-      step was its invite of the account, or its first contact within
-      PENDING_INVITE_TTL of its pending invite of a device-less account.
-    - A client's vouched bindings come only from its own first contact
-      through an invite or capture, or from a published own record that
-      authorizes them, adopted while it had never pinned the account.
+    - A published invite record authorizes only bindings that descend, by
+      persisted approval, from ones some own client accepted on first use
+      (so never a re-enrolled binding).
+    - A client's first-contact roots come only from its own first use, or
+      from a published own record or import adopted while it had never
+      pinned the account.
     - A binding is authorized in a space only if a published own record for
-      that space authorizes it, and only if the client holds it as vouched:
-      a later vouch never extends an earlier record (Astra's third review).
+      that space authorizes it, and only if it is in the client's own
+      first-contact lineage: a later first contact never extends an earlier
+      record (Astra's third review).
     - Vouches and authorizations are never lost. No invite record is
       published for an account already a member of the space.
     - First-contact credit never exceeds real time since any installation
@@ -448,7 +448,7 @@ class InviterWalk(Walk):
 
     def snapshot(self, c) -> object:
         st = c.state
-        return (set(st.vouched), {sp: set(v) for sp, v in st.authorized.items()}, dict(st.fc_holds),
+        return (set(st.first_met), {sp: set(v) for sp, v in st.authorized.items()}, dict(st.fc_holds),
                 len(self.world.invites))
 
     def _check(self, i, c, before, synced, imported, queried) -> Optional[str]:
@@ -480,38 +480,36 @@ class InviterWalk(Walk):
             for rec in w.invites[self.seen_invites:]:
                 firsts = set()
                 for f in self.first:
-                    kind, got = f.get(rec.account, ("", frozenset()))
-                    if kind in ("invite", "capture"):
-                        firsts |= got
+                    firsts |= f.get(rec.account, ("", frozenset()))[1]
                 approvers = {}
                 for cl in self.clients:
                     approvers.update(cl.state.approvers)
                 if rec.inviter == "alice" and not all(
                         _approval_ancestors(approvers, b) & firsts for b in rec.authorizes):
-                    return f"invite record {rec} authorizes devices not first met through an invite"
+                    return f"invite record {rec} authorizes devices no own client met on first use"
             if (act[0] == "invite" and self.invite_rejected
                     and any(r.space == act[3] and r.account == act[2] and not r.captures
                             for r in w.invites[self.seen_invites:])):
                 return f"published an invite for {act[2]}, already a member of {act[3]}"
             self.seen_invites = len(w.invites)
         own = [r for r in w.invites if r.inviter == c.own.account]
-        if not vouched0 <= st.vouched:
-            return "vouches lost"
-        for b in st.vouched - vouched0:
+        if not vouched0 <= st.first_met:
+            return "first-contact roots lost"
+        for b in st.first_met - vouched0:
             kind, firsts = self.first[i].get(b.account, ("", frozenset()))
-            mine = b.account not in knew and kind in ("invite", "capture") and b in firsts
+            mine = b.account not in knew and b in firsts
             adopted = b.account not in knew and (
                 any(b in r.authorizes for r in own)
-                or (imported is not None and b in imported.vouched))
+                or (imported is not None and b in imported.first_met))
             if not (mine or adopted):
-                return f"vouched {b} neither first met through an invite nor adopted unpinned"
+                return f"first-contact root {b} neither met on first use nor adopted unpinned"
         for sp, bs in st.authorized.items():
             if not authorized0.get(sp, set()) <= bs:
                 return f"authorizations lost in {sp}"
             for b in bs - authorized0.get(sp, set()):
                 if not any(r.space == sp and b in r.authorizes for r in own):
                     return f"authorized {b} in {sp} with no own record for {sp} authorizing it"
-                if not c._vouched_line(b):
+                if not c._first_contact_line(b):
                     return f"authorized {b} in {sp} though it is not vouched here"
         for b, (credited, _ck) in st.fc_holds.items():
             if credited > w.now - self.first_accepted[b] + EPS:

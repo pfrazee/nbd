@@ -180,8 +180,11 @@ export function inviters(w: World, uri: string): Map<string, string> {
 }
 
 /** The day this installation will share `uri`'s key with `account`, if it
- * is holding some of the account's live devices on first contact there. */
+ * is holding the account's reset, or some of its live devices on first
+ * contact there. */
 export function shareDay(me: Installation, uri: string, account: string): string | undefined {
+  const reset = me.holdRemaining(account);
+  if (reset !== null) return weekday(me.localNow() + reset - me.clockOffset);
   const left = me.trust.live(account).filter((b) => !me.trust.standing(b, uri))
     .map((b) => me.trust.firstContactRemaining(b)).filter((x): x is number => x !== null);
   if (!left.length) return undefined;

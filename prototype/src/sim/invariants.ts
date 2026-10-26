@@ -5,17 +5,16 @@
 //
 // Under the inviters policy it also checks grant standing
 // (device-enrollment.md#grant-standing): every accepted binding starts its own first-contact
-// hold, credited no faster than real time and frozen once revoked; a vouch
-// comes only from an invite or capture record its account made on first
-// meeting the account, reaching only installations that had not pinned it
-// before; an admitted space only from an invite record that admitted the
+// hold, credited no faster than real time and frozen once revoked; a root of
+// its first-contact lineage is added only for an account it had never
+// pinned; an admitted space only from an invite record that admitted the
 // account; a capture only from the device that made the pending invite;
-// every binding a published record authorizes was first met through it, or
-// vouched for its maker when it was made, or linked from one that was; each authorization an installation
-// holds traces to a published own record for that space naming the binding,
-// which it holds as vouched; and new standing is explained by such an
-// authorization, an approval from a binding with standing there, or an
-// elapsed hold.
+// every binding a published record authorizes, or an approval ancestor of
+// it, appeared before the record's maker first knew the account (a first
+// contact, not a reset); each authorization an installation holds traces to
+// a published own record for that space naming the binding, which is in its
+// lineage; and new standing is explained by such an authorization, an
+// approval from a binding with standing there, or an elapsed hold.
 
 import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
@@ -33,7 +32,7 @@ type Snap = {
   imports: number;
   // Inviters policy only.
   knew: Set<string>;
-  vouched: Set<string>; // binding IDs
+  lineage: Set<string>; // lineage root binding IDs
   admitted: Set<string>; // `${account}|${space}`
   authorized: Set<string>; // `${space}|${binding ID}`
   fc: Map<string, number>; // binding ID -> first-contact credit
@@ -47,7 +46,7 @@ function snap(i: Installation, spaces: string[]): Snap {
     for (const [id, a] of st.accepted) if (i.trust.standing(a.binding, s)) standing.add(`${s}|${id}`);
   return {
     knew: new Set([...st.accepted.values()].map((a) => a.binding.account)),
-    vouched: new Set(st.vouched.keys()),
+    lineage: new Set(st.lineage),
     admitted: new Set([...st.admitted].flatMap(([d, ss]) => [...ss].map((s) => `${d}|${s}`))),
     authorized: new Set([...st.authorized].flatMap(([s, ids]) => [...ids].map((id) => `${s}|${id}`))),
     fc: new Map([...st.fcHolds].map(([id, h]) => [id, h.credited])),
@@ -113,20 +112,15 @@ export class InvariantMonitor {
       const p = facts.find((x) => x.rkey === f.captures);
       if (!p || p.device !== f.device) out.push(`${f.inviter}/${f.device.slice(0, 6)} captured a pending invite ${p ? `made by ${p.device.slice(0, 6)}` : "it never published"}`);
     }
-    // A record authorizes only devices first met through it, or vouched for
-    // its maker when it was made (first met through an earlier record of the
-    // account, published or not, that its maker knew of), or linked by
-    // approval from such a device.
+    // A record authorizes only devices in its maker's first-contact lineage:
+    // the device, or an approval ancestor of it, appeared before the maker
+    // first knew the account, so the maker met it as a first contact.
     for (const f of facts.slice(this.factsSeen)) {
       const maker = [...this.world.installations.values()].find((i) => i.binding.device.deviceId === f.device);
       const knew = (maker && this.knownSince.get(maker.id)?.get(f.account)) ?? Infinity;
-      for (const d of f.authorizes) {
-        if (f.devices.includes(d)) continue;
-        const line = approvalAncestors(this.world, d);
-        if (!this.world.provenance.prepared.some((g) => g.inviter === f.inviter && g.account === f.account && g.firstMet
-          && g.devices.some((m) => line.has(m)) && g.seq < f.seq && knew > g.seq))
-          out.push(`${f.inviter}/${f.device.slice(0, 6)}'s invite to ${f.space} authorizes ${d.slice(0, 6)}, which was not vouched for it`);
-      }
+      for (const d of f.authorizes)
+        if (![...approvalAncestors(this.world, d)].some((m) => (this.world.provenance.publishedSeq.get(m) ?? Infinity) < knew))
+          out.push(`${f.inviter}/${f.device.slice(0, 6)}'s invite to ${f.space} authorizes ${d.slice(0, 6)}, which its maker didn't meet as a first contact`);
     }
     this.factsSeen = facts.length;
     if (this.world.policy === "inviters") this.noteKnown();
@@ -258,21 +252,16 @@ export class InvariantMonitor {
       if (old !== undefined && h.credited < old - EPS) out.push(`first-contact credit for ${label(a.binding)} fell`);
       if (old !== undefined && before!.revoked.has(id) && h.credited > old + EPS) out.push(`first-contact hold for revoked ${label(a.binding)} kept crediting`);
     }
-    // A vouch comes only from an invite or capture record, by this account,
-    // made when the inviting installation first met the account and naming
-    // the device, and reaches only installations that first knew the account
-    // no earlier than that record was made.
+    // A lineage root is added only for an account this installation had
+    // never pinned before this step, and never for its own account or a
+    // re-enrolled binding.
     const since = this.knownSince.get(i.id);
-    for (const id of st.vouched.keys()) {
-      if (before?.vouched.has(id)) continue;
-      const b = st.accepted.get(id)?.binding;
-      if (!b) {
-        out.push(`vouched for ${id.slice(0, 8)} without accepting it`);
-        continue;
-      }
-      const knew = since?.get(b.account) ?? Infinity;
-      if (!w.provenance.prepared.some((v) => v.firstMet && v.inviter === i.did && v.account === b.account && v.devices.includes(b.device.deviceId) && knew > v.seq))
-        out.push(`vouched for ${label(b)} with no invite that first met ${b.account} before this installation knew it`);
+    for (const id of st.lineage) {
+      if (before?.lineage.has(id)) continue;
+      const a = st.accepted.get(id);
+      if (!a) out.push(`first-contact lineage root ${id.slice(0, 8)} not accepted`);
+      else if (a.binding.account === i.did || a.evidence === "re-enrolled") out.push(`${label(a.binding)} is a lineage root but ${a.binding.account === i.did ? "its own" : "re-enrolled"}`);
+      else if (since?.has(a.binding.account)) out.push(`made ${label(a.binding)} a lineage root though it already knew ${a.binding.account}`);
     }
     // An admitted space comes only from a published record that admitted the account.
     for (const [account, spaces] of st.admitted)
@@ -282,13 +271,12 @@ export class InvariantMonitor {
           out.push(`counts ${account} as admitted to ${space} with no invite record that admitted it`);
       }
     // An authorization traces to a published own record for that space
-    // naming the binding, which this installation holds as vouched or as
-    // linked from a vouched binding.
+    // naming the binding, which is in this installation's lineage.
     for (const [space, ids] of st.authorized)
       for (const id of ids) {
         if (before?.authorized.has(`${space}|${id}`)) continue;
         const b = st.accepted.get(id)?.binding;
-        if (!b || !this.vouchedLine(i, id)) out.push(`authorized ${b ? label(b) : id.slice(0, 8)} in ${space} without holding it, or a device that linked it, as vouched`);
+        if (!b || !this.lineageLine(i, id)) out.push(`authorized ${b ? label(b) : id.slice(0, 8)} in ${space} outside its first-contact lineage`);
         else if (!w.provenance.invites.some((v) => v.inviter === i.did && v.space === space && v.authorizes.includes(b.device.deviceId)))
           out.push(`authorized ${label(b)} in ${space} with no record of its account authorizing it there`);
       }
@@ -302,14 +290,14 @@ export class InvariantMonitor {
     return out;
   }
 
-  /** `id` is vouched here, or its verified approval chain reaches a vouched binding. */
-  private vouchedLine(i: Installation, id: string): boolean {
+  /** `id` is a lineage root here, or its verified approval chain reaches one. */
+  private lineageLine(i: Installation, id: string): boolean {
     const st = i.trust.state;
     const seen = new Set<string>();
     const walk = (x: string): boolean => {
       if (seen.has(x)) return false;
       seen.add(x);
-      if (st.vouched.has(x)) return true;
+      if (st.lineage.has(x)) return true;
       const b = st.accepted.get(x)?.binding;
       const aps = b ? st.views.get(b.account)?.approvals ?? [] : [];
       return aps.some((ap) => bindingId(ap.target) === x && st.accepted.has(bindingId(ap.signer)) && walk(bindingId(ap.signer)));

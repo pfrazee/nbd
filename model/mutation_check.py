@@ -70,9 +70,9 @@ MUTATIONS = {
         "        if any(b in v for v in st.authorized.values()):"),
     "a later vouch extends an older invite": (
         "        if b in st.authorized.get(space, set()):",
-        "        if b in st.vouched and any(r.inviter == self.own.account and r.space == space\n                                   and r.account == b.account for r in self.world.invites):"),
+        "        if b in st.first_met and any(r.inviter == self.own.account and r.space == space\n                                   and r.account == b.account for r in self.world.invites):"),
     "invites authorize unvouched devices": (
-        "frozenset(b for b in live if self._vouched_line(b)), pending)", "frozenset(live), pending)"),
+        "frozenset(b for b in live if self._first_contact_line(b)), pending)", "frozenset(live), pending)"),
     "captures authorize nothing": (
         "frozenset(met), frozenset(met),\n", "frozenset(met), frozenset(),\n"),
     "abandoning keeps the pending invite": (
@@ -91,21 +91,24 @@ MUTATIONS = {
     "authorizes ignores descendants": (
         "            seen.add(b)\n            b = st.approvers.get(b)", "            seen.add(b)\n            b = None"),
     "adoption requires a direct vouch": (
-        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if self._vouched_line(b))",
-        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if b in st.vouched)"),
+        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if self._first_contact_line(b))",
+        "            st.authorized.setdefault(rec.space, set()).update(\n                b for b in rec.authorizes if b in st.first_met)"),
     "imports require a direct vouch": (
-        "                st.authorized.setdefault(sp, set()).update(b for b in bs if self._vouched_line(b))",
-        "                st.authorized.setdefault(sp, set()).update(b for b in bs if b in st.vouched)"),
+        "                st.authorized.setdefault(sp, set()).update(b for b in bs if self._first_contact_line(b))",
+        "                st.authorized.setdefault(sp, set()).update(b for b in bs if b in st.first_met)"),
     "imports restore pending invites": (
         "            st.abandoned |= other.abandoned\n            for x, (space, _cr, _ck) in list(st.pending.items()):\n                if (x, space) in st.abandoned:\n                    del st.pending[x]\n",
         "            st.pending.update(other.pending)\n"),
     "pinned installations adopt any authorization": (
-        "                b for b in rec.authorizes if self._vouched_line(b))", "                b for b in rec.authorizes)"),
-    "known account vouched": (
-        "        if not knew:\n            met =", "        if True:\n            met ="),
+        "                b for b in rec.authorizes if self._first_contact_line(b))", "                b for b in rec.authorizes)"),
+    "only invites make first-contact roots": (
+        "        st.first_met |= met  # every first contact can be authorized by a later invite\n", ""),
+    "invites authorize a reset's devices": (
+        "            if b in st.first_met:\n                return True",
+        "            if b in st.first_met or st.accepted.get(b) == \"re-enrolled\":\n                return True"),
     "imported vouch ends a hold": (
-        "                if b.account not in knew:\n                    st.vouched.add(b)",
-        "                if True:\n                    st.vouched.add(b)"),
+        "                if b.account not in knew:\n                    st.first_met.add(b)",
+        "                if True:\n                    st.first_met.add(b)"),
     "invite record ends a hold": (
         "            if not self._knew(rec.account):\n                for b in rec.authorizes:",
         "            if True:\n                for b in rec.authorizes:"),

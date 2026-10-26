@@ -101,19 +101,23 @@ export function bobInstallsAndJoins(w: World, c: C): void {
   w.settle();
 }
 
-/** Alice and Carol met as fellow members of Dave's Pottery, not through an
- * invite, a day ago. */
-export function metInPottery(w: World, c: C): void {
+/** Alice and Carol met in Dave's Pottery; then Carol lost her phone and
+ * started over on a new one, and a day has passed. */
+export function carolResetYesterday(w: World, c: C): void {
   const alice = w.account("alice");
   c.i.iphone = w.install(alice, "iPhone");
-  c.i.carol = w.install(w.account("carol"), "iPhone");
+  c.i.carolOld = w.install(w.account("carol"), "iPhone");
   c.i.dave = w.install(w.account("dave"), "iPhone");
   c.space.pottery = c.i.dave.createSpace("Pottery");
-  for (const i of [c.i.iphone, c.i.carol]) {
+  for (const i of [c.i.iphone, c.i.carolOld]) {
     c.i.dave.invite(c.space.pottery, i.did);
     i.join(c.space.pottery);
   }
   w.settle();
+  w.advance(0.1);
+  w.setOnline(c.i.carolOld, false);
+  c.i.carol = w.install(c.i.carolOld.did, "New iPhone", { startOver: true });
+  w.finishStartOver(c.i.carol);
   w.advance(24);
 }
 

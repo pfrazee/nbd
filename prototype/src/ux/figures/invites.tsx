@@ -1,6 +1,6 @@
 // Figures for invites under grant standing (device-enrollment.md#grant-standing),
 // in both presentations: inviting someone before they install, and a new
-// space that waits for a first-contact hold.
+// space that waits because a member reset their devices.
 
 import { check } from "../../sim/scenario";
 import { PENDING_INVITE_TTL } from "../../protocol/trust";
@@ -9,7 +9,7 @@ import type { Figure } from "../figure";
 import { Phone } from "../frames";
 import { inviteStatus, memberList, shareDay, timeline, weekday } from "../model";
 import { MemberList, NewSpaceForm, Sheet } from "../screens";
-import { bobInstallsAndJoins, club, clubBeforeBobInstalls, gardenWithCarol, metInPottery } from "./cast";
+import { bobInstallsAndJoins, club, clubBeforeBobInstalls, gardenWithCarol, carolResetYesterday } from "./cast";
 
 export function invitingBeforeInstall(mode: Mode, number: number | string): Figure {
   const T = COPY[mode];
@@ -82,34 +82,37 @@ export function invitingBeforeInstall(mode: Mode, number: number | string): Figu
   };
 }
 
-export function newSpaceWaits(mode: Mode, number: number | string): Figure {
+export function newSpaceAfterReset(mode: Mode, number: number | string): Figure {
   const T = COPY[mode];
   const paranoid = mode === "paranoid";
   return {
-    id: `${mode}-new-space-waits`,
+    id: `${mode}-new-space-after-reset`,
     mode,
     number,
     title: "A new space that waits",
-    description: "Alice met Carol yesterday as a fellow member of Dave's Pottery, not through an invite. Alice's new space with Carol waits out the rest of her app's 3-day hold.",
-    setup: metInPottery,
+    description: "Alice met Carol in Dave's Pottery. Yesterday Carol lost her phone and started over on a new one. Alice's new space with Carol waits out the rest of her app's 3-day hold, as every space does after a reset.",
+    setup: carolResetYesterday,
     steps: [gardenWithCarol, (w) => w.advance(48)],
     panels: [
       {
         label: "New space", device: "Alice's phone", at: 0,
         view: () => <Phone><NewSpaceForm title="New space" name="Garden" members={["Carol"]} button="Create" /></Phone>,
-        caption: "Alice starts Garden with Carol, **whom she met in Pottery yesterday**.",
+        caption: "Alice starts Garden with Carol, **who reset her devices yesterday**.",
       },
       {
         label: "Not instant", device: "Alice's phone", at: 1,
         view: (w, c) => <Phone>{club(w, c, c.i.iphone, { note: T.shareFrom("Carol", shareDay(c.i.iphone, c.space.garden, c.i.carol.did) ?? "") }, c.space.garden)}</Phone>,
-        caption: "Alice's app is still holding Carol's phone from **first contact in Pottery**, and that invite didn't change it.",
-        expect: (_w, c) => [
-          check("Alice has no grant standing for Carol's phone", !c.i.iphone.trust.standing(c.i.carol.binding, c.space.garden)),
+        caption: paranoid
+          ? "Alice's app knew Carol, so her new phone is a **reset it is still holding**. A new invite never shortens that, so the space waits for the hold."
+          : "Alice's app knew Carol, so her new phone is a **reset it is still holding**. The new space waits for it.",
+        expect: (w, c) => [
+          check("Alice's app holds Carol's reset", !!c.i.iphone.trust.hold(c.i.carol.did)),
+          check("The invite authorized nothing", w.provenance.invites.at(-1)?.authorizes.length === 0),
           check("Her app shares from Friday", shareDay(c.i.iphone, c.space.garden, c.i.carol.did) === "Friday"),
         ],
       },
       {
-        label: "Carol waits", device: "Carol", at: 1,
+        label: "Carol waits", device: "Carol's new phone", at: 1,
         view: (w, c) => <Phone>{club(w, c, c.i.carol, { locked: paranoid ? T.waitingForInviter("Alice") : "Getting access…" }, c.space.garden)}</Phone>,
         caption: paranoid
           ? "**No unlock time** for Carol: only Alice's app can say when it will share. There's no \"let her in now\" button."
@@ -117,7 +120,7 @@ export function newSpaceWaits(mode: Mode, number: number | string): Figure {
         expect: (_w, c) => [check("Carol has no key", !c.i.carol.spaces.get(c.space.garden)?.key)],
       },
       {
-        label: "Friday", device: "Carol", at: 2,
+        label: "Friday", device: "Carol's new phone", at: 2,
         view: (w, c) => <Phone>{club(w, c, c.i.carol, {}, c.space.garden)}</Phone>,
         caption: "Alice's hold ends and **her app grants**.",
         expect: (_w, c) => [check("Carol holds the key, from Alice", c.i.carol.spaces.get(c.space.garden)?.keyFrom?.startsWith("did:plc:alice") ?? false)],

@@ -142,7 +142,9 @@ describe("invite records", () => {
     expect(m.after()).toEqual([]);
     expect(alice.trust.standingBasis(bob.binding, space)).toBe("authorized");
     expect(bob.spaces.get(space)?.keyFrom).toMatch(/^did:plc:alice\/.*phone|^did:plc:alice/);
-    expect(tablet.trust.standing(bob.binding, space)).toBe(false); // it pinned Bob first
+    // The tablet met Bob's phone as a fellow member, a first contact, so it
+    // takes the phone's authorization of it.
+    expect(tablet.trust.standingBasis(bob.binding, space)).toBe("authorized");
   });
 
   it("do not end a hold already running on an installation that pins the account", () => {
@@ -173,8 +175,8 @@ describe("invite records", () => {
     expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
     m.before();
     alice.importState(fresh.exportState());
-    expect(m.after().filter((v) => /vouch/.test(v))).toEqual([]);
-    expect(alice.trust.state.vouched.has(bindingId(attacker.binding))).toBe(false);
+    expect(m.after().filter((v) => /lineage|authoriz/.test(v))).toEqual([]);
+    expect(alice.trust.state.lineage.has(bindingId(attacker.binding))).toBe(false);
     expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
   });
 
@@ -234,6 +236,21 @@ describe("durable invites (Astra's fourth review)", () => {
       expect(alice.trust.standingBasis(bob.binding, s)).toBe("authorized");
       expect(bob.spaces.get(s)?.keyFrom).toMatch(/^did:plc:alice/);
     }
+  });
+
+  it("a retry publishes the exact bytes it saved", () => {
+    const w = new World("d4", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const space = alice.createSpace("Book club");
+    w.fault(alice, "reject", 1, COL.invite);
+    w.setOnline(alice, false); // no resend until she is back
+    alice.invite(space, bob.did);
+    const saved = alice.inviteOutbox[0].rkey;
+    w.install(bob.did, "tablet", { link: bob }); // Bob's devices change meanwhile
+    w.setOnline(alice, true);
+    expect(alice.inviteOutbox.length).toBe(0);
+    expect(w.provenance.invites.map((f) => f.rkey)).toEqual([saved]);
   });
 
   it("a replacement phone is authorized in the next space its owner is invited to", () => {
@@ -390,9 +407,9 @@ describe("goal check under inviters", () => {
     expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* with no record authorizing it there/);
   });
 
-  it("flags an inviter that first met the account before the invite", () => {
-    // Alice first meets the taken-over Bob in Book club, then vouches by
-    // mistake when inviting him to Garden.
+  it("flags an inviter that authorizes a reset it was holding", () => {
+    // Alice knew Bob before the takeover, so the attacker's device is a reset
+    // she must hold; by mistake her app accepts and authorizes it in Garden.
     const w = new World("g2", { policy: "inviters" });
     const m = new InvariantMonitor(w);
     const alice = w.install(w.account("alice"), "phone");
@@ -401,12 +418,16 @@ describe("goal check under inviters", () => {
     const club = carol.createSpace("Book club");
     carol.invite(club, bob.did);
     carol.invite(club, alice.did);
-    const attacker = w.takeover(bob.did);
     alice.join(club);
     w.settle();
+    const attacker = w.takeover(bob.did);
+    expect(alice.trust.hold(bob.did)).toBeTruthy();
     const garden = alice.createSpace("Garden");
     alice.invite(garden, bob.did);
-    alice.trust.authorize(garden, attacker.binding); // the bug
+    expect(w.provenance.invites.at(-1)?.authorizes).toEqual([]); // a reset is never authorized
+    // The bug:
+    alice.trust.state.accepted.set(bindingId(attacker.binding), { binding: attacker.binding, evidence: "bug" });
+    alice.trust.authorize(garden, attacker.binding);
     m.before();
     attacker.join(garden);
     w.settle();

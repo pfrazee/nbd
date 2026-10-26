@@ -7,7 +7,8 @@
 //
 // Under the inviters policy (device-enrollment.md#grant-standing) it also keeps grant
 // standing's bases, following InviterClient in model/nbd_trust.py: the
-// bindings its own account's published records authorize per space, vouched
+// bindings its own account's published records authorize per space, its
+// first-contact lineage
 // bindings (what a new record may authorize), the approver that accepted
 // each binding, a first-contact hold per binding, and pending invites.
 
@@ -65,9 +66,14 @@ export type TrustState = {
   /** space -> IDs of bindings a published invite or capture record of this
    * installation's own account authorizes there. Rule 1 standing. */
   authorized: Map<string, Set<string>>;
-  /** binding ID -> the space of the invite through which this installation
-   * first met it. Only decides what a new record may authorize. */
-  vouched: Map<string, string>;
+  /** IDs of the roots of this installation's first-contact lineage: bindings
+   * it accepted by first use, or adopted from an own record or an import for
+   * an account it had never pinned. A binding is in the lineage if it is a
+   * root or was accepted by approval, through any chain, from one (revoked
+   * or not). Decides what a new record may authorize, and what an adopted or
+   * imported authorization may cover. Re-enrolled and own bindings are never
+   * roots. */
+  lineage: Set<string>;
   /** account -> spaces this installation's account published an invite
    * record admitting it to (for display; it grants nothing). */
   admitted: Map<Did, Set<string>>;
@@ -87,7 +93,7 @@ export function emptyTrust(): TrustState {
   return {
     accepted: new Map(), revoked: new Map(), holds: new Map(), candidatesSeen: new Map(), views: new Map(),
     approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [], startOver: null,
-    authorized: new Map(), vouched: new Map(), admitted: new Map(), pending: new Map(), abandoned: new Set(), approvers: new Map(), fcHolds: new Map(),
+    authorized: new Map(), lineage: new Set(), admitted: new Map(), pending: new Map(), abandoned: new Set(), approvers: new Map(), fcHolds: new Map(),
   };
 }
 
@@ -104,7 +110,7 @@ export function cloneTrust(t: TrustState): TrustState {
     notices: [...t.notices],
     startOver: t.startOver && { list: t.startOver.list && new Map(t.startOver.list), done: t.startOver.done },
     authorized: new Map([...t.authorized].map(([s, ids]) => [s, new Set(ids)])),
-    vouched: new Map(t.vouched),
+    lineage: new Set(t.lineage),
     admitted: new Map([...t.admitted].map(([d, s]) => [d, new Set(s)])),
     pending: new Map([...t.pending].map(([k, p]) => [k, { ...p }])),
     abandoned: new Set(t.abandoned),
@@ -350,7 +356,10 @@ export class Trust {
     if (!this.knew(account)) {
       if (cand) for (const b of cand) {
         st.accepted.set(bindingId(b), { binding: b, evidence: "first use" });
-        if (this.policy === "inviters") this.startFirstContactHold(b);
+        if (this.policy === "inviters") {
+          this.startFirstContactHold(b);
+          st.lineage.add(bindingId(b));
+        }
       }
       return;
     }
@@ -440,20 +449,14 @@ export class Trust {
     if (b.account !== this.own.account && !this.state.fcHolds.has(k)) this.state.fcHolds.set(k, { credited: 0, checkpoint: this.localNow() });
   }
 
-  /** Record a vouch: this installation first met `b` through an invite by
-   * its own account to `space`. Kept from the first such invite. */
-  vouch(space: string, b: Binding): void {
-    if (!this.state.vouched.has(bindingId(b))) this.state.vouched.set(bindingId(b), space);
-  }
-
-  /** Whether `b` is vouched here, or was accepted by approval, directly or
-   * through a chain, from a binding that is (revoked or not): what a new
-   * invite may authorize, so a replacement phone stays authorized. */
-  descendsFromVouched(b: Binding): boolean {
+  /** Whether `b` is in this installation's first-contact lineage: a root,
+   * or accepted by approval, directly or through a chain, from a root
+   * (revoked or not), so a replacement phone stays in it. */
+  inLineage(b: Binding): boolean {
     const st = this.state;
     const seen = new Set<string>();
     for (let id: string | undefined = bindingId(b); id && !seen.has(id); id = st.approvers.get(id)) {
-      if (st.vouched.has(id)) return true;
+      if (st.lineage.has(id)) return true;
       seen.add(id);
     }
     return false;
@@ -489,12 +492,11 @@ export class Trust {
 
   /** Take the authorization in an invite or capture record from this
    * installation's own account. If it never pinned the account, it pins the
-   * authorized bindings as vouched, like a pin copied by pairing (presence
-   * is checked by the next observation). If it already pins the account, it
-   * takes the authorization only for bindings it holds as vouched or
-   * accepted by approval from one it does, so a record never ends a hold
-   * running here. Returns whether it pinned
-   * anything. */
+   * authorized bindings, like a pin copied by pairing, as roots of its
+   * first-contact lineage (presence is checked by the next observation). If
+   * it already pins the account, it takes the authorization only for
+   * bindings in its own first-contact lineage, so a record never ends a
+   * reset's hold running here. Returns whether it pinned anything. */
   adoptInvite(rec: Invite): boolean {
     if (!rec.authorizes.length) return false;
     const st = this.state;
@@ -504,8 +506,8 @@ export class Trust {
       if (fresh) {
         st.accepted.set(bindingId(b), { binding: b, evidence: `invited by ${label(rec.issuer)}` });
         this.startFirstContactHold(b);
-        this.vouch(rec.space, b);
-      } else if (!this.descendsFromVouched(b)) continue;
+        st.lineage.add(bindingId(b));
+      } else if (!this.inLineage(b)) continue;
       this.authorize(rec.space, b);
     }
     return fresh && this.knew(rec.account);
@@ -539,18 +541,18 @@ export class Trust {
         const mine = st.fcHolds.get(id);
         st.fcHolds.set(id, { credited: Math.max(h.credited, mine?.credited ?? 0), checkpoint: now });
       }
-      // A vouch carries only to an installation with no pin for the account.
-      for (const [id, space] of other.vouched) {
+      // Lineage roots carry only to an installation with no pin for the account.
+      for (const id of other.lineage) {
         const b = other.accepted.get(id)?.binding;
-        if (b && !knew.has(b.account)) this.vouch(space, b);
+        if (b && !knew.has(b.account)) st.lineage.add(id);
       }
-      // Approval evidence first, then an authorization only for a binding
-      // vouched here or linked from one that is.
+      // Approval evidence first, then an authorization only for a binding in
+      // this installation's first-contact lineage.
       for (const [t, s] of other.approvers) if (!st.approvers.has(t)) st.approvers.set(t, s);
       for (const [space, ids] of other.authorized)
         for (const id of ids) {
           const b = other.accepted.get(id)?.binding;
-          if (b && this.descendsFromVouched(b)) this.authorize(space, b);
+          if (b && this.inLineage(b)) this.authorize(space, b);
         }
       for (const [d, spaces] of other.admitted) for (const s of spaces) this.admit(d, s);
       // Pending invites never transfer; abandonments do.

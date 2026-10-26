@@ -71,13 +71,14 @@ class Vouching(Base):
         self.w.now += REENROLL_HOLD - 1
         self.assertFalse(self.dave.standing(bob, BOOK))
 
-    def test_inviting_a_known_account_vouches_for_nothing(self):
+    def test_inviting_an_account_met_another_way_authorizes_it(self):
         (bob,) = self.account("bob", "b0")
         self.assertTrue(self.alice.accepted(bob))
         rec = self.alice.invite(BOOK, "bob")
-        self.assertEqual(rec.authorizes, set())
+        self.assertEqual(rec.authorizes, {bob})
         self.assertEqual(rec.bindings, {bob})
-        self.assertFalse(self.alice.standing(bob, BOOK))
+        self.assertTrue(self.alice.standing(bob, BOOK))
+        self.assertFalse(self.alice.standing(bob, GARDEN))  # only where her account admitted him
 
     def test_vouch_follows_the_inviters_later_invites(self):
         # Astra: a second new space with someone Alice invited is instant.
@@ -86,14 +87,25 @@ class Vouching(Base):
         self.assertEqual(self.alice.invite(GARDEN, "bob").authorizes, {bob})  # already vouched
         self.assertTrue(self.alice.standing(bob, GARDEN))
 
-    def test_member_met_another_way_waits_in_a_new_space(self):
-        # Astra: Alice met Carol as a fellow member, not by inviting her.
+    def test_member_met_another_way_is_instant_in_a_new_space(self):
+        # Alice met Carol yesterday as a fellow member of Dave's space.
         (carol,) = self.account("carol", "c0")
         self.assertTrue(self.alice.accepted(carol))
+        self.w.now += 24
         self.alice.invite(GARDEN, "carol")
-        self.assertFalse(self.alice.standing(carol, GARDEN))
-        self.w.now += REENROLL_HOLD
         self.assertTrue(self.alice.standing(carol, GARDEN))
+
+    def test_new_space_waits_only_for_a_reset_the_inviter_knew(self):
+        # The one case that still waits: Carol, whom Alice knew, reset her
+        # devices; the new device is a re-enrollment candidate.
+        (carol,) = self.account("carol", "c0")
+        self.assertTrue(self.alice.accepted(carol))
+        self.w.now += REENROLL_HOLD
+        c1 = self.take_over("carol")
+        self.assertEqual(self.alice.invite(GARDEN, "carol").authorizes, set())
+        self.assertFalse(self.alice.standing(c1, GARDEN))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.alice.standing(c1, GARDEN))
 
     def test_no_invite_for_an_existing_member(self):
         (bob,) = self.account("bob", "b0")
@@ -145,15 +157,20 @@ class Takeover(Base):
         self.assertIsNone(self.dave.invite(BOOK, "bob"))  # Bob is already a member there
         self.assertFalse(self.dave.standing(m, BOOK))
 
-    def test_inviting_a_held_pin_does_not_end_its_hold(self):
-        # Dave met the taken-over Bob yesterday in another space; inviting
-        # him now is not Dave's first contact.
+    def test_limitation_inviting_a_held_first_contact_authorizes_it(self):
+        # Dave met the taken-over Bob yesterday in another space, then
+        # invites him into a new one: the same exposure as inviting a
+        # never-met account during a takeover. The other space still holds.
         (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
         m = self.take_over("bob")
+        self.w.admit(BOOK, "dave")
         self.assertTrue(self.dave.accepted(m))
         self.w.now += 24
-        self.assertEqual(self.dave.invite(GARDEN, "bob").authorizes, set())
-        self.assertFalse(self.dave.standing(m, GARDEN))
+        self.assertEqual(self.dave.invite(GARDEN, "bob").authorizes, {m})
+        self.assertTrue(self.dave.standing(m, GARDEN))
+        self.assertFalse(self.dave.standing(m, BOOK))
+        self.assertIsNone(self.dave.invite(BOOK, "bob"))
 
     def test_inviter_who_knew_the_account_holds(self):
         (bob,) = self.account("bob", "b0")
@@ -242,13 +259,33 @@ class NoRetroactiveAuthorization(Base):
         a1.pair(self.alice.own)
         (bob,) = self.account("bob", "b0")
         self.assertTrue(self.alice.accepted(bob))
-        self.assertEqual(self.alice.invite(BOOK, "bob").authorizes, set())
+        self.assertEqual(self.alice.invite(BOOK, "bob").authorizes, {bob})  # the original phone only
         m = self.take_over("bob")
         self.assertFalse(self.alice.standing(m, BOOK))  # the phone holds
+        # The laptop adopted the phone's Book club authorization of Bob's
+        # original phone, so it knew Bob too: the takeover is a reset there,
+        # and it holds everywhere, even in the space it now invites him to.
+        self.assertEqual(a1.invite(GARDEN, "bob").authorizes, set())
+        self.assertFalse(a1.standing(m, GARDEN))
+        self.assertFalse(a1.standing(m, BOOK))
+        self.assertFalse(self.alice.standing(m, GARDEN))
+
+    def test_laptop_that_never_met_bob_does_not_reach_the_phones_older_invite(self):
+        # Astra's third review, with the phone's record reaching the laptop
+        # only after the laptop's own first contact: a later first contact
+        # must not authorize the older Book club invite.
+        a1 = InviterClient(self.w, self.w.add_device(B("alice", "a1")))
+        self.w.approve(self.alice.own, a1.own)
+        self.alice.pair(a1.own)
+        a1.pair(self.alice.own)
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        book = self.w.invites.pop()  # not yet visible to the laptop
+        m = self.take_over("bob")
         self.assertEqual(a1.invite(GARDEN, "bob").authorizes, {m})
+        self.w.invites.insert(0, book)
         self.assertTrue(a1.standing(m, GARDEN))  # the remaining exposure
         self.assertFalse(a1.standing(m, BOOK))
-        self.assertFalse(self.alice.standing(m, GARDEN))  # the phone never vouched for m
 
     def test_expired_pending_invite_is_not_reopened_by_a_later_vouch(self):
         self.alice.invite(BOOK, "bob")
@@ -269,6 +306,8 @@ class NoRetroactiveAuthorization(Base):
         self.assertTrue(self.alice.standing(b1, GARDEN))
         (carol,) = self.account("carol", "c0")
         self.assertTrue(self.alice.accepted(carol))
+        self.w.now += REENROLL_HOLD
+        c1 = self.take_over("carol")  # a reset of an account Alice knew
         self.assertEqual(self.alice.invite(GARDEN, "carol").authorizes, set())
 
     def test_replacement_phone_is_authorized_in_the_next_space(self):
@@ -529,19 +568,31 @@ class Imports(Base):
         self.assertFalse(self.a1.standing(bob, BOOK))  # a1 met Bob first, as a first contact
         self.assertTrue(self.alice.standing(bob, BOOK))
 
-    def test_invite_record_does_not_end_a_running_hold(self):
+    def test_invite_record_authorizes_an_installation_that_met_the_device(self):
         (bob,) = self.account("bob", "b0")
         self.assertTrue(self.a1.accepted(bob))
         self.alice.invite(BOOK, "bob")
-        self.assertFalse(self.a1.standing(bob, BOOK))
+        self.assertTrue(self.a1.standing(bob, BOOK))
 
-    def test_imported_vouch_does_not_end_a_running_hold(self):
+    def test_invite_record_does_not_end_a_reenrollment_hold(self):
+        # a1 knew Bob before his reset; the phone, which never did, invites
+        # the attacker's device. a1 keeps holding the reset.
         (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.a1.accepted(bob))
+        m = self.take_over("bob")
+        self.assertFalse(self.a1.accepted(m))  # a re-enrollment candidate
+        self.assertEqual(self.alice.invite(BOOK, "bob").authorizes, {m})
+        self.assertFalse(self.a1.standing(m, BOOK))
+
+    def test_import_does_not_end_a_reenrollment_hold(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.a1.accepted(bob))
+        m = self.take_over("bob")
+        self.assertFalse(self.a1.accepted(m))
         self.alice.invite(BOOK, "bob")
         self.w.invites.clear()  # withheld by the PDS
-        self.assertTrue(self.a1.accepted(bob))
         self.a1.import_state(self.alice.export_state())
-        self.assertFalse(self.a1.standing(bob, BOOK))
+        self.assertNotIn(m, self.a1.state.authorized.get(BOOK, set()))
 
     def test_imported_vouch_reaches_unpinned_installation(self):
         (bob,) = self.account("bob", "b0")

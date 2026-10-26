@@ -161,14 +161,14 @@ let reinvited = false;
 const known: Scenario = {
   id: "inviters-known",
   policy: "inviters",
-  title: "15. Inviters: inviting a known account changes nothing",
-  summary: "An invite vouches only for devices the inviter meets for the first time through an invite. Inviting an account the inviter already pins, even one it is still holding, vouches for nothing, and an account that is already a member can't be invited again.",
+  title: "15. Inviters: inviting an account you already know",
+  summary: "An invite authorizes the devices in the inviter's first-contact lineage: devices it met as a first contact, however it met them. A reset of an account the inviter already knew is never in it, so that stays held; and an account that is already a member can't be invited again.",
   steps: [
     ...bookClub(["carol"]),
     takeover,
     {
       title: "Alice creates Garden and invites Bob",
-      narration: "Alice's app already pins Bob and is holding the attacker's device for re-enrollment. The invite record lists the Bob devices she currently accepts (none) and vouches for nothing. The attacker gets no Garden key.",
+      narration: "Alice's app knew Bob before the takeover, so the attacker's device is a reset it holds for re-enrollment, not a first contact. The invite record lists the Bob devices she currently accepts (none) and authorizes nothing. The attacker gets no Garden key.",
       run: (w, c) => {
         c.space.garden = c.inst.alicePhone.createSpace("Garden");
         c.inst.alicePhone.invite(c.space.garden, c.did.bob);
@@ -176,14 +176,14 @@ const known: Scenario = {
         w.settle();
       },
       expect: (w, c) => [
-        check("The invite vouched for nothing", lastInvite(w, c.inst.alicePhone)?.devices.length === 0),
+        check("The invite authorized nothing", lastInvite(w, c.inst.alicePhone)?.authorizes.length === 0),
         check("Alice still holds the attacker's device", !!c.inst.alicePhone.trust.hold(c.did.bob)),
         check("The attacker has no Garden key", !hasKey(c.inst.attacker, c.space.garden)),
       ],
     },
     {
       title: "Carol joins Book club, then invites Bob into her own space",
-      narration: "Carol first meets the attacker's device on joining Book club and holds it there. When she then invites Bob into Pottery, her app already pins him: the invite is not her first contact, so she holds him in Pottery too.",
+      narration: "Carol first meets the attacker's device on joining Book club, a first contact, and holds it there: she didn't invite Bob to Book club. When she invites Bob into her own Pottery, the device is in her first-contact lineage, so her invite authorizes it and she grants there at once. That is the same exposure as inviting someone you've never met during their takeover: Carol's only contact with Bob was the attacker's device.",
       run: (w, c) => {
         c.inst.alicePhone.invite(c.space.club, c.did.carol);
         c.inst.carolPhone.join(c.space.club);
@@ -195,9 +195,9 @@ const known: Scenario = {
       },
       expect: (w, c) => [
         check("Carol accepted the attacker's device on joining Book club", c.inst.carolPhone.trust.isAccepted(c.inst.attacker.binding)),
-        check("Carol's invite vouched for nothing", lastInvite(w, c.inst.carolPhone)?.devices.length === 0),
-        check("Carol has no standing for it in Pottery", !standing(c.inst.carolPhone, c.inst.attacker, c.space.pottery)),
-        check("The attacker has no Pottery key", !hasKey(c.inst.attacker, c.space.pottery)),
+        check("Carol holds it in Book club", !standing(c.inst.carolPhone, c.inst.attacker, c.space.club)),
+        check("Carol's invite authorized it", lastInvite(w, c.inst.carolPhone)?.authorizes.includes(c.inst.attacker.binding.device.deviceId) ?? false),
+        check("The attacker holds Pottery's key, from Carol", keyFrom(c.inst.attacker, c.space.pottery).startsWith("did:plc:carol")),
       ],
     },
     {
@@ -215,13 +215,13 @@ const known: Scenario = {
     },
     {
       title: "Two days later, Bob removes the attacker's device",
-      narration: "No member's hold ended, so no space's key reached the attacker.",
+      narration: "No member's hold ended, so neither Book club's key nor Garden's reached the attacker.",
       run: (w, c) => {
         w.advance(48);
         w.removeDevice(c.inst.attacker);
       },
       expect: (_w, c) => [
-        check("The attacker never got a key", ![c.space.club, c.space.garden, c.space.pottery].some((s) => hasKey(c.inst.attacker, s))),
+        check("The attacker never got Book club's or Garden's key", ![c.space.club, c.space.garden].some((s) => hasKey(c.inst.attacker, s))),
       ],
     },
   ],
@@ -590,12 +590,12 @@ const secondSpace: Scenario = {
 const fellowMember: Scenario = {
   id: "inviters-fellow-member",
   policy: "inviters",
-  title: "24. Inviters: a new space with someone you met as a member",
-  summary: "Alice met Carol as a fellow member of Dave's space, not through an invite. When Alice starts Garden with Carol, her app waits out the rest of its first-contact hold for Carol's phone.",
+  title: "24. Inviters: new spaces with someone you met as a member",
+  summary: "Alice met Carol as a fellow member of Dave's space. Carol's phone is in Alice's first-contact lineage, so a new space Alice starts with Carol is instant. Only a reset waits: after Carol starts over on a new phone, Alice's next new space with her waits out Alice's 3-day hold.",
   steps: [
     {
       title: "Dave invites Alice and Carol to Pottery",
-      narration: "Alice's and Carol's apps meet each other on joining and start first-contact holds for each other.",
+      narration: "Alice's and Carol's apps meet each other on joining: a first contact, so each is in the other's first-contact lineage, though neither invited the other to Pottery and each holds the other there.",
       run: (w, c) => {
         install(w, c, "alice", "carol", "dave");
         c.space.pottery = c.inst.davePhone.createSpace("Pottery");
@@ -605,11 +605,11 @@ const fellowMember: Scenario = {
         }
         w.settle();
       },
-      expect: (_w, c) => [check("Alice's app holds Carol's phone for 72 hours", near(left(c.inst.alicePhone, c.inst.carolPhone), REENROLL_HOLD))],
+      expect: (_w, c) => [check("Alice holds Carol's phone in Pottery", !standing(c.inst.alicePhone, c.inst.carolPhone, c.space.pottery))],
     },
     {
       title: "A day later, Alice creates Garden and invites Carol",
-      narration: "Alice's app already pins Carol, so the invite vouches for nothing, and her hold keeps running: \"Your device will share with Carol from Day 4.\"",
+      narration: "The invite authorizes Carol's phone, which Alice's app met as a first contact, so Garden is instant.",
       run: (w, c) => {
         w.advance(24);
         c.space.garden = c.inst.alicePhone.createSpace("Garden");
@@ -617,17 +617,41 @@ const fellowMember: Scenario = {
         c.inst.carolPhone.join(c.space.garden);
         w.settle();
       },
-      expect: (_w, c) => [
-        check("Alice has no standing for Carol's phone in Garden", !standing(c.inst.alicePhone, c.inst.carolPhone, c.space.garden)),
-        check("Carol has no Garden key", !hasKey(c.inst.carolPhone, c.space.garden)),
-        check("48 hours remain", near(left(c.inst.alicePhone, c.inst.carolPhone), 48)),
+      expect: (w, c) => [
+        check("The invite authorized Carol's phone", lastInvite(w, c.inst.alicePhone)?.authorizes.includes(c.inst.carolPhone.binding.device.deviceId) ?? false),
+        check("Carol holds Garden's key, from Alice", keyFrom(c.inst.carolPhone, c.space.garden).startsWith("did:plc:alice")),
+      ],
+    },
+    {
+      title: "Carol loses her phone and starts over",
+      narration: "She removes her old phone at her provider and installs on a new one. Alice's app knew Carol, so the new phone is a reset: it holds it for re-enrollment.",
+      run: (w, c) => {
+        w.setOnline(c.inst.carolPhone, false);
+        c.inst.carolNew = w.install(c.did.carol, "new-phone", { startOver: true });
+        w.finishStartOver(c.inst.carolNew);
+      },
+      expect: (_w, c) => [check("Alice holds Carol's new phone", !!c.inst.alicePhone.trust.hold(c.did.carol))],
+    },
+    {
+      title: "A day later, Alice creates Orchard and invites Carol",
+      narration: "A reset is never in the inviter's first-contact lineage, so the invite authorizes nothing and Orchard waits for the rest of Alice's hold: \"Your device will share with Carol from …\"",
+      run: (w, c) => {
+        w.advance(24);
+        c.space.orchard = c.inst.alicePhone.createSpace("Orchard");
+        c.inst.alicePhone.invite(c.space.orchard, c.did.carol);
+        c.inst.carolNew.join(c.space.orchard);
+        w.settle();
+      },
+      expect: (w, c) => [
+        check("The invite authorized nothing", lastInvite(w, c.inst.alicePhone)?.authorizes.length === 0),
+        check("Carol's new phone has no Orchard key", !hasKey(c.inst.carolNew, c.space.orchard)),
       ],
     },
     {
       title: "Two days later",
-      narration: "Alice's hold for Carol's phone ends, and her app grants.",
+      narration: "Alice's re-enrollment hold ends, and her app grants.",
       run: (w) => w.advance(48),
-      expect: (_w, c) => [check("Carol holds Garden's key, from Alice", keyFrom(c.inst.carolPhone, c.space.garden).startsWith("did:plc:alice"))],
+      expect: (_w, c) => [check("Carol's new phone holds Orchard's key, from Alice", keyFrom(c.inst.carolNew, c.space.orchard).startsWith("did:plc:alice"))],
     },
   ],
 };
@@ -636,7 +660,7 @@ const lateVouch: Scenario = {
   id: "inviters-late-vouch",
   policy: "inviters",
   title: "25. Inviters: a later vouch doesn't reach back",
-  summary: "Alice's phone knew Bob and invited him to Book club without vouching. After Bob's account is taken over, her laptop, which never met Bob, vouches for the attacker's device by inviting him to Garden. That vouch authorizes Garden only, not the phone's earlier Book club invite (Astra's third review).",
+  summary: "Alice's phone knew Bob only through a reset it waited out, so its invite of Bob to Book club authorized nothing. After Bob's account is taken over, her laptop, which never met Bob, meets the attacker's device as a first contact by inviting him to Garden. That authorizes Garden only, never the phone's earlier Book club invite (Astra's third review).",
   steps: [
     {
       title: "Alice links a laptop; Carol's Pottery introduces Alice's phone to Bob",
@@ -654,12 +678,30 @@ const lateVouch: Scenario = {
       expect: (_w, c) => [check("The laptop has never met Bob", !c.inst.aliceLaptop.trust.knew(c.did.bob))],
     },
     {
+      title: "Bob starts over on a new phone, and Alice's phone waits out the reset",
+      narration: "Alice's phone knew Bob, so it holds his new phone for 72 hours and then accepts it as re-enrolled, which is not a first contact.",
+      run: (w, c) => {
+        w.setOnline(c.inst.bobPhone, false);
+        c.inst.bobNew = w.install(c.did.bob, "new-phone", { startOver: true });
+        w.finishStartOver(c.inst.bobNew);
+      },
+      expect: (_w, c) => [check("Alice's phone holds Bob's new phone", !!c.inst.alicePhone.trust.hold(c.did.bob))],
+    },
+    {
+      title: "72 hours later",
+      narration: "The hold ends, and Alice's phone accepts Bob's new phone as re-enrolled.",
+      run: (w) => w.advance(72),
+      expect: (_w, c) => [
+        check("Alice's phone re-enrolled Bob's new phone", c.inst.alicePhone.trust.standingBasis(c.inst.bobNew.binding, "") === "re-enrolled"),
+      ],
+    },
+    {
       title: "Alice's phone invites Bob to Book club",
-      narration: "Her phone already pins Bob from Pottery, so the invite lists his phone and authorizes nothing.",
+      narration: "A re-enrolled device is not in the phone's first-contact lineage, so the invite lists Bob's new phone and authorizes nothing. Bob still gets the key: the phone may grant to a re-enrolled device anywhere.",
       run: (w, c) => {
         c.space.club = c.inst.alicePhone.createSpace("Book club");
         c.inst.alicePhone.invite(c.space.club, c.did.bob);
-        c.inst.bobPhone.join(c.space.club);
+        c.inst.bobNew.join(c.space.club);
         w.settle();
       },
       expect: (w, c) => [check("The invite authorizes nothing", lastInvite(w, c.inst.alicePhone)?.authorizes.length === 0)],

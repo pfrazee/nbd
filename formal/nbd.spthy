@@ -23,7 +23,8 @@ begin
  *                   while every accepted binding of its account was revoked.
  *   -D=UNSCOPED     rejected: a vouch gives standing in every space.
  *   -D=REINVITE     rejected: an invite of an account already a member counts.
- *   -D=RETRO        rejected: a vouch combines with invites made before it.
+ *   -D=RETRO        rejected: an invite authorizes bindings first used after
+ *                   it.
  */
 
 builtins: signing, asymmetric-encryption, hashing
@@ -214,7 +215,7 @@ rule InviteFirstUse:
     let t = <A, pt, pet> in
     [ !Acc(c, t), !Invite(c, S, A) ]
   --[ Vouched(c, t), Authorized(c, S, t), GainStanding(c, S, t, t), VouchOnce(c, t), UsesLive(c, t) ]->
-    [ !VouchedFor(c, t), !Standing(c, S, t, t) ]
+    [ !Standing(c, S, t, t) ]
 #endif
 #ifdef not PREINVITERS & UNSCOPED
 // The rejected form: a vouch gives standing in every space.
@@ -222,7 +223,7 @@ rule InviteFirstUse:
     let t = <A, pt, pet> in
     [ !Acc(c, t), !Invite(c, S, A) ]
   --[ Vouched(c, t), GainStanding(c, 'all', t, t), VouchOnce(c, t), UsesLive(c, t) ]->
-    [ !VouchedFor(c, t), !Standing(c, 'all', t, t) ]
+    [ !Standing(c, 'all', t, t) ]
 #endif
 
 #ifdef not PREINVITERS
@@ -243,21 +244,30 @@ restriction InviteAdmits:
 #endif
 
 #ifdef not PREINVITERS & not UNSCOPED
-// A later invite authorizes, in its space, the bindings already vouched for
-// when it is made. An invite's record never extends to a binding vouched
-// for after it (restriction InviteAfterVouch).
-rule AuthorizeVouched:
+// A later invite authorizes, in its space, each binding of the account the
+// client accepted by first use before the invite was made (restrictions
+// AuthorizeOnlyFirstUsed and InviteAfterFirstUse). A binding accepted
+// through a re-enrollment hold is never authorized this way, and an
+// invite's record never extends to a binding first used after it.
+rule AuthorizeFirstUsed:
     let t = <A, pt, pet> in
-    [ !VouchedFor(c, t), !Invite(c, S, A) ]
+    [ !Acc(c, t), !Invite(c, S, A) ]
   --[ Authorized(c, S, t), AuthorizedLater(c, S, t), GainStanding(c, S, t, t) ]->
     [ !Standing(c, S, t, t) ]
 #endif
 
-#ifdef not PREINVITERS & not UNSCOPED & not RETRO
-// The admission behind a later authorization follows the vouch.
-restriction InviteAfterVouch:
+#ifdef not PREINVITERS & not UNSCOPED
+restriction AuthorizeOnlyFirstUsed:
   "All c S A pt pet #x. AuthorizedLater(c, S, <A, pt, pet>) @ x ==>
-     Ex X #v #a. Vouched(c, <A, pt, pet>) @ v & AdmittedBy(S, A, X) @ a & v < a"
+     Ex #f. AcceptFirstUse(c, A, <A, pt, pet>) @ f & f < x"
+#endif
+
+#ifdef not PREINVITERS & not UNSCOPED & not RETRO
+// The admission behind a later authorization follows the binding's first
+// use.
+restriction InviteAfterFirstUse:
+  "All c S A pt pet #x. AuthorizedLater(c, S, <A, pt, pet>) @ x ==>
+     Ex X #f #a. AcceptFirstUse(c, A, <A, pt, pet>) @ f & AdmittedBy(S, A, X) @ a & f < a"
 #endif
 
 #ifdef not PREINVITERS
@@ -550,15 +560,34 @@ lemma inviters_executable_held_grant:
      & not (Ex a b x #c. HoldStart(a, b, x) @ c)
      & not (Ex a x #c. Revoke(a, x) @ c)"
 
+// I3b. A grant on a later invite alone: a member that first met the account
+// by syncing, not through an invite, later invites it to a space and grants
+// that space's key, with no vouch, no hold, and no compromise.
+lemma inviters_executable_later_invite_grant:
+  exists-trace
+  "Ex iss S k r #x #g #a. AuthorizedLater(iss, S, r) @ x
+     & Grant(iss, S, k, r) @ g & AcceptKey(r, S, k, iss) @ a
+     & (All a b c d #c. Grant(a, b, c, d) @ c ==> #c = #g)
+     & not (Ex x y #c. Vouched(x, y) @ c)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex x y #c. FirstContactHoldDone(x, y) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+
 // I4 (2b). First use alone does not justify a grant to an encryption key
-// the adversary created. The issuer vouched for that binding and an invite
-// of the binding's account to this space authorized it, no earlier than the
-// vouch; completed a first-contact or re-enrollment hold on it; or accepted
-// it through an approval by a compromised or adversary signing key. With
-// 2a, this is space-key secrecy.
+// the adversary created. The issuer first used that binding and an invite
+// to this space authorized it: the invite its first use was part of (a
+// vouch, which also covers capturing a pending invite), or one admitting
+// the account after that first use. Or it completed a first-contact or
+// re-enrollment hold on it, or accepted it through an approval by a
+// compromised or adversary signing key. With 2a, this is space-key secrecy.
 lemma inviters_grant_targets_justified:
   "All iss S k B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h) ==>
-       (Ex #v #a. Vouched(iss, <B, pr, pe>) @ v & Authorized(iss, S, <B, pr, pe>) @ a & not (a < v))
+       (Ex #f #v. AcceptFirstUse(iss, B, <B, pr, pe>) @ f & Vouched(iss, <B, pr, pe>) @ v
+          & Authorized(iss, S, <B, pr, pe>) @ v)
+     | (Ex X #f #a #x. AcceptFirstUse(iss, B, <B, pr, pe>) @ f & AdmittedBy(S, B, X) @ a & f < a
+          & Authorized(iss, S, <B, pr, pe>) @ x)
      | (Ex #a. FirstContactHoldDone(iss, <B, pr, pe>) @ a)
      | (Ex #a. HoldDone(iss, B, <B, pr, pe>) @ a)
      | (Ex ps #a. ApprovalAccept(iss, B, ps, <B, pr, pe>) @ a
@@ -603,16 +632,15 @@ lemma reinvite_carries_vouch:
 #endif
 
 #ifdef not PREINVITERS & RETRO & not UNSCOPED
-// I7. If a later vouch could combine with an earlier invite, an invite
-// made before the client knew the account, and never captured, would let a
-// vouch made through another space's invite authorize it after the fact:
-// the client grants that space's key to the adversary's binding with no
-// hold and no compromise.
+// I7. If an invite could authorize a binding first used after it, an
+// invite made before the client knew the account, and never captured,
+// would authorize the adversary's binding after the fact: the client
+// grants that space's key to it with no hold and no compromise.
 lemma retro_vouch_attack:
   exists-trace
-  "Ex c S S2 B X pt pet k #a #f #v #g.
+  "Ex c S B X pt pet k #a #f #g.
        AdmittedBy(S, B, X) @ a & AcceptFirstUse(c, B, <B, pt, pet>) @ f & a < f
-     & Vouched(c, <B, pt, pet>) @ v & Authorized(c, S2, <B, pt, pet>) @ v & not (S2 = S)
+     & not (Ex #v. Vouched(c, <B, pt, pet>) @ v & Authorized(c, S, <B, pt, pet>) @ v)
      & Grant(c, S, k, <B, pt, pet>) @ g
      & not (Ex #h. HonestEnc(pet) @ h)
      & (All Y #j. AdmittedBy(S, B, Y) @ j ==> #j = #a)
@@ -625,6 +653,11 @@ lemma retro_vouch_attack:
 #endif
 
 #ifdef not PREINVITERS & not UNSCOPED & not REINVITE & not RETRO
+// I8d. An invite never authorizes a binding the client accepted through a
+// re-enrollment hold.
+lemma inviters_reenrolled_never_invite_authorized:
+  "All c S A t #h #x. HoldDone(c, A, t) @ h & Authorized(c, S, t) @ x ==> F"
+
 // I8a. Standing's root is the binding itself or an approval ancestor: an
 // inherited standing comes from the standing of the binding that approved
 // it, with the same root.
@@ -635,27 +668,30 @@ lemma inviters_root_is_ancestor:
           & GainStanding(c, sc, <B, ps, pes>, r) @ k & k < i)"
 
 // I8b. Scope is preserved through approval chains, whoever signed them.
-// Standing in a space goes back to its root's authorization in that space,
-// by the vouch itself or by an invite admitting the account after the
-// vouch; standing in every space goes back to a completed first-contact or
-// re-enrollment hold on its root.
+// Standing in a space goes back to its root's first use and authorization
+// in that space, by the vouch itself or by an invite admitting the account
+// after that first use; standing in every space goes back to a completed
+// first-contact or re-enrollment hold on its root.
 lemma inviters_standing_scoped [reuse, use_induction]:
   "All c sc t B pr per #i. GainStanding(c, sc, t, <B, pr, per>) @ i ==>
-       (Ex #v. Vouched(c, <B, pr, per>) @ v & Authorized(c, sc, <B, pr, per>) @ v)
-     | (Ex X #v #a #x. Vouched(c, <B, pr, per>) @ v & AdmittedBy(sc, B, X) @ a & v < a
+       (Ex #f #v. AcceptFirstUse(c, B, <B, pr, per>) @ f & Vouched(c, <B, pr, per>) @ v
+          & Authorized(c, sc, <B, pr, per>) @ v)
+     | (Ex X #f #a #x. AcceptFirstUse(c, B, <B, pr, per>) @ f & AdmittedBy(sc, B, X) @ a & f < a
           & Authorized(c, sc, <B, pr, per>) @ x)
      | (sc = 'all' & (Ex #h. FirstContactHoldDone(c, <B, pr, per>) @ h))
      | (sc = 'all' & (Ex #h. HoldDone(c, B, <B, pr, per>) @ h))"
 
 // I8c. So every grant, to any binding, rests on standing whose root (by
-// I8a, the binding or an approval ancestor) was authorized in that space no
-// earlier than its vouch, or completed a hold.
+// I8a, the binding or an approval ancestor) was first used by the issuer
+// and authorized in that space by the invite of that first use or by one
+// admitting the account after it, or completed a hold.
 lemma inviters_grant_scope:
   "All iss S k t #g. Grant(iss, S, k, t) @ g ==>
-       (Ex B pr per #s #v. GainStanding(iss, S, t, <B, pr, per>) @ s
-          & Vouched(iss, <B, pr, per>) @ v & Authorized(iss, S, <B, pr, per>) @ v)
-     | (Ex B pr per X #s #v #a #x. GainStanding(iss, S, t, <B, pr, per>) @ s
-          & Vouched(iss, <B, pr, per>) @ v & AdmittedBy(S, B, X) @ a & v < a
+       (Ex B pr per #s #f #v. GainStanding(iss, S, t, <B, pr, per>) @ s
+          & AcceptFirstUse(iss, B, <B, pr, per>) @ f & Vouched(iss, <B, pr, per>) @ v
+          & Authorized(iss, S, <B, pr, per>) @ v)
+     | (Ex B pr per X #s #f #a #x. GainStanding(iss, S, t, <B, pr, per>) @ s
+          & AcceptFirstUse(iss, B, <B, pr, per>) @ f & AdmittedBy(S, B, X) @ a & f < a
           & Authorized(iss, S, <B, pr, per>) @ x)
      | (Ex B pr per #s #h. GainStanding(iss, 'all', t, <B, pr, per>) @ s
           & FirstContactHoldDone(iss, <B, pr, per>) @ h)

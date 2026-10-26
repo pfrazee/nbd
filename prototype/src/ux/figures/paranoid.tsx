@@ -13,7 +13,7 @@ import {
 } from "../screens";
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
 import { creatingFromExisting, removing } from "./relaxed";
-import { invitingBeforeInstall, newSpaceWaits } from "./invites";
+import { invitingBeforeInstall, newSpaceAfterReset } from "./invites";
 
 const T = COPY.paranoid;
 type C = FigureCtx;
@@ -434,6 +434,6 @@ const keepingSpacesAvailable: Figure = {
 };
 
 export const paranoidFigures: Figure[] = [
-  creatingASpace, newSpaceWaits("paranoid", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("paranoid", "2b"), addingADevice, replacingAPhone, losingEveryDevice,
+  creatingASpace, newSpaceAfterReset("paranoid", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("paranoid", "2b"), addingADevice, replacingAPhone, losingEveryDevice,
   paranoidCreatingFromExisting, paranoidRemoving, keepingSpacesAvailable,
 ];

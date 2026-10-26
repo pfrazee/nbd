@@ -69,7 +69,7 @@ export type SpaceKeyGrant = {
 
 /** An invite record in the inviting account's space repo
  * (core.md#invites). `authorizes`: the listed bindings
- * that were vouched for the inviting device when it made the record, which
+ * that were in the inviting device's first-contact lineage when it made the record, which
  * may grant in this space at once. A pending invite (`pending`, no bindings)
  * admits an account that has no devices yet; a capture record (`captures`:
  * the pending record's rkey) later authorizes the devices the inviting

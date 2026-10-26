@@ -244,7 +244,7 @@ export class Installation {
     st.candidatesSeen.clear();
     st.views.clear();
     st.authorized.clear();
-    st.vouched.clear();
+    st.lineage.clear();
     st.admitted.clear();
     st.pending.clear();
     st.approvers.clear();
@@ -314,12 +314,11 @@ export class Installation {
     const view = st.views.get(account);
     const pending = !knew && !!view && view.present.size === 0;
     const met = knew ? [] : live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
-    // It authorizes what it first met now and the listed bindings already
-    // vouched here or linked from one that is, nothing else: a later vouch
-    // never reaches back.
-    const authorizes = [...met, ...live.filter((b) => !met.includes(b) && this.trust.descendsFromVouched(b))];
+    // It authorizes the listed bindings in this installation's first-contact
+    // lineage, fixed now: a later pin never reaches back. A reset's held
+    // candidate isn't accepted, so it isn't listed.
+    const authorizes = live.filter((b) => this.trust.inLineage(b));
     const entry = this.signInvite(space, account, live, authorizes, met, pending, null, !knew);
-    for (const b of met) this.trust.vouch(space, b); // the vouch is saved with the prepared record
     if (pending) this.trust.addPending(entry.rkey, space, account, this.binding.device.deviceId);
     return entry;
   }
@@ -341,7 +340,7 @@ export class Installation {
     const report = (e: OutboxInvite, published: boolean, abandoned = false) => this.reportInvite(e, e === current ? "attempt" : "flush", published, abandoned);
     while (this.inviteOutbox.length) {
       const e = this.inviteOutbox[0];
-      const { record, rkey, vouch } = e;
+      const { record, rkey } = e;
       // A write whose acknowledgement was lost may still have landed.
       const landed = () => this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === rkey);
       if (!record.captures && this.net.host.membership(e.space, e.account)?.eligible && !landed()) {
@@ -376,10 +375,7 @@ export class Installation {
       }
       this.inviteOutbox.shift();
       report(e, true);
-      // Admission and authorized standing start once the record is
-      // published. (The vouch was saved when the record was made; repeating
-      // it is harmless.)
-      for (const b of vouch) this.trust.vouch(e.space, b);
+      // Admission and authorized standing start once the record is published.
       for (const b of record.authorizes) this.trust.authorize(e.space, b);
       this.trust.admit(e.account, e.space);
       if (!record.captures) this.net.host.setMembership(this.did, e.space, e.account, true);
@@ -401,7 +397,6 @@ export class Installation {
       const met = live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
       if (!met.length) continue;
       const entry = this.signInvite(p.space, p.account, live, met, met, false, rkey, true);
-      for (const b of met) this.trust.vouch(p.space, b);
       // Queued behind its pending invite if that is still unsent.
       this.enqueueInvite(entry);
     }
@@ -420,8 +415,8 @@ export class Installation {
 
   /** Learn from this account's invite records, each signed by an own device
    * this installation accepted (even if since removed): every record tells
-   * it a space its account admitted the invited account to, and a vouched
-   * one carries the vouch to an installation that never pinned the account. */
+   * it a space its account admitted the invited account to, and one that
+   * authorizes devices carries that authorization (see Trust.adoptInvite). */
   private adoptOwnInvites(): void {
     const st = this.trust.state;
     for (const space of this.net.accountSpaces(this.did))

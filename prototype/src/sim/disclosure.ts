@@ -9,10 +9,10 @@
 // - First contact: I first knew A no earlier than X appeared (non-goal 1).
 //   Under the inviters policy (device-enrollment.md#grant-standing) only one first contact
 //   excuses a grant: an invite or capture record of I's account for this
-//   space authorizes X or an approval ancestor D of X; D was first met
-//   through a record of I's account (an invite or capture, published or
-//   not) made when the inviting installation first met A; and I had no pin for A before that
-//   record was made. Every other first contact must wait out a hold.
+//   space authorizes X or an approval ancestor D of X, and D or an approval
+//   ancestor of D appeared before I first knew A, so I met it as a first
+//   contact rather than a reset. Every other first contact must wait out a
+//   hold.
 // - Elapsed hold: X appeared at least REENROLL_HOLD ago (goal 3).
 // - Compromised signer: a compromised key approved X while A still had a
 //   device the attacker does not control, so it was not a full reset. A
@@ -100,7 +100,7 @@ export class DisclosureCheck {
     const who = `${issuer.id} granted to attacker device ${account.slice(8)}/${x.slice(0, 6)}`;
 
     if (w.policy === "inviters") {
-      if (this.vouched(issuer, g.space, account, x, knew)) return null; // the inviter's first contact
+      if (this.authorized(issuer, g.space, account, x, knew)) return null; // the inviter's first contact
     } else if (knew > appearedSeq) return null; // first contact
     if (w.t - appeared >= REENROLL_HOLD - EPS) return null; // a hold could have elapsed
     const approvals = p.approvals.filter((a) => a.target === x);
@@ -111,14 +111,13 @@ export class DisclosureCheck {
   }
 
   /** A record of I's account for `space` authorizes X or an approval
-   * ancestor D of X; D or an approval ancestor of D was first met through a
-   * record of I's account; and I first knew the account no earlier than that
-   * record was made (an installation that already pinned it takes no vouch). */
-  private vouched(i: Installation, space: string, account: string, x: string, knew: number): boolean {
-    const facts = this.world.provenance.invites.filter((v) => v.inviter === i.did && v.account === account);
-    const made = this.world.provenance.prepared.filter((v) => v.inviter === i.did && v.account === account);
-    return [...approvalAncestors(this.world, x)].some((d) => facts.some((v) => v.space === space && v.authorizes.includes(d))
-      && [...approvalAncestors(this.world, d)].some((m) => made.some((v) => v.firstMet && v.devices.includes(m) && knew > v.seq)));
+   * ancestor D of X, and D or an approval ancestor of D appeared before I
+   * first knew the account: it is in I's first-contact lineage, not a reset. */
+  private authorized(i: Installation, space: string, account: string, x: string, knew: number): boolean {
+    const facts = this.world.provenance.invites.filter((v) => v.inviter === i.did && v.account === account && v.space === space);
+    const seq = this.world.provenance.publishedSeq;
+    return [...approvalAncestors(this.world, x)].some((d) => facts.some((v) => v.authorizes.includes(d))
+      && [...approvalAncestors(this.world, d)].some((m) => (seq.get(m) ?? Infinity) < knew));
   }
 
   private liveAt(i: Installation, account: string, deviceId: string): boolean {

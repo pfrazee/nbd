@@ -2,7 +2,7 @@
 
 import { check } from "../../sim/scenario";
 import { bookClub, checkOldDevices, club, clubWithoutBob, people, say, scanConfirmFor } from "./cast";
-import { invitingBeforeInstall, newSpaceWaits } from "./invites";
+import { invitingBeforeInstall, newSpaceAfterReset } from "./invites";
 import { COPY } from "../copy";
 import type { Figure } from "../figure";
 import { Laptop, Phone, Tablet } from "../frames";
@@ -493,5 +493,5 @@ const settings: Figure = {
 };
 
 export const relaxedFigures: Figure[] = [
-  creatingASpace, newSpaceWaits("relaxed", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("relaxed", "2b"), addingADevice, replacingAPhone, losingEveryDevice, creatingFromExisting, removing, alarms, settings,
+  creatingASpace, newSpaceAfterReset("relaxed", "1b"), addingAMember1, addingAMember2, invitingBeforeInstall("relaxed", "2b"), addingADevice, replacingAPhone, losingEveryDevice, creatingFromExisting, removing, alarms, settings,
 ];

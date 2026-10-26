@@ -4,7 +4,7 @@ Informative. A presentation of the same NBD spaces as the [Paranoid](paranoid.md
 
 ## What protects these spaces
 
-The same as [Paranoid](paranoid.md#what-protects-these-spaces): devices are trusted on first contact, later devices must be [linked](../device-enrollment.md#local-trust), removing a device takes a separate approval at the provider, and the defense against first-contact substitution by a malicious PDS is detection through [auditing](../audit.md#direct-sync). Only the member who [invited](../core.md#invites) someone shares with their devices on first contact; every other member's app waits 3 days first ([grant standing](../device-enrollment.md#grant-standing)), so a newcomer who first meets a taken-over account holds like everyone else. Relaxed presentation keeps every required notice but makes routine ones quiet, so detection depends more on the account holder's own alarms.
+The same as [Paranoid](paranoid.md#what-protects-these-spaces): devices are trusted on first contact, later devices must be [linked](../device-enrollment.md#local-trust), removing a device takes a separate approval at the provider, and the defense against first-contact substitution by a malicious PDS is detection through [auditing](../audit.md#direct-sync). Only the member who [invited](../core.md#invites) someone shares with their devices before a 3-day wait, and only devices their app met as a first contact, not a reset; every other member's app waits 3 days first ([grant standing](../device-enrollment.md#grant-standing)), so a newcomer who first meets a taken-over account holds like everyone else. Relaxed presentation keeps every required notice but makes routine ones quiet, so detection depends more on the account holder's own alarms.
 
 ## Flows
 
@@ -12,13 +12,13 @@ The same as [Paranoid](paranoid.md#what-protects-these-spaces): devices are trus
 
 1. **"New space" form:** name and optional members. No security choices.
 2. **Space opens** as soon as it is created; the key is generated on this device first. Space info includes "Everyone in this space can read its full history."
-3. **Members get the key at once** from the creator's devices if the creator first met them through an invite, in this space or an earlier one.
+3. **Members get the key at once** from the creator's devices, whether the creator first met them through an invite or as fellow members of another space.
 
 ![Creating a space: the new space form with no security choices, the space open at once with "You added Bob" and "You added Carol" timeline lines, and space info stating that everyone can read the full history](images/relaxed-creating-a-space.png)
 
-**Not every new space is instant.** If the creator met someone some other way, such as a fellow member of another space, less than 3 days ago, the new space waits for the rest of that wait, with a quiet note: "Your device will share with Carol from Friday." Someone else in the space who already shares with Carol can grant instead.
+**After a reset, a new space waits.** If someone the creator already knew reset their devices less than 3 days ago, the creator's app is still holding their new device, and a new space doesn't change that. The space waits for the rest of the hold, with a quiet note: "Your device will share with Carol from Friday." Someone else in the space who already shares with Carol's new device can grant instead.
 
-![A new space that waits: Alice starts Garden with Carol, whom she met in Pottery yesterday, the space notes "Your device will share with Carol from Friday," Carol sees "Getting access…" with no unlock time, and on Friday Alice's app grants](images/relaxed-new-space-waits.png)
+![A new space that waits: Alice starts Garden with Carol, who reset her devices yesterday, the space notes "Your device will share with Carol from Friday," Carol's new phone sees "Getting access…" with no unlock time, and on Friday Alice's app grants](images/relaxed-new-space-after-reset.png)
 
 ### Adding a member
 
@@ -28,7 +28,7 @@ Alice adds Bob.
 2. **Timeline:** "Alice added Bob."
 3. **Bob taps "Join Book club".** No device list is shown.
 4. **Bob waits briefly:** "Getting access…" while Alice's devices grant [in the background](paranoid.md#keeping-spaces-available). If nothing arrives, members get "Bob is waiting to join Book club." If Alice's devices stay offline, other members' apps share only once their own 3-day waits for Bob end, so Bob's app shows no unlock time. There is no "let him in now" button.
-5. **Unlock.** Alice's device, which met Bob's at the invite, grants. Other members' devices pin Bob's on first sight and quietly wait ([grant standing](../device-enrollment.md#grant-standing)); they rarely need to grant, since Alice already did. No badges, no verification prompts.
+5. **Unlock.** Alice's device, which met Bob's as a first contact, at the invite or before, grants. Other members' devices pin Bob's on first sight and quietly wait ([grant standing](../device-enrollment.md#grant-standing)); they rarely need to grant, since Alice already did. No badges, no verification prompts.
 6. **Unlinked devices get nothing.** A new Bob device that no Bob device linked receives no keys, with no override; his device list quietly notes "1 device isn't linked."
 
 ![Adding a member, steps 1–3: Alice invites Bob with one tap, Carol sees the "Alice added Bob" timeline line, and Bob taps Join on the invited space](images/relaxed-adding-a-member-1.png)
@@ -63,7 +63,7 @@ If Alice invites Bob while offline or while her provider is failing writes, her 
 ### Losing every device
 
 1. **"Restore from backup"** or **"Start over"** ([total device loss](../device-enrollment.md#total-device-loss)).
-2. **Starting over:** the app asks the user to approve removal at their provider and deletes the old devices, then shows "People who already know you will wait at least 3 days before sharing with this device," with each space's status as members' apps catch up. Members who never knew the user wait too; only someone who invites the user afresh, never having met them, can share sooner. Members see a quiet line: "Alice reset her devices. This device will share with her new device from Friday." The removal list is where the user checks their old devices; the app doesn't raise unrecognised-device alarms for them, but still does for any device that remains or appears afterwards.
+2. **Starting over:** the app asks the user to approve removal at their provider and deletes the old devices, then shows "People who already know you will wait at least 3 days before sharing with this device," with each space's status as members' apps catch up. Members who never knew the user wait too; only someone whose app first meets the user's new device after the reset can share sooner, by inviting them into a space. Members see a quiet line: "Alice reset her devices. This device will share with her new device from Friday." The removal list is where the user checks their old devices; the app doesn't raise unrecognised-device alarms for them, but still does for any device that remains or appears afterwards.
 3. **The hold is not softened.** Relaxed apps can't skip or shorten their own [72-hour wait](../device-enrollment.md#re-enrollment), and an old device that sees itself removed still alarms.
 
 ![Losing every device: "Welcome back" offers restore or start over, the new phone lists her old iPhone and iPad and asks whether she recognises them before removing them, it shows each space waiting for members, and Bob sees "Alice reset their devices. This device will share with their new device from Friday."](images/relaxed-losing-every-device.png)
