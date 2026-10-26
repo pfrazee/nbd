@@ -105,7 +105,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
 function DeviceRow({ viewer, b, removable }: { viewer: Installation; b: Binding; removable: boolean }) {
   const sim = useSim();
   const w = sim.world;
-  const t = trustStatus(viewer, b);
+  const t = trustStatus(viewer, b, (u) => w.host.spaceName(u));
   const target = installationsOf(w, b.account).find((i) => i.binding.device.deviceId === b.device.deviceId);
   return (
     <div className="device">

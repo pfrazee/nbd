@@ -53,12 +53,22 @@ export function present(w: World, b: Binding): boolean {
 
 export type TrustStatus = "own" | "accepted" | "held" | "revoked" | "unlinked" | "unknown";
 
-export function trustStatus(viewer: Installation, b: Binding): { status: TrustStatus; detail: string } {
+/** `spaceName` labels per-space grant standing under the inviters policy. */
+export function trustStatus(viewer: Installation, b: Binding, spaceName: (uri: string) => string = (u) => u): { status: TrustStatus; detail: string } {
   const st = viewer.trust.state;
   const id = bindingId(b);
   if (id === bindingId(viewer.binding)) return { status: "own", detail: "this device" };
   if (st.revoked.has(id)) return { status: "revoked", detail: "removed" };
   const a = st.accepted.get(id);
+  if (a && viewer.trust.policy === "inviters" && b.account !== viewer.did) {
+    // Grant standing per joined space (proposal-inviters.md).
+    const spaces = [...viewer.spaces.keys()].map((s) => {
+      const basis = viewer.trust.standingBasis(b, s);
+      const left = viewer.trust.firstContactRemaining(b);
+      return `${spaceName(s)}: ${basis ?? (left === null ? "no standing" : `first-contact hold, shares from ${clock(viewer.localNow() + left)}`)}`;
+    });
+    return { status: "accepted", detail: [a.evidence, ...spaces].join("; ") };
+  }
   if (a) return { status: "accepted", detail: a.evidence };
   const h = st.holds.get(b.account);
   if (h?.candidate.includes(id)) {

@@ -11,10 +11,10 @@ import {
 } from "./grants";
 import { type Issuance, move } from "./publish";
 import { type Snapshot, type WriteOp, recordsIn, verifySnapshot } from "./repo";
-import { type TrustState, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust } from "./trust";
+import { type TrustState, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust, invitePayload } from "./trust";
 import {
-  type Approval, type Binding, COL, type Configuration, type Did, type Envelope, type Evidence, type KeyRequest,
-  type Membership, type SpaceKeyGrant, asCbor, bindingId, label, sameBinding, withoutProof,
+  type Approval, type Binding, COL, type Configuration, type Did, type Envelope, type Evidence, type Invite, type KeyRequest,
+  type Membership, type Policy, type SpaceKeyGrant, asCbor, bindingId, label, sameBinding, withoutProof,
 } from "./types";
 
 export interface HostApi {
@@ -38,7 +38,16 @@ export interface Network {
   write(sessionId: string, ops: WriteOp[], space?: string): number;
   spaceWriters(space: string): Did[];
   host: HostApi;
+  /** The grant rule every installation follows. */
+  readonly policy: Policy;
+  /** Spaces in which `did`'s own PDS holds a repo for it. */
+  accountSpaces(did: Did): string[];
+  /** Ground truth for the checks: an invite record was published. */
+  invited?(e: InviteEvent): void;
 }
+
+/** What an inviting installation did, for the goal check and traces. */
+export type InviteEvent = { by: Binding; space: string; record: Invite; firstMet: boolean; vouched: Binding[] };
 
 export type Message =
   | { author: Did; rkey: string; text: string; device: string; at: number }
@@ -96,7 +105,7 @@ export class Installation {
     this.binding = { account: did, device: { deviceId, authPubkey: this.signKey.publicKey, encryptPubkey: this.encKey.publicKey } };
     const state = emptyTrust();
     state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own" });
-    this.trust = new Trust(state, this.binding, () => this.localNow());
+    this.trust = new Trust(state, this.binding, () => this.localNow(), net.policy);
   }
 
   get did(): Did {
@@ -217,6 +226,9 @@ export class Installation {
     st.holds.clear();
     st.candidatesSeen.clear();
     st.views.clear();
+    st.vouches.clear();
+    st.approvers.clear();
+    st.fcHolds.clear();
     this.lostState = true;
   }
 
@@ -227,8 +239,66 @@ export class Installation {
     if (sp) Object.assign(sp, { key: null, keyFrom: null, archived: false, requested: null });
   }
 
-  invite(space: string, account: Did): void {
+  /** Admit `account` to `space`. Under the inviters policy this first meets
+   * the account and publishes an invite record, and admits only if the
+   * record was published. Returns whether the account was admitted. */
+  invite(space: string, account: Did): boolean {
+    if (this.net.policy === "inviters" && !this.publishInvite(space, account)) return false;
     this.net.host.setMembership(this.did, space, account, true);
+    return true;
+  }
+
+  /** proposal-inviters.md#invite-records: sync the account's repo, pin it on
+   * first use if this installation has no pin for it, and publish an
+   * immutable invite record in this account's repo for the space. It vouches
+   * only for bindings first met in making it. */
+  private publishInvite(space: string, account: Did): boolean {
+    const knew = this.trust.knew(account);
+    this.trust.tick();
+    this.observeAccount(account);
+    this.contacts.add(account); // keep the pin current, whatever the pinning mode
+    const st = this.trust.state;
+    const live = this.trust.live(account);
+    const met = knew ? [] : live.filter((b) => st.accepted.get(bindingId(b))!.evidence === "first use");
+    const unsigned = {
+      version: 1 as const, space, account, bindings: live, vouched: met.length > 0,
+      issuer: { account: this.did, deviceId: this.binding.device.deviceId },
+    };
+    const record: Invite = { ...unsigned, proof: sign(this.signKey.secretKey, invitePayload(unsigned)) };
+    const rkey = ref(asCbor(record));
+    const value: Cbor = { $type: COL.invite, value: asCbor(record) };
+    // A write whose acknowledgement was lost may still have landed.
+    if (!this.write([{ action: "create", collection: COL.invite, rkey, value }], space) && !this.ownSpaceRecords(space, COL.invite).some(([k]) => k === rkey))
+      return false;
+    for (const b of met) this.trust.vouch(space, b);
+    this.net.invited?.({ by: this.binding, space, record, firstMet: !knew, vouched: met });
+    return true;
+  }
+
+  /** Records of one collection in this account's own repo for a space. */
+  private ownSpaceRecords(space: string, collection: string): [string, Cbor][] {
+    if (!this.sessionId) return [];
+    const expiry = this.net.credential(this.sessionId, space);
+    if (expiry === null) return [];
+    const snap = this.net.readSpace(this.id, expiry, this.did, space);
+    const key = this.net.repoKey(this.did);
+    if (!snap || !key || !verifySnapshot(snap, this.did, key)) return [];
+    return recordsIn(snap, collection);
+  }
+
+  /** Take vouches from this account's invite records: a valid record signed
+   * by an own device this installation accepted (even if since removed),
+   * for an account it has never pinned. */
+  private adoptOwnInvites(): void {
+    const st = this.trust.state;
+    for (const space of this.net.accountSpaces(this.did))
+      for (const [, v] of this.ownSpaceRecords(space, COL.invite)) {
+        const rec = (v as { value?: Invite }).value;
+        if (!rec || rec.version !== 1 || rec.space !== space || !rec.vouched || rec.issuer?.account !== this.did || !Array.isArray(rec.bindings)) continue;
+        const issuer = [...st.accepted.values()].find((a) => a.binding.account === this.did && a.binding.device.deviceId === rec.issuer.deviceId)?.binding;
+        if (!issuer || !(rec.proof instanceof Uint8Array) || !verify(rec.proof, invitePayload(withoutProof(rec)), issuer.device.authPubkey)) continue;
+        if (this.trust.adoptInvite(rec)) this.contacts.add(rec.account);
+      }
   }
 
   removeMember(space: string, account: Did): void {
@@ -292,6 +362,11 @@ export class Installation {
   sync(): boolean {
     if (!this.online) return false;
     const before = this.fingerprint();
+    if (this.net.policy === "inviters") {
+      // Credit time up to now before any observation can revoke.
+      this.trust.tick();
+      this.adoptOwnInvites();
+    }
     for (const did of this.trackedAccounts()) this.observeAccount(did);
     for (const sp of this.spaces.values()) this.syncSpace(sp);
     return this.fingerprint() !== before;

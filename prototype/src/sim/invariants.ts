@@ -2,6 +2,13 @@
 // own verified observations rather than the true world. Evaluated around
 // every scenario step; violations are reported, not thrown, so the UI can
 // show them.
+//
+// Under the inviters policy it also checks grant standing
+// (proposal-inviters.md): every accepted binding starts its own first-contact
+// hold, credited no faster than real time and frozen once revoked; vouches
+// arise only from an invite of an account the installation had never pinned;
+// and new standing is explained by a vouch in that space, an approval from a
+// binding with standing there, or an elapsed hold.
 
 import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
@@ -17,11 +24,23 @@ type Snap = {
   revs: Map<string, number>;
   holds: Map<string, { key: string; credited: number }>;
   imports: number;
+  // Inviters policy only.
+  knew: Set<string>;
+  vouches: Set<string>; // `${space}|${binding ID}`
+  fc: Map<string, number>; // binding ID -> first-contact credit
+  standing: Set<string>; // `${space}|${binding ID}`
 };
 
-function snap(i: Installation): Snap {
+function snap(i: Installation, spaces: string[]): Snap {
   const st = i.trust.state;
+  const standing = new Set<string>();
+  for (const s of spaces)
+    for (const [id, a] of st.accepted) if (i.trust.standing(a.binding, s)) standing.add(`${s}|${id}`);
   return {
+    knew: new Set([...st.accepted.values()].map((a) => a.binding.account)),
+    vouches: new Set([...st.vouches].flatMap(([s, ids]) => [...ids].map((id) => `${s}|${id}`))),
+    fc: new Map([...st.fcHolds].map(([id, h]) => [id, h.credited])),
+    standing,
     accepted: new Set(st.accepted.keys()),
     revoked: new Set(st.revoked.keys()),
     revs: new Map([...st.views].map(([d, v]) => [d, v.rev])),
@@ -43,7 +62,13 @@ export class InvariantMonitor {
 
   before(): void {
     this.disclosure.begin();
-    for (const i of this.world.installations.values()) this.prev.set(i.id, snap(i));
+    const spaces = this.spaces();
+    for (const i of this.world.installations.values()) this.prev.set(i.id, snap(i, spaces));
+  }
+
+  /** Spaces whose standing is tracked: all of them, under the inviters policy. */
+  private spaces(): string[] {
+    return this.world.policy === "inviters" ? [...this.world.host.spaces.keys()] : [];
   }
 
   after(): string[] {
@@ -96,6 +121,8 @@ export class InvariantMonitor {
       if (old && old.key === k && h.credited < old.credited - EPS) out.push(`hold credit for ${d} fell`);
     }
 
+    if (this.world.policy === "inviters") out.push(...this.checkStanding(i, before));
+
     if (st.revoked.has(bindingId(i.binding)) && !st.alarms.some((a) => a.kind === "own-removed"))
       out.push("own binding revoked without takeover alarm");
 
@@ -128,7 +155,10 @@ export class InvariantMonitor {
 
         // First use follows the single-root rule (restated independently).
         const knewBefore = !!before && [...before.accepted].some((id) => st.accepted.get(id)?.binding.account === account);
-        if (before && !knewBefore && knows && i.imports === before.imports) {
+        // A pin taken from an own invite record is copied, like pairing; the
+        // standing checks cover it.
+        const adopted = [...st.accepted.values()].some((a) => a.binding.account === account && a.evidence.startsWith("invited by"));
+        if (before && !knewBefore && knows && !adopted && i.imports === before.imports) {
           const got = [...st.accepted].filter(([id, a]) => a.binding.account === account && !before.accepted.has(id) && !st.revoked.has(id))
             .map(([id]) => id).sort();
           if (!want) out.push(`first use of ${account} accepted ${got.length} binding(s); the rule declines`);
@@ -159,6 +189,65 @@ export class InvariantMonitor {
       }
     }
     return out;
+  }
+
+  private checkStanding(i: Installation, before: Snap | undefined): string[] {
+    const w = this.world;
+    const st = i.trust.state;
+    const out: string[] = [];
+    for (const [id, a] of st.accepted) {
+      if (a.binding.account === i.did || a.evidence === "re-enrolled") continue;
+      const h = st.fcHolds.get(id);
+      if (!h) {
+        out.push(`accepted ${label(a.binding)} without starting its first-contact hold`);
+        continue;
+      }
+      const appeared = w.provenance.publishedAt.get(a.binding.device.deviceId);
+      if (appeared !== undefined && h.credited > w.t - appeared + EPS)
+        out.push(`first-contact hold for ${label(a.binding)} credited ${h.credited.toFixed(1)}h, more than the ${(w.t - appeared).toFixed(1)}h since it appeared`);
+      const old = before?.fc.get(id);
+      if (old !== undefined && h.credited < old - EPS) out.push(`first-contact credit for ${label(a.binding)} fell`);
+      if (old !== undefined && before!.revoked.has(id) && h.credited > old + EPS) out.push(`first-contact hold for revoked ${label(a.binding)} kept crediting`);
+    }
+    // A vouch comes only from an invite, by this account, of an account the
+    // inviting installation first met in making it, and reaches only
+    // installations that had never pinned that account.
+    for (const [space, ids] of st.vouches)
+      for (const id of ids) {
+        if (before?.vouches.has(`${space}|${id}`)) continue;
+        const b = st.accepted.get(id)?.binding;
+        if (!b) {
+          out.push(`vouched for ${id.slice(0, 8)} without accepting it`);
+          continue;
+        }
+        if (before?.knew.has(b.account)) out.push(`vouched for ${label(b)} in ${space} though it already knew ${b.account}`);
+        if (!w.provenance.invites.some((v) => v.firstMet && v.inviter === i.did && v.space === space && v.account === b.account))
+          out.push(`vouched for ${label(b)} in ${space} with no invite there that first met ${b.account}`);
+      }
+    // New standing has a basis in this installation's own state.
+    for (const space of this.spaces())
+      for (const [id, a] of st.accepted) {
+        if (before?.standing.has(`${space}|${id}`) || !i.trust.standing(a.binding, space)) continue;
+        if (!this.justified(i, id, space, new Set()))
+          out.push(`standing for ${label(a.binding)} in ${space} without a vouch there, an approval with standing, or an elapsed hold`);
+      }
+    return out;
+  }
+
+  /** Standing, restated: own, re-enrolled, an elapsed first-contact hold, a
+   * vouch in this space, or an approval in this installation's verified view
+   * by an accepted signer with standing here. */
+  private justified(i: Installation, id: string, space: string, seen: Set<string>): boolean {
+    if (seen.has(id)) return false;
+    seen.add(id);
+    const st = i.trust.state;
+    const a = st.accepted.get(id);
+    if (!a) return false;
+    if (a.binding.account === i.did || a.evidence === "re-enrolled") return true;
+    if ((st.fcHolds.get(id)?.credited ?? 0) >= REENROLL_HOLD - EPS) return true;
+    if (st.vouches.get(space)?.has(id)) return true;
+    const aps = st.views.get(a.binding.account)?.approvals ?? [];
+    return aps.some((ap) => bindingId(ap.target) === id && this.justified(i, bindingId(ap.signer), space, new Set(seen)));
   }
 
   /** Approval closure over this installation's verified approvals, following

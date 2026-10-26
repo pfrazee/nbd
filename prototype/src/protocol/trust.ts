@@ -4,16 +4,23 @@
 // installation's own clock domain. A port of SpecClient in
 // model/nbd_trust.py, driven by this installation's verified snapshots
 // rather than a shared world.
+//
+// Under the inviters policy (proposal-inviters.md) it also keeps grant
+// standing's bases, following InviterClient in model/nbd_trust.py: vouches
+// per space, the approver that accepted each binding, and a first-contact
+// hold per binding.
 
 import { verify } from "./crypto";
 import { type Snapshot, recordsIn } from "./repo";
 import {
-  type Approval, type Binding, COL, type Did, asCbor, bindingId, label, sameBinding, withoutProof,
+  type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, bindingId, label, sameBinding, withoutProof,
 } from "./types";
 
 export const REENROLL_HOLD = 72; // hours
 
 export type Hold = { candidate: string[]; bindings: Binding[]; credited: number; checkpoint: number };
+/** Time credited to one binding since this installation accepted it. */
+export type FirstContactHold = { credited: number; checkpoint: number };
 export type Alarm = { at: number; kind: string; text: string; subject?: Did };
 /** `about`, `by`, `account`, and `until` are structured details for
  * interfaces; `text` is the same notice in words. */
@@ -46,12 +53,20 @@ export type TrustState = {
   alarms: Alarm[];
   notices: Notice[];
   startOver: StartOver | null;
+  // Grant standing's bases, kept only under the inviters policy.
+  /** space -> IDs of bindings this installation's account vouched for there. */
+  vouches: Map<string, Set<string>>;
+  /** binding ID -> ID of the signer whose approval accepted it. */
+  approvers: Map<string, string>;
+  /** binding ID -> its first-contact hold. */
+  fcHolds: Map<string, FirstContactHold>;
 };
 
 export function emptyTrust(): TrustState {
   return {
     accepted: new Map(), revoked: new Map(), holds: new Map(), candidatesSeen: new Map(), views: new Map(),
     approvedByMe: new Set(), noticed: new Set(), alarms: [], notices: [], startOver: null,
+    vouches: new Map(), approvers: new Map(), fcHolds: new Map(),
   };
 }
 
@@ -67,8 +82,20 @@ export function cloneTrust(t: TrustState): TrustState {
     alarms: [...t.alarms],
     notices: [...t.notices],
     startOver: t.startOver && { list: t.startOver.list && new Map(t.startOver.list), done: t.startOver.done },
+    vouches: new Map([...t.vouches].map(([s, ids]) => [s, new Set(ids)])),
+    approvers: new Map(t.approvers),
+    fcHolds: new Map([...t.fcHolds].map(([id, h]) => [id, { ...h }])),
   };
 }
+
+/** The payload an invite record's proof signs. */
+export function invitePayload(r: Omit<Invite, "proof">): unknown[] {
+  return ["nbd/invite", 1, asCbor(r)];
+}
+
+/** First-contact holds are kept per binding: each binding a client accepts
+ * starts its own. */
+const fcKey = (b: Binding): string => bindingId(b);
 
 export function approvalPayload(a: Omit<Approval, "proof">): unknown[] {
   return ["nbd/device-approval", 1, asCbor(a)];
@@ -104,6 +131,7 @@ export class Trust {
     public state: TrustState,
     private readonly own: Binding,
     private readonly localNow: () => number,
+    readonly policy: Policy = "baseline",
   ) {}
 
   // ---- queries -------------------------------------------------------------
@@ -125,6 +153,43 @@ export class Trust {
 
   hold(account: Did): Hold | undefined {
     return this.state.holds.get(account);
+  }
+
+  /** Whether this installation may grant `space`'s key to `b` (inviters
+   * policy). Acceptance is unchanged; standing gates only issuance. */
+  standing(b: Binding, space: string): boolean {
+    return this.standingBasis(b, space) !== null;
+  }
+
+  /** Why `b` has grant standing in `space`, or null. */
+  standingBasis(b: Binding, space: string): string | null {
+    if (!this.isAccepted(b)) return null;
+    return this.source(bindingId(b), space, new Set());
+  }
+
+  /** Standing's sources, ignoring revocation along the approval chain so a
+   * device linked by a since-removed device inherits what it had. */
+  private source(id: string, space: string, seen: Set<string>): string | null {
+    if (seen.has(id)) return null;
+    seen.add(id);
+    const st = this.state;
+    const a = st.accepted.get(id);
+    if (!a) return null;
+    if (a.binding.account === this.own.account) return "own";
+    if (a.evidence === "re-enrolled") return "re-enrolled";
+    if ((st.fcHolds.get(fcKey(a.binding))?.credited ?? 0) >= REENROLL_HOLD) return "held";
+    if (st.vouches.get(space)?.has(id)) return "vouched";
+    const signer = st.approvers.get(id);
+    const via = signer === undefined ? null : this.source(signer, space, seen);
+    return via && `approved by ${label(st.accepted.get(signer!)!.binding)} (${via})`;
+  }
+
+  /** Hours left on `b`'s first-contact hold here, or null if it has none. */
+  firstContactRemaining(b: Binding): number | null {
+    const h = this.state.fcHolds.get(fcKey(b));
+    if (!h) return null;
+    const running = this.state.revoked.has(bindingId(b)) ? 0 : Math.max(0, this.localNow() - h.checkpoint);
+    return Math.max(0, REENROLL_HOLD - h.credited - running);
   }
 
   // ---- observation ---------------------------------------------------------
@@ -201,6 +266,12 @@ export class Trust {
         const tid = bindingId(ap.target);
         if (st.accepted.has(bindingId(ap.signer)) && !st.accepted.has(tid)) {
           st.accepted.set(tid, { binding: ap.target, evidence: `approved by ${label(ap.signer)}` });
+          if (this.policy === "inviters") {
+            // The target inherits its signer's standing, and starts its own
+            // first-contact hold in case the signer is removed first.
+            st.approvers.set(tid, bindingId(ap.signer));
+            this.startFirstContactHold(ap.target);
+          }
           if (!this.presentBinding(account, ap.target)) st.revoked.set(tid, ap.target);
           added = true;
         }
@@ -252,7 +323,10 @@ export class Trust {
     if (this.live(account).length) return;
     const cand = this.singleRootSet(account);
     if (!this.knew(account)) {
-      if (cand) for (const b of cand) st.accepted.set(bindingId(b), { binding: b, evidence: "first use" });
+      if (cand) for (const b of cand) {
+        st.accepted.set(bindingId(b), { binding: b, evidence: "first use" });
+        if (this.policy === "inviters") this.startFirstContactHold(b);
+      }
       return;
     }
     if (!cand) return;
@@ -314,13 +388,52 @@ export class Trust {
     }
   }
 
-  /** Credit elapsed local time; a clock that moved back credits nothing. */
+  /** Credit elapsed local time; a clock that moved back credits nothing.
+   * A revoked binding's first-contact hold keeps its credit but earns no
+   * more. Under the inviters policy, installations tick before applying an
+   * observation, so a removal costs no credit earned before it was learned. */
   tick(): void {
     const now = this.localNow();
     for (const h of this.state.holds.values()) {
       h.credited += Math.max(0, now - h.checkpoint);
       h.checkpoint = now;
     }
+    for (const [id, h] of this.state.fcHolds) {
+      if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);
+      h.checkpoint = now;
+    }
+  }
+
+  // ---- grant standing (inviters policy) ------------------------------------
+
+  private startFirstContactHold(b: Binding): void {
+    const k = fcKey(b);
+    if (b.account !== this.own.account && !this.state.fcHolds.has(k)) this.state.fcHolds.set(k, { credited: 0, checkpoint: this.localNow() });
+  }
+
+  /** Record a vouch this installation made by inviting `b`'s account to
+   * `space`, having first met `b` in doing so. */
+  vouch(space: string, b: Binding): void {
+    const st = this.state;
+    if (!st.vouches.has(space)) st.vouches.set(space, new Set());
+    st.vouches.get(space)!.add(bindingId(b));
+  }
+
+  /** Take the vouch in an invite record from this installation's own
+   * account, as a pin copied by pairing: only for an account it has never
+   * pinned, so it never ends a hold already running here. Presence is
+   * checked by the next observation of the account. Returns whether it
+   * pinned anything. */
+  adoptInvite(rec: Invite): boolean {
+    if (!rec.vouched || this.knew(rec.account)) return false;
+    const st = this.state;
+    for (const b of rec.bindings) {
+      if (b.account !== rec.account) continue;
+      st.accepted.set(bindingId(b), { binding: b, evidence: `invited by ${label(rec.issuer)}` });
+      this.startFirstContactHold(b);
+      this.vouch(rec.space, b);
+    }
+    return this.knew(rec.account);
   }
 
   // ---- transfer ------------------------------------------------------------
@@ -328,6 +441,8 @@ export class Trust {
   /** Import another own installation's state (pairing, backup). */
   importFrom(other: TrustState): void {
     const st = this.state;
+    const knew = new Set([...st.accepted.values()].map((a) => a.binding.account));
+    if (this.policy === "inviters") this.tick();
     for (const [id, a] of other.accepted) if (!st.accepted.has(id)) st.accepted.set(id, a);
     for (const [id, b] of other.revoked) st.revoked.set(id, b);
     for (const [id, b] of other.candidatesSeen) st.candidatesSeen.set(id, b);
@@ -341,6 +456,21 @@ export class Trust {
       const mine = st.holds.get(did);
       if (!mine) st.holds.set(did, { ...h, candidate: [...h.candidate], bindings: [...h.bindings], checkpoint: now });
       else if (mine.candidate.join() === h.candidate.join()) mine.credited = Math.max(mine.credited, h.credited);
+    }
+    if (this.policy === "inviters") {
+      // First-contact holds transfer as credited time, never more than
+      // either installation credited.
+      for (const [id, h] of other.fcHolds) {
+        const mine = st.fcHolds.get(id);
+        st.fcHolds.set(id, { credited: Math.max(h.credited, mine?.credited ?? 0), checkpoint: now });
+      }
+      // A vouch carries only to an installation with no pin for the account.
+      for (const [space, ids] of other.vouches)
+        for (const id of ids) {
+          const b = other.accepted.get(id)?.binding;
+          if (b && !knew.has(b.account)) this.vouch(space, b);
+        }
+      for (const [t, s] of other.approvers) if (!st.approvers.has(t)) st.approvers.set(t, s);
     }
     if (st.revoked.has(bindingId(this.own)))
       this.alarmOnce("own-removed", "own-removed", "This device was removed from your account. If this wasn't you, change your password and remove devices you don't recognise.");

@@ -13,6 +13,10 @@ begin
  *
  * Build the pre-fix variant, where an approval could accept a device while
  * every accepted binding of its account was revoked, with -D=NOLIVEGUARD.
+ *
+ * Build the inviters proposal (proposal-inviters.md) with -D=INVITERS:
+ * issuing a grant then also needs grant standing. Add -D=UNSCOPED for the
+ * rejected form in which a vouch gives standing in every space.
  */
 
 builtins: signing, asymmetric-encryption, hashing
@@ -89,6 +93,17 @@ rule FirstUse:
 
 // Approval by a binding the client accepted, revoked or not, but only while
 // the account has a live accepted binding at this client (D2).
+#ifdef INVITERS
+// Under INVITERS, the client also records the signer, whose grant standing
+// the target inherits.
+rule AcceptApproval:
+    let s = <A, ps, pes>
+        t = <A, pt, pet>
+    in
+    [ !Acc(c, s), LiveN(c, A, s(n)), In(<'approve', A, s, t, sig>) ]
+  --[ Eq(verify(sig, <'approve', A, s, t>, ps), true), Accept(c, A, t), ApprovalAccept(c, A, ps, t) ]->
+    [ !Acc(c, t), LiveN(c, A, s(s(n))), !ApprovedBy(c, s, t) ]
+#else
 rule AcceptApproval:
     let s = <A, ps, pes>
         t = <A, pt, pet>
@@ -96,6 +111,7 @@ rule AcceptApproval:
     [ !Acc(c, s), LiveN(c, A, s(n)), In(<'approve', A, s, t, sig>) ]
   --[ Eq(verify(sig, <'approve', A, s, t>, ps), true), Accept(c, A, t), ApprovalAccept(c, A, ps, t) ]->
     [ !Acc(c, t), LiveN(c, A, s(s(n))) ]
+#endif
 
 #ifdef NOLIVEGUARD
 // The pre-fix rule: an approval accepts a device even while every accepted
@@ -125,16 +141,110 @@ rule HoldStart:
   --[ HoldStart(c, A, t) ]->
     [ Hold(c, A, t) ]
 
+#ifdef INVITERS
+// Under INVITERS, a re-enrolled binding has grant standing in every space.
+// (Written with t's shape, which HoldStart fixes, so proofs see its account.)
+rule HoldComplete:
+    let t = <A, pt, pet> in
+    [ Hold(c, A, t) ]
+  --[ HoldDone(c, A, t), Accept(c, A, t), AcceptWhileReset(c, A, t), GainStanding(c, 'all', t) ]->
+    [ !Acc(c, t), LiveN(c, A, s('z')), !Standing(c, 'all', t) ]
+#else
 rule HoldComplete:
     [ Hold(c, A, t) ]
   --[ HoldDone(c, A, t), Accept(c, A, t), AcceptWhileReset(c, A, t) ]->
     [ !Acc(c, t), LiveN(c, A, s('z')) ]
+#endif
 
 rule HoldCancel:
     [ Hold(c, A, t), In(<'deleted', t>) ]
   --[ Revoke(c, t) ]->
     [ LiveN(c, A, 'z') ]
 
+/* ---- Grant standing (INVITERS) ---------------------------------------- */
+
+// Grant standing gates only what a client grants; acceptance is unchanged.
+// !Standing(c, sc, t), with action GainStanding: c may grant to t the key of
+// space sc, or of every space if sc is 'all' (spaces are fresh, so none is
+// named 'all'). Own bindings are not modeled: a client never accepts its
+// own account's.
+
+#ifdef INVITERS & not UNSCOPED
+// The vouch: a client that accepted an account's binding by first use while
+// inviting the account to a space (the host admitting it there) vouches
+// for it in that space only. A binding accepted any other way, or already
+// vouched for, is never vouched for (restrictions below). The rule lets the
+// vouch come at any time after the first use, not only with it, which only
+// adds behaviors. A vouch is used only by IssueGrant, which checks the
+// inviter's own membership.
+rule InviteFirstUse:
+    let t = <A, pt, pet> in
+    [ !Acc(c, t), !Member(S, A) ]
+  --[ Vouched(c, S, t), VouchOnce(c, t), UsesLive(c, t), GainStanding(c, S, t) ]->
+    [ !Standing(c, S, t) ]
+#endif
+
+#ifdef INVITERS & UNSCOPED
+// The rejected form: a vouch gives standing in every space.
+rule InviteFirstUse:
+    let t = <A, pt, pet> in
+    [ !Acc(c, t), !Member(S, A) ]
+  --[ Vouched(c, S, t), VouchOnce(c, t), UsesLive(c, t), GainStanding(c, 'all', t) ]->
+    [ !Standing(c, 'all', t) ]
+#endif
+
+#ifdef INVITERS
+restriction VouchOnlyOnFirstUse:
+  "All c S A pt pet #v. Vouched(c, S, <A, pt, pet>) @ v ==>
+     Ex #f. AcceptFirstUse(c, A, <A, pt, pet>) @ f & f < v"
+
+restriction VouchOnce:
+  "All c t #i #j. VouchOnce(c, t) @ i & VouchOnce(c, t) @ j ==> #i = #j"
+
+// The first-contact hold: every binding accepted by first use or approval
+// starts one on acceptance (one accepted by HoldComplete has standing
+// already). Time is abstracted as for re-enrollment. A revoked binding
+// neither starts nor completes one (RevokedNotUsed), but keeps standing it
+// earned before.
+rule FirstContactHoldDone:
+    [ !Acc(c, t) ]
+  --[ FirstContactHoldDone(c, t), UsesLive(c, t), GainStanding(c, 'all', t) ]->
+    [ !Standing(c, 'all', t) ]
+
+// An approved binding inherits its signer's standing, and its scope, whether
+// or not the signer has since been revoked.
+rule InheritStanding:
+    let sg = <A, ps, pes>
+        t  = <A, pt, pet>
+    in
+    [ !ApprovedBy(c, sg, t), !Standing(c, sc, sg) ]
+  --[ GainStanding(c, sc, t) ]->
+    [ !Standing(c, sc, t) ]
+
+/* ---- Grants ----------------------------------------------------------- */
+
+// An issuer grants a key it holds to a binding it accepted and that is live,
+// for members of the space, only if the binding has grant standing for it
+// in this space (the restriction below, kept out of the premises so the
+// grant's sources stay as in the base model). HPKE is abstracted as
+// public-key encryption of the key bound to the header; the issuer
+// signature is required.
+rule IssueGrant:
+    let me  = <A, pk(sk), pk(ek)>
+        t   = <B, pr, per>
+        hdr = <'hdr', S, kid, t, me>
+        ct  = aenc(<k, hdr>, per)
+    in
+    [ !Dev(A, sk, ek), !Holds(pk(sk), S, k), !Config(S, kid, cm), !Member(S, A), !Member(S, B),
+      !Acc(pk(sk), t) ]
+  --[ Grant(pk(sk), S, k, t), UsesLive(pk(sk), t), NeedsStanding(pk(sk), S, t) ]->
+    [ Out(<hdr, ct, sign(<'grant', hdr, ct>, sk)>) ]
+
+restriction GrantNeedsStanding:
+  "All c S t #g. NeedsStanding(c, S, t) @ g ==>
+       (Ex #a. GainStanding(c, S, t) @ a & a < g)
+     | (Ex #a. GainStanding(c, 'all', t) @ a & a < g)"
+#else
 /* ---- Grants ----------------------------------------------------------- */
 
 // An issuer grants a key it holds to a binding it accepted and that is live,
@@ -150,6 +260,7 @@ rule IssueGrant:
       !Acc(pk(sk), t) ]
   --[ Grant(pk(sk), S, k, t), UsesLive(pk(sk), t) ]->
     [ Out(<hdr, ct, sign(<'grant', hdr, ct>, sk)>) ]
+#endif
 
 // The recipient checks the signature, that it is the recipient, decryption,
 // the commitment, that it accepts the issuer, and membership (A1-A6).
@@ -313,5 +424,68 @@ lemma first_contact_substitution:
      & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
      & not (Ex a b x #c. HoldStart(a, b, x) @ c)
      & not (Ex a x #c. Revoke(a, x) @ c)"
+
+/* ---- Lemmas for the inviters proposal (-D=INVITERS) ------------------- */
+
+#ifdef INVITERS & not UNSCOPED
+// I1. A grant on a vouch alone: the inviter grants the key of the space it
+// invited the account to, with no hold and no compromise.
+lemma inviters_executable_vouched_grant:
+  exists-trace
+  "Ex iss S k r #v #g #a. Vouched(iss, S, r) @ v & Grant(iss, S, k, r) @ g & AcceptKey(r, S, k, iss) @ a
+     & (All x y z #c. Vouched(x, y, z) @ c ==> #c = #v)
+     & (All a b c d #c. Grant(a, b, c, d) @ c ==> #c = #g)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex x y #c. FirstContactHoldDone(x, y) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+
+// I2. A grant after a first-contact hold, with no vouch anywhere.
+lemma inviters_executable_held_grant:
+  exists-trace
+  "Ex iss S k r #h #g #a. FirstContactHoldDone(iss, r) @ h & Grant(iss, S, k, r) @ g & AcceptKey(r, S, k, iss) @ a
+     & (All x y #c. FirstContactHoldDone(x, y) @ c ==> #c = #h)
+     & (All a b c d #c. Grant(a, b, c, d) @ c ==> #c = #g)
+     & not (Ex x y z #c. Vouched(x, y, z) @ c)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+
+// I3. Under the inviters rule, first use alone no longer justifies a grant
+// to an encryption key the adversary created. The issuer vouched for that
+// binding in this same space, completed a first-contact or re-enrollment
+// hold on it, or accepted it through an approval by a compromised or
+// adversary signing key. With 2a, which still verifies under the variant,
+// this is space-key secrecy for it.
+lemma inviters_grant_targets_justified:
+  "All iss S k B pr pe #g. Grant(iss, S, k, <B, pr, pe>) @ g & not (Ex #h. HonestEnc(pe) @ h) ==>
+       (Ex #a. Vouched(iss, S, <B, pr, pe>) @ a)
+     | (Ex #a. FirstContactHoldDone(iss, <B, pr, pe>) @ a)
+     | (Ex #a. HoldDone(iss, B, <B, pr, pe>) @ a)
+     | (Ex ps #a. ApprovalAccept(iss, B, ps, <B, pr, pe>) @ a
+          & ((not (Ex #h. HonestSign(ps) @ h)) | (Ex #r. Compromised(ps) @ r)))"
+#endif
+
+#ifdef INVITERS & UNSCOPED
+// I4. With account-wide vouches, an adversary binding vouched for in one
+// space is granted another space's key, with no hold and no compromise:
+// the attack that made vouches space-scoped. (The grant is to an
+// encryption key the adversary created, so it discloses the key: 2a.)
+lemma cross_space_vouch_attack:
+  exists-trace
+  "Ex iss S1 S2 k B pr pe #v #g.
+       Vouched(iss, S1, <B, pr, pe>) @ v & Grant(iss, S2, k, <B, pr, pe>) @ g
+     & not (S1 = S2)
+     & not (Ex #h. HonestEnc(pe) @ h)
+     & (All x y z #c. Vouched(x, y, z) @ c ==> #c = #v)
+     & (All a b c d #c. Grant(a, b, c, d) @ c ==> #c = #g)
+     & not (Ex x #c. Compromised(x) @ c)
+     & not (Ex x y #c. FirstContactHoldDone(x, y) @ c)
+     & not (Ex a b x y #c. ApprovalAccept(a, b, x, y) @ c)
+     & not (Ex a b x #c. HoldStart(a, b, x) @ c)
+     & not (Ex a x #c. Revoke(a, x) @ c)"
+#endif
 
 end

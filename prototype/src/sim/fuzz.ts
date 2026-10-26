@@ -4,21 +4,30 @@
 //
 // Shared-view walks restrict themselves to what model/nbd_trust.py can
 // express (public-repo writes and elapsed time, no lag or forged views) and
-// record a trace of the viewer's trust decisions for model/replay_traces.py.
+// record a trace of the viewer's trust decisions for model/test_traces.py.
+//
+// Under the inviters policy (proposal-inviters.md) a walk has four accounts
+// and two spaces with different admins, adds invites and joins only by
+// admitted accounts, and its traces also record invite operations, the
+// accounts the viewer tracks, and the viewer's grant standing per space.
 
 import { Rng } from "../protocol/crypto";
 import type { Installation } from "../protocol/installation";
 import { commitment } from "../protocol/grants";
-import { type Binding, COL, bindingId } from "../protocol/types";
+import { type Binding, COL, type Policy, bindingId } from "../protocol/types";
 import type { TraceBinding, TraceOp } from "../world/world";
 import { World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
 
 export type Action = (string | number | boolean)[];
-export type TraceStep = { ops: TraceOp[]; accepted: TraceBinding[]; holds: string[] };
-export type Trace = { seed: string; viewer: TraceBinding; actions?: Action[]; steps: TraceStep[] };
+/** `tracked` and `standing` (space label -> bindings) only under inviters. */
+export type TraceStep = { ops: TraceOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]> };
+export type Trace = { seed: string; policy?: Policy; spaces?: string[]; viewer: TraceBinding; actions?: Action[]; steps: TraceStep[] };
 
 const ACCOUNTS = ["alice", "bob", "carol"];
+const INVITER_ACCOUNTS = ["alice", "bob", "carol", "dave"];
+/** Space labels in inviters traces, in the order of `Walk.spaces`. */
+const SPACE_LABELS = ["A", "B"];
 const WAITS = [1, 24, 48, 71, 72, 100];
 const did = (a: string) => `did:plc:${a}`;
 
@@ -29,24 +38,39 @@ export class Walk {
   readonly spaces: string[];
   readonly viewer: Installation;
   readonly trace: Trace | null;
+  readonly accounts: string[];
   private names = 0;
 
-  constructor(readonly seed: string, readonly shared: boolean) {
-    const w = (this.world = new World(seed));
+  constructor(readonly seed: string, readonly shared: boolean, readonly policy: Policy = "baseline") {
+    const w = (this.world = new World(seed, { policy }));
     if (shared) w.trace = [];
-    const phones = ACCOUNTS.map((a) => w.install(w.account(a, a === "alice" ? "pds.example" : `pds.${a}.example`), "phone"));
+    const inviters = policy === "inviters";
+    this.accounts = inviters ? INVITER_ACCOUNTS : ACCOUNTS;
+    const phones = this.accounts.map((a) => w.install(w.account(a, a === "alice" ? "pds.example" : `pds.${a}.example`), "phone"));
     this.viewer = phones[0];
-    this.space = phones[0].createSpace("Club");
-    for (const p of phones.slice(1)) phones[0].invite(this.space, p.did);
-    for (const p of phones) p.join(this.space);
-    // A second space with fewer members, so trust reuse across spaces is exercised.
-    const garden = phones[0].createSpace("Garden");
-    phones[0].invite(garden, phones[1].did);
-    phones[1].join(garden);
-    this.spaces = [this.space, garden];
+    if (inviters) {
+      // Alice and Bob share Club; Carol and Dave share Garden. Alice starts
+      // out never having met Carol or Dave, so invites can vouch.
+      this.space = phones[0].createSpace("Club");
+      phones[0].invite(this.space, phones[1].did);
+      phones[1].join(this.space);
+      const garden = phones[2].createSpace("Garden");
+      phones[2].invite(garden, phones[3].did);
+      phones[3].join(garden);
+      this.spaces = [this.space, garden];
+    } else {
+      this.space = phones[0].createSpace("Club");
+      for (const p of phones.slice(1)) phones[0].invite(this.space, p.did);
+      for (const p of phones) p.join(this.space);
+      // A second space with fewer members, so trust reuse across spaces is exercised.
+      const garden = phones[0].createSpace("Garden");
+      phones[0].invite(garden, phones[1].did);
+      phones[1].join(garden);
+      this.spaces = [this.space, garden];
+    }
     w.settle();
     this.monitor = new InvariantMonitor(w);
-    this.trace = shared ? { seed, viewer: [this.viewer.did.slice(8), this.viewer.binding.device.deviceId], steps: [] } : null;
+    this.trace = shared ? { seed, ...(inviters ? { policy, spaces: SPACE_LABELS } : {}), viewer: [this.viewer.did.slice(8), this.viewer.binding.device.deviceId], steps: [] } : null;
     if (shared) this.record();
   }
 
@@ -62,12 +86,13 @@ export class Walk {
     const w = this.world;
     const insts = this.insts();
     const pick = <T>(xs: T[]): T => xs[rng.int(xs.length)];
-    const acct = pick(ACCOUNTS);
+    const acct = pick(this.accounts);
     const kinds: [string, number][] = [
       ["link", 4], ["install", 1], ["remove", 3], ["removeQuiet", 1], ["wait", 3], ["join", 2], ["post", 2],
       ["takeover", 1], ["steal", 1], ["approve", 2], ["recreate", 2], ["attackerAdd", 1], ["skew", 1],
       ["forget", 1], ["fault", 1], ["rotate", 1],
     ];
+    if (this.policy === "inviters") kinds.push(["invite", 3]);
     if (!this.shared)
       kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
         ["tamper", 1], ["migrate", 1]);
@@ -86,11 +111,24 @@ export class Walk {
         return insts.length ? [kind, pick(insts).id] : ["wait", 1];
       case "join": {
         const s = rng.int(this.spaces.length);
-        const out = insts.filter((i) => !i.spaces.has(this.spaces[s]));
+        const admitted = (i: Installation) => this.policy !== "inviters" || !!w.host.membership(this.spaces[s], i.did)?.eligible;
+        const out = insts.filter((i) => !i.spaces.has(this.spaces[s]) && admitted(i));
         return out.length ? ["join", pick(out).id, s] : ["post", pick(insts).id, s];
       }
       case "post":
         return ["post", pick(insts).id, rng.int(this.spaces.length)];
+      case "invite": {
+        // The space's admin account invites from an installation in the space.
+        // In shared walks an own-account inviter is one the viewer accepted,
+        // so the model's replay may take every record from the viewer's
+        // account as valid.
+        const s = rng.int(this.spaces.length);
+        const admin = w.host.admin(this.spaces[s]);
+        const by = insts.filter((i) => i.did === admin && i.spaces.has(this.spaces[s])
+          && (!this.shared || i.did !== this.viewer.did || this.viewer.trust.state.accepted.has(bindingId(i.binding))));
+        const to = this.accounts.filter((a) => did(a) !== admin);
+        return by.length ? ["invite", pick(by).id, s, pick(to)] : ["wait", 1];
+      }
       case "forget":
         return ["forget", pick(insts).id, rng.int(this.spaces.length)];
       case "fault":
@@ -167,6 +205,7 @@ export class Walk {
     else if (kind === "install") w.install(did(String(a[1])), String(a[2]));
     else if (kind === "remove" || kind === "removeQuiet") { const i = inst(a[1]); if (i) w.removeDevice(i, { endSession: kind === "remove" }); }
     else if (kind === "join") { const i = inst(a[1]); if (i) { i.join(this.spaces[Number(a[2] ?? 0)]); w.settle(); } }
+    else if (kind === "invite") { const i = inst(a[1]); if (i) { i.invite(this.spaces[Number(a[2])], did(String(a[3]))); w.settle(); } }
     else if (kind === "post") { const s = this.spaces[Number(a[2] ?? 0)]; const i = inst(a[1]); if (i?.spaces.has(s)) { i.post(s, `m${w.t}`); w.settle(); } }
     else if (kind === "forget") { const i = inst(a[1]); if (i) { i.forgetKey(this.spaces[Number(a[2])]); w.settle(); } }
     else if (kind === "fault") { const i = inst(a[1]); if (i) w.fault(i, a[2] as "reject" | "lost-ack", Number(a[3]), String(a[4]) || undefined); }
@@ -222,7 +261,7 @@ export class Walk {
     const del: TraceOp[] = [];
     const appr: TraceOp[] = [];
     const add: TraceOp[] = [];
-    for (const a of ACCOUNTS) {
+    for (const a of this.accounts) {
       const recs = new Map<string, unknown>(this.world.pdsOf.get(did(a))!.repo(did(a)).records);
       const prev = this.lastRecords.get(a) ?? new Map<string, unknown>();
       const tbOf = (v: unknown): TraceBinding => { const b = (v as { value: Binding }).value; return [a, b.device.deviceId]; };
@@ -242,11 +281,21 @@ export class Walk {
 
   private record(): void {
     const w = this.world;
-    const ops = [...this.repoOps(), ...w.trace!.splice(0).filter((o) => o.op === "wait" || o.op === "skew")];
-    const accepted = w.allBindings().filter((b: Binding) => this.viewer.trust.isAccepted(b))
-      .map((b): TraceBinding => [b.account.slice(8), b.device.deviceId]);
-    const holds = ACCOUNTS.filter((a) => this.viewer.trust.hold(did(a)));
-    this.trace!.steps.push({ ops, accepted, holds });
+    const pending = w.trace!.splice(0);
+    const invites = pending.flatMap((o) => (o.op === "invite" ? [{ ...o, space: SPACE_LABELS[this.spaces.indexOf(o.space)] }] : []));
+    const ops = [...this.repoOps(), ...invites, ...pending.filter((o) => o.op === "wait" || o.op === "skew")];
+    const tb = (b: Binding): TraceBinding => [b.account.slice(8), b.device.deviceId];
+    const all = w.allBindings();
+    const accepted = all.filter((b: Binding) => this.viewer.trust.isAccepted(b)).map(tb);
+    const holds = this.accounts.filter((a) => this.viewer.trust.hold(did(a)));
+    if (this.policy !== "inviters") {
+      this.trace!.steps.push({ ops, accepted, holds });
+      return;
+    }
+    const tracked = this.viewer.trackedAccounts().map((d) => d.slice(8)).sort();
+    const standing: Record<string, TraceBinding[]> = {};
+    this.spaces.forEach((s, n) => (standing[SPACE_LABELS[n]] = all.filter((b) => this.viewer.trust.standing(b, s)).map(tb)));
+    this.trace!.steps.push({ ops, accepted, holds, tracked, standing });
   }
 }
 
@@ -254,8 +303,8 @@ function eq(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
-export function replay(seed: string, shared: boolean, actions: Action[]): string | null {
-  const walk = new Walk(seed, shared);
+export function replay(seed: string, shared: boolean, actions: Action[], policy: Policy = "baseline"): string | null {
+  const walk = new Walk(seed, shared, policy);
   for (let n = 0; n < actions.length; n++) {
     const err = walk.step(actions[n]);
     if (err) return `step ${n}: ${err}`;
@@ -264,12 +313,12 @@ export function replay(seed: string, shared: boolean, actions: Action[]): string
 }
 
 /** Drop actions one at a time while the walk still fails. */
-export function shrink(seed: string, shared: boolean, actions: Action[]): Action[] {
+export function shrink(seed: string, shared: boolean, actions: Action[], policy: Policy = "baseline"): Action[] {
   for (let changed = true; changed; ) {
     changed = false;
     for (let n = 0; n < actions.length; n++) {
       const trial = actions.slice(0, n).concat(actions.slice(n + 1));
-      if (replay(seed, shared, trial)) {
+      if (replay(seed, shared, trial, policy)) {
         actions = trial;
         changed = true;
         break;
@@ -280,16 +329,16 @@ export function shrink(seed: string, shared: boolean, actions: Action[]): Action
 }
 
 /** Run one seeded walk. Returns the shrunk failing actions, if any. */
-export function walk(seed: string, steps: number, shared: boolean): { failure: string | null; actions: Action[]; trace: Trace | null } {
+export function walk(seed: string, steps: number, shared: boolean, policy: Policy = "baseline"): { failure: string | null; actions: Action[]; trace: Trace | null } {
   const rng = Rng.fromLabel(`fuzz/${seed}`);
-  const w = new Walk(seed, shared);
+  const w = new Walk(seed, shared, policy);
   const actions: Action[] = [];
   for (let n = 0; n < steps; n++) {
     const a = w.gen(rng);
     actions.push(a);
     if (w.step(a)) {
-      const small = shrink(seed, shared, actions);
-      return { failure: replay(seed, shared, small), actions: small, trace: null };
+      const small = shrink(seed, shared, actions, policy);
+      return { failure: replay(seed, shared, small, policy), actions: small, trace: null };
     }
   }
   return { failure: null, actions, trace: w.trace };

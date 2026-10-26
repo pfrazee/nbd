@@ -4,10 +4,10 @@
 
 import { type Cbor, ref } from "../protocol/encoding";
 import { type KeyPair, Rng, sign } from "../protocol/crypto";
-import { Installation, type InstallationState, type Network } from "../protocol/installation";
+import { Installation, type InstallationState, type InviteEvent, type Network } from "../protocol/installation";
 import type { RecordPath, Snapshot, WriteOp } from "../protocol/repo";
 import { approvalPayload } from "../protocol/trust";
-import { type Approval, type Binding, COL, type Did, asCbor } from "../protocol/types";
+import { type Approval, type Binding, COL, type Did, type Policy, asCbor, label } from "../protocol/types";
 import { Adversary } from "./adversary";
 import { Host } from "./host";
 import { Pds, type Session } from "./pds";
@@ -22,7 +22,15 @@ export type TraceOp =
   | { op: "approve"; s: TraceBinding; t: TraceBinding }
   | { op: "delete"; b: TraceBinding }
   | { op: "wait"; h: number }
-  | { op: "skew"; who: string; h: number };
+  | { op: "skew"; who: string; h: number }
+  /** An invite record was published (inviters policy). `space` is the
+   * space URI here; fuzz traces replace it with the walk's space label. */
+  | { op: "invite"; by: TraceBinding; space: string; account: string; bindings: TraceBinding[]; vouched: boolean };
+
+/** Ground truth about one published invite record. `firstMet`: the inviting
+ * installation had no pin for the account before the invite; `devices` are
+ * the device IDs it then vouched for. */
+export type InviteFact = { space: string; inviter: Did; device: string; account: Did; firstMet: boolean; devices: string[]; at: number; seq: number };
 
 /** Ground truth for the disclosure check: who really controls each device. */
 export type Provenance = {
@@ -33,6 +41,7 @@ export type Provenance = {
   /** `standing`: when signed, the account still had a device record the
    * attacker does not control, so it was not a full reset. */
   approvals: { signer: string; target: string; at: number; compromised: boolean; standing: boolean }[];
+  invites: InviteFact[];
 };
 
 const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
@@ -55,7 +64,7 @@ export class World implements Network {
   /** Write faults per installation: "reject" fails before applying; "lost-ack"
    * applies the write, then fails as a lost acknowledgement would. */
   readonly faults = new Map<string, { mode: "reject" | "lost-ack"; collection?: string; count: number }>();
-  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [] };
+  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [], invites: [] };
   /** Orders events that happen at the same world time. */
   private seq = 0;
 
@@ -71,11 +80,30 @@ export class World implements Network {
   trace: TraceOp[] | null = null;
   private counter = 0;
 
-  constructor(seed = "nbd") {
+  /** The grant rule every installation follows; set at creation. */
+  readonly policy: Policy;
+
+  constructor(seed = "nbd", opts: { policy?: Policy } = {}) {
     this.rng = Rng.fromLabel(seed);
+    this.policy = opts.policy ?? "baseline";
   }
 
   // ---- Network ---------------------------------------------------------------
+
+  accountSpaces(did: Did): string[] {
+    const out: string[] = [];
+    const prefix = `${did}|`;
+    for (const name of this.pdsOf.get(did)?.repos.keys() ?? []) if (name.startsWith(prefix)) out.push(name.slice(prefix.length));
+    return out;
+  }
+
+  invited(e: InviteEvent): void {
+    const r = e.record;
+    const devices = e.vouched.map((b) => b.device.deviceId);
+    this.provenance.invites.push({ space: e.space, inviter: e.by.account, device: e.by.device.deviceId, account: r.account, firstMet: e.firstMet, devices, at: this.t, seq: this.tick() });
+    this.trace?.push({ op: "invite", by: tb(e.by), space: e.space, account: r.account.replace("did:plc:", ""), bindings: r.bindings.map(tb), vouched: r.vouched });
+    this.note(`${label(e.by)} invited ${r.account} to ${this.host.spaceName(e.space)}${r.vouched ? `, vouching for ${r.bindings.length} device(s)` : ""}`);
+  }
 
   now(): number {
     return this.t;

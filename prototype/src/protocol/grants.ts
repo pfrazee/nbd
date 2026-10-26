@@ -61,8 +61,16 @@ export function authorizeExchange(
     if (trust.hold(other.account)?.candidate.includes(bindingId(other))) return fail("INCOMPLETE", `${label(other)} is held for re-enrollment`);
     return fail("INCOMPLETE", `${label(other)} is not accepted`);
   }
+  // Inviters policy: an issuer also needs grant standing for the recipient
+  // in this space (proposal-inviters.md#grant-standing).
+  const evidence = trust.state.accepted.get(bindingId(other))!.evidence;
+  if (role === "issuer" && trust.policy === "inviters") {
+    const basis = trust.standingBasis(other, space);
+    if (!basis) return fail("INCOMPLETE", `${label(other)} is in a first-contact hold`);
+    return ok(`${label(other)} accepted (${evidence}), standing: ${basis}`);
+  }
   // G4/G5: acceptance rests on this client's own trust state.
-  return ok(`${label(other)} accepted (${trust.state.accepted.get(bindingId(other))!.evidence})`);
+  return ok(`${label(other)} accepted (${evidence})`);
 }
 
 function grantHeader(g: Omit<SpaceKeyGrant, "encapsulation" | "ciphertext" | "proof">): Cbor {

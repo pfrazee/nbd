@@ -18,6 +18,15 @@ formal/check.sh
 
 It proves each lemma on its own, one at a time, with the heuristic that lets it terminate and a time cap (`CAP`, default 1800 seconds), writes `formal/results.txt`, and fails unless every lemma is verified. The whole run takes about 25 minutes on an Apple-silicon laptop. To explore a lemma or an attack trace interactively, run `tamarin-prover interactive formal/` and open <http://localhost:3001>.
 
+Proofs can use many cores and gigabytes of memory, so on a large machine, run them in [Docker](docker/Dockerfile), with `JOBS` proofs at once and `RTS` Haskell runtime options for each:
+
+```bash
+docker build -t nbd-tamarin formal/docker
+docker run --rm -e JOBS=17 -e RTS="-N8" -v "$PWD/formal:/formal" nbd-tamarin ./check.sh
+```
+
+With every entry running at once, the whole run takes about as long as its slowest lemma: about 8 minutes on a 256-core server. On a laptop, keep `JOBS` at 1, and cap the container (`--cpus`, `--memory`) and Tamarin's heap (`RTS="-N1 -M1300m -c"`); the larger existence proofs need more memory than Docker Desktop's default 2 GB VM provides.
+
 ## Adversary and trust
 
 - **The adversary** controls the network and plays every PDS. Clients read device records, approvals, deletions, and grants from it, so it chooses what each client sees and can revoke any device for any client. It can compromise any device at any time, learning its signing and encryption keys and every space key it holds, and it can create devices of its own.
@@ -45,7 +54,7 @@ It proves each lemma on its own, one at a time, with the heuristic that lets it 
 
 ## Lemmas and results
 
-All verified with Tamarin 1.12.0 and Maude 3.5.1. The pre-fix variant is the same model built with `-D=NOLIVEGUARD`, which adds the rule that let an approval accept a device while every accepted binding of its account was revoked.
+All verified with Tamarin 1.12.0 and Maude 3.4, in the [container](docker/Dockerfile). The pre-fix variant is the same model built with `-D=NOLIVEGUARD`, which adds the rule that let an approval accept a device while every accepted binding of its account was revoked. The [inviters variant](#the-inviters-variant) has its own table below.
 
 | Lemma | Claim | Goal | Result |
 | --- | --- | --- | --- |
@@ -66,9 +75,39 @@ Together, `key_leaks_only_via_holders_or_grants` and `adversary_grant_targets_ju
 
 **Spot check.** With the recipient's commitment check removed, the model finds a trace in which a recipient accepts a key that is not the space's key, from an adversary-issued grant. `key_agreement` rests on that check.
 
+## The inviters variant
+
+Built with `-D=INVITERS`, the model adds the grant standing of [the inviters proposal](../proposal-inviters.md), following the [Python model's](../model/README.md#what-the-inviters-variant-found) `InviterClient` where the proposal's text lags. Without the flag, the model is unchanged: Tamarin parses it to the same theory as before.
+
+- **Acceptance is unchanged.** Standing gates only what a client grants: `IssueGrant` additionally requires that the binding gained standing, earlier, in that space or in every space.
+- **Vouched, in one space.** `InviteFirstUse` vouches for a binding the client accepted by first use, while the host admits that account to the space, and gives it standing in that space only. A binding accepted any other way, including one of an account the client already knew, is never vouched for, and each binding is vouched for at most once.
+- **Held.** `FirstContactHoldDone` gives any binding the client accepted by first use or approval standing in every space, once its first-contact hold completes. A revoked binding never completes one, but keeps standing it earned before.
+- **Re-enrolled.** A completed re-enrollment hold gives standing in every space.
+- **Approved.** A binding accepted by approval inherits its signer's standing and scope, even if the signer has since been revoked.
+- **Own** bindings are not modeled, since clients in the model never accept their own account's bindings.
+
+Built with `-D=INVITERS -D=UNSCOPED`, a vouch instead gives standing in every space: the rejected design in which a vouch was account-wide.
+
+| Lemma | Claim | Result |
+| --- | --- | --- |
+| `inviters_executable_vouched_grant` | An inviter grants the invited space's key on a vouch alone, with no hold and no compromise. | verified, 25 steps |
+| `inviters_executable_held_grant` | A member grants after a first-contact hold, with no vouch anywhere. | verified, 24 steps |
+| `inviters_grant_targets_justified` | An issuer grants a space's key to an encryption key the adversary created only if it vouched for that binding in that same space, completed a first-contact or re-enrollment hold on it, or accepted it through an approval by a compromised or adversary signing key. First use alone no longer suffices. | verified, 59 steps |
+| `key_leaks_only_via_holders_or_grants` (variant) | 2a, unchanged, still holds. With the lemma above, it gives space-key secrecy under the inviters rule. | verified, 468 steps |
+| `cross_space_vouch_attack` (unscoped) | With account-wide vouches, an adversary binding vouched for in one space is granted a different space's key, with no hold, no approval, and no compromise. | verified (attack found), 12 steps |
+
+**What it shows.** Under the inviters rule, a member that meets a taken-over account for the first time can no longer grant it a space's key at once: it needs a vouch in that space, a completed hold, or a compromised or adversary-signed approval, just as members who knew the account already did. The unscoped variant confirms the reviewer's finding: an account-wide vouch lets an inviter in one space disclose another space's key.
+
+**What it does not show.**
+
+- **Scope through adversary-signed approvals.** When an adversary or compromised key approves the binding, `inviters_grant_targets_justified` concludes only that, not that the signer's own standing was in the same space. An induction lemma for that did not terminate.
+- **The moment of the vouch.** The model lets a vouch come any time after the first use rather than only together with it. That only adds behaviors, so the lemmas above still cover the rule.
+- **Time.** Hold durations, credited clocks, and per-client timing are abstracted as for re-enrollment holds. Imports of invite records, hold notices, and verified-only spaces are not modeled.
+
 ## Notes on the proofs
 
 - **Sessions are unbounded** in every lemma above. To keep searches finite, acceptance is persistent and "never after revocation" is a restriction rather than a consumed fact, and live-binding counts use a free successor function (`z`, `s(z)`, ...) rather than an associative-commutative multiset.
-- **`adversary_grant_targets_justified` uses [`oracle.py`](oracle.py),** which defers goals that lead into unending chains (where an issuer's key came from, how counts were built, how an approval's signer was accepted, how the adversary learned a public key) and puts signature checks first. Every other lemma uses Tamarin's default heuristic.
+- **`adversary_grant_targets_justified` and `inviters_grant_targets_justified` use [`oracle.py`](oracle.py),** which defers goals that lead into unending chains (where an issuer's key came from, how counts were built, how an approval's signer was accepted, how the adversary learned a public key) and puts signature checks first. Under `-D=INVITERS`, `key_leaks_only_via_holders_or_grants` uses Tamarin's `i` heuristic: with the default, it does not finish within the time cap. Every other lemma uses the default heuristic.
+- **Grant standing is a restriction on `IssueGrant`,** not a premise, and the vouch reads nothing from the network. Either alternative multiplies the sources Tamarin precomputes for grants, and the proofs then do not finish.
 - **The existence lemmas name their witness** and exclude unneeded events (other approvals, holds, revocations, compromise). The exclusions only prune the search; each trace still shows what its lemma claims.
 - **Tamarin warns** that a counter `n` matched inside `s(n)` is not derivable by the adversary. This is intended: the counter is client state, not a message.

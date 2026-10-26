@@ -1,0 +1,221 @@
+// The inviters proposal (proposal-inviters.md) as a world policy: grant
+// standing, invite records, and first-contact holds, checked against the
+// baseline. Scenarios 13-18 run in scenarios.test.ts; these cover the
+// contrasts and the cases scenarios don't reach.
+
+import { verify } from "../src/protocol/crypto";
+import { invitePayload } from "../src/protocol/trust";
+import { type Invite, COL, type Policy, withoutProof } from "../src/protocol/types";
+import { recordsIn } from "../src/protocol/repo";
+import { Run } from "../src/sim/scenario";
+import { scenarios } from "../src/sim/scenarios";
+import { InvariantMonitor } from "../src/sim/invariants";
+import { World } from "../src/world/world";
+
+const scenario = (id: string) => scenarios.find((s) => s.id === id)!;
+const goal = (vs: string[]) => vs.filter((v) => v.startsWith("goal:"));
+
+/** Alice and Bob share Book club; Alice invited Bob. */
+function club(seed: string, policy: Policy = "inviters") {
+  const w = new World(seed, { policy });
+  const m = new InvariantMonitor(w);
+  const alice = w.install(w.account("alice"), "phone");
+  const bob = w.install(w.account("bob", "pds.bob.example"), "phone");
+  const space = alice.createSpace("Book club");
+  alice.invite(space, bob.did);
+  bob.join(space);
+  w.settle();
+  return { w, m, alice, bob, space };
+}
+
+describe("policy flag", () => {
+  it("defaults to the baseline, which publishes no invite records", () => {
+    const { w, alice, space } = club("p1", "baseline");
+    expect(w.policy).toBe("baseline");
+    expect(w.provenance.invites).toEqual([]);
+    expect(recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)).toEqual([]);
+    expect(alice.trust.state.fcHolds.size).toBe(0);
+  });
+
+  it("the newcomer scenario discloses under the baseline and holds under inviters", () => {
+    const steps = (policy: Policy) => {
+      const run = new Run(scenario("inviters-newcomer"), "newcomer", policy);
+      for (let n = 0; n < 4; n++) run.step();
+      return run;
+    };
+    const base = steps("baseline");
+    expect(base.ctx.inst.attacker.spaces.get(base.ctx.space.club)?.keyFrom).toMatch(/^did:plc:dave/);
+    const inv = steps("inviters");
+    expect(inv.ctx.inst.attacker.spaces.get(inv.ctx.space.club)?.key).toBeFalsy();
+  });
+});
+
+describe("invite records", () => {
+  it("are signed by the inviting device and vouch only at first contact", () => {
+    const { w, alice, bob, space } = club("r1");
+    alice.invite(space, bob.did); // a re-invite
+    const recs = recordsIn(w.pdsOf.get(alice.did)!.repo(alice.did, space).latest(), COL.invite)
+      .map(([, v]) => (v as { value: Invite }).value);
+    expect(recs.map((r) => r.vouched).sort()).toEqual([false, true]);
+    for (const r of recs) {
+      expect(r.issuer).toEqual({ account: alice.did, deviceId: alice.binding.device.deviceId });
+      expect(r.bindings.map((b) => b.device.deviceId)).toEqual([bob.binding.device.deviceId]);
+      expect(verify(r.proof, invitePayload(withoutProof(r)), alice.binding.device.authPubkey)).toBe(true);
+    }
+  });
+
+  it("carry the vouch to the inviter's other installations that never met the account", () => {
+    const w = new World("r2", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const laptop = w.install(alice.did, "laptop", { link: alice });
+    const bob = w.install(w.account("bob"), "phone");
+    const space = alice.createSpace("Book club");
+    laptop.join(space);
+    alice.invite(space, bob.did);
+    w.settle();
+    expect([...laptop.trust.state.accepted.values()].find((a) => a.binding.account === bob.did)?.evidence).toMatch(/^invited by/);
+    expect(laptop.trust.standingBasis(bob.binding, space)).toBe("vouched");
+    expect(laptop.trust.standing(bob.binding, alice.createSpace("Garden"))).toBe(false);
+  });
+
+  it("do not end a hold already running on an installation that pins the account", () => {
+    // Alice's phone met Bob in Carol's Book club before the takeover. Her
+    // tablet, linked earlier, never did, and first meets the attacker's
+    // device by inviting Bob into Garden.
+    const w = new World("r3", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const fresh = w.install(alice.did, "tablet", { link: alice });
+    const bob = w.install(w.account("bob"), "phone");
+    const carol = w.install(w.account("carol"), "phone");
+    const club = carol.createSpace("Book club");
+    carol.invite(club, bob.did);
+    carol.invite(club, alice.did);
+    alice.join(club);
+    w.settle();
+    expect(alice.trust.isAccepted(bob.binding)).toBe(true);
+    const attacker = w.takeover(bob.did);
+    const garden = fresh.createSpace("Garden");
+    w.settle();
+    expect(fresh.trust.knew(bob.did)).toBe(false);
+    fresh.invite(garden, bob.did);
+    w.settle();
+    expect(fresh.trust.standingBasis(attacker.binding, garden)).toBe("vouched");
+    // The phone pins Bob and holds his reset; neither the record nor an
+    // import from the tablet may give it standing.
+    expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
+    m.before();
+    alice.importState(fresh.exportState());
+    expect(m.after().filter((v) => /vouch/.test(v))).toEqual([]);
+    expect(alice.trust.state.vouches.get(garden)?.size ?? 0).toBe(0);
+    expect(alice.trust.standing(attacker.binding, garden)).toBe(false);
+  });
+
+  it("from an unaccepted own device are ignored", () => {
+    const w = new World("r4", { policy: "inviters" });
+    const alice = w.install(w.account("alice"), "phone");
+    const stranger = w.install(alice.did, "unlinked"); // never approved by the phone
+    const bob = w.install(w.account("bob"), "phone");
+    const space = stranger.createSpace("Garden");
+    stranger.invite(space, bob.did);
+    w.settle();
+    expect(alice.trust.knew(bob.did)).toBe(false);
+  });
+});
+
+describe("first-contact holds", () => {
+  it("a device linked while its signer had standing keeps it after the signer is removed", () => {
+    const { w, alice, bob, space } = club("h1");
+    const carol = w.install(w.account("carol"), "phone");
+    alice.invite(space, carol.did);
+    carol.join(space);
+    w.settle();
+    w.advance(80); // Carol's hold for Bob's phone completes
+    expect(carol.trust.standingBasis(bob.binding, space)).toBe("held");
+    const laptop = w.install(bob.did, "laptop", { link: bob });
+    w.removeDevice(bob);
+    expect(carol.trust.standingBasis(laptop.binding, space)).toMatch(/^approved by .*\(held\)$/);
+  });
+
+  it("are credited by each installation's own clock, from when it first saw the device", () => {
+    const { w, alice, bob, space } = club("h2");
+    const carol = w.install(w.account("carol"), "phone");
+    carol.clockOffset = 1000; // another clock domain entirely
+    alice.invite(space, carol.did);
+    carol.join(space);
+    w.settle();
+    w.advance(71);
+    expect(carol.trust.standing(bob.binding, space)).toBe(false);
+    w.advance(1);
+    expect(carol.trust.standing(bob.binding, space)).toBe(true);
+  });
+
+  it("a lost local state starts the holds again", () => {
+    const { w, alice, bob, space } = club("h3");
+    const carol = w.install(w.account("carol"), "phone");
+    alice.invite(space, carol.did);
+    carol.join(space);
+    w.settle();
+    w.advance(80);
+    expect(carol.trust.standing(bob.binding, space)).toBe(true);
+    carol.resetLocalState();
+    w.settle();
+    expect(carol.trust.isAccepted(bob.binding)).toBe(true);
+    expect(carol.trust.standing(bob.binding, space)).toBe(false);
+  });
+});
+
+describe("goal check under inviters", () => {
+  it("flags a newcomer that grants to a takeover device at once", () => {
+    const { w, m, alice, bob, space } = club("g1");
+    const attacker = w.takeover(bob.did);
+    attacker.join(space);
+    const dave = w.install(w.account("dave"), "phone");
+    alice.invite(space, dave.did);
+    // A client bug: Dave's app grants as the baseline does.
+    (dave.trust as { policy: Policy }).policy = "baseline";
+    m.before();
+    dave.join(space);
+    w.settle();
+    expect(goal(m.after()).join()).toMatch(/dave\/phone granted to attacker device bob.* with no vouch there/);
+  });
+
+  it("flags an inviter that first met the account before the invite", () => {
+    // Alice first meets the taken-over Bob in Book club, then vouches by
+    // mistake when inviting him to Garden.
+    const w = new World("g2", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const carol = w.install(w.account("carol"), "phone");
+    const club = carol.createSpace("Book club");
+    carol.invite(club, bob.did);
+    carol.invite(club, alice.did);
+    const attacker = w.takeover(bob.did);
+    alice.join(club);
+    w.settle();
+    const garden = alice.createSpace("Garden");
+    alice.invite(garden, bob.did);
+    alice.trust.vouch(garden, attacker.binding); // the bug
+    m.before();
+    attacker.join(garden);
+    w.settle();
+    const vs = m.after();
+    expect(goal(vs).join()).toMatch(/alice\/phone granted to attacker device bob/);
+  });
+
+  it("accepts the residual: an inviter who never met the account", () => {
+    const w = new World("g3", { policy: "inviters" });
+    const m = new InvariantMonitor(w);
+    const alice = w.install(w.account("alice"), "phone");
+    const bob = w.install(w.account("bob"), "phone");
+    const attacker = w.takeover(bob.did);
+    const space = alice.createSpace("Book club");
+    m.before();
+    alice.invite(space, bob.did);
+    attacker.join(space);
+    w.settle();
+    expect(attacker.spaces.get(space)?.key).toBeTruthy();
+    expect(m.after()).toEqual([]);
+  });
+});

@@ -1,5 +1,6 @@
-"""Mutation check: break one rule of SpecClient at a time and confirm a
-test in test_nbd_trust.py or test_walks.py fails.
+"""Mutation check: break one rule of SpecClient or InviterClient at a time
+and confirm a test in test_nbd_trust.py, test_inviters.py, or test_walks.py
+fails.
 
 Run: python3 -I model/mutation_check.py
 MISSED means no test notices that rule being broken.
@@ -63,6 +64,35 @@ MUTATIONS = {
     "revoked stays usable": (
         "    def _usable(self, b: Binding) -> bool:\n        return b not in self.state.revoked and self.world.present(b)\n\n    def _knew",
         "    def _usable(self, b: Binding) -> bool:\n        return self.world.present(b)\n\n    def _knew"),
+    # InviterClient (proposal-inviters.md).
+    "vouch scoped account-wide": (
+        "        if b in st.vouches.get(space, set()):\n            return True",
+        "        if any(b in v for v in st.vouches.values()):\n            return True"),
+    "known account vouched": (
+        "        if not knew:\n            vouched =", "        if True:\n            vouched ="),
+    "imported vouch ends a hold": (
+        "                    if b.account not in knew:\n                        st.vouches",
+        "                    if True:\n                        st.vouches"),
+    "invite record ends a hold": (
+        "if rec.inviter != self.own.account or not rec.vouched or self._knew(rec.account):",
+        "if rec.inviter != self.own.account or not rec.vouched:"),
+    "first-contact hold keyed to the account": (
+        "        fc = st.fc_holds.get(b)\n",
+        "        fc = max((v for k, v in st.fc_holds.items() if k.account == b.account), default=None)\n"),
+    "no first-contact hold": ("fc[0] >= REENROLL_HOLD:", "fc[0] >= 0:"),
+    "approved devices start no hold": (
+        "        self._start_fc_hold(ap.target)\n\n    def _own_invites", "\n    def _own_invites"),
+    "approval does not pass on standing": (
+        "return signer is not None and self._source(signer, space, seen)", "return False"),
+    "revoked bindings keep crediting": (
+        "            if b in st.revoked:\n                st.fc_holds[b] = (credited, now)",
+        "            if False:\n                st.fc_holds[b] = (credited, now)"),
+    "revocation before crediting": (
+        "        self._tick()\n        super().sync()\n        self._own_invites()",
+        "        super().sync()\n        self._own_invites()"),
+    "imports credit first-contact storage time": (
+        "(credited if mine is None else max(credited, mine[0]), now)",
+        "(credited if mine is None else max(credited, mine[0]), _theirs)"),
 }
 
 
@@ -72,7 +102,7 @@ def main():
     for name, (old, new) in MUTATIONS.items():
         assert old in spec, name
         d = tempfile.mkdtemp()
-        for t in ("test_nbd_trust.py", "test_walks.py"):
+        for t in ("test_nbd_trust.py", "test_inviters.py", "test_walks.py"):
             shutil.copy(os.path.join(SRC, t), d)
         with open(os.path.join(d, "nbd_trust.py"), "w") as f:
             f.write(head + SPEC + spec.replace(old, new, 1))

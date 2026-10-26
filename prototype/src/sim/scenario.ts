@@ -3,6 +3,7 @@
 // step by step in the UI's story mode.
 
 import type { Installation } from "../protocol/installation";
+import type { Policy } from "../protocol/types";
 import { type StolenKeys, World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
 
@@ -19,7 +20,8 @@ export type Step = {
   run: (w: World, c: Ctx) => void;
   expect?: (w: World, c: Ctx) => Check[];
 };
-export type Scenario = { id: string; title: string; summary: string; steps: Step[] };
+/** `policy`: the grant rule the scenario's world follows (default baseline). */
+export type Scenario = { id: string; title: string; summary: string; steps: Step[]; policy?: Policy };
 
 export function check(label: string, ok: boolean, detail?: string): Check {
   return { label, ok, detail };
@@ -35,8 +37,8 @@ export class Run {
   readonly results: StepResult[] = [];
   next = 0;
 
-  constructor(readonly scenario: Scenario, seed = scenario.id) {
-    this.world = new World(seed);
+  constructor(readonly scenario: Scenario, seed = scenario.id, policy = scenario.policy) {
+    this.world = new World(seed, { policy });
     this.monitor = new InvariantMonitor(this.world);
   }
 

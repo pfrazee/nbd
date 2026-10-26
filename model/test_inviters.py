@@ -1,0 +1,277 @@
+"""Cases for InviterClient, the inviters proposal (proposal-inviters.md):
+grant standing, vouches scoped to the invited space, and the first-contact
+hold. Each test matches a case in the proposal's "What it protects" table or
+its "Before changing the baseline" list.
+
+Run: python3 -I -m unittest discover -s model
+"""
+
+import unittest
+
+from nbd_trust import REENROLL_HOLD, Binding, InviterClient, World
+
+BOOK = "book-club"
+GARDEN = "garden"
+
+
+def B(account: str, device: str) -> Binding:
+    return Binding(account, device)
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        self.w = World()
+        self.alice = InviterClient(self.w, self.w.add_device(B("alice", "a0")))
+        self.dave = InviterClient(self.w, self.w.add_device(B("dave", "d0")))
+
+    def account(self, name, *devices):
+        """An honest account: first device is the root, which approves the rest."""
+        bs = [self.w.add_device(B(name, d)) for d in devices]
+        for b in bs[1:]:
+            self.w.approve(bs[0], b)
+        return bs
+
+    def take_over(self, name, *bindings):
+        """Delete every device of the account and enroll an attacker's."""
+        for b in self.w.present_devices(name):
+            self.w.delete_device(b)
+        return self.w.add_device(B(name, "m"))
+
+
+class Vouching(Base):
+    def test_inviter_grants_at_once(self):
+        (bob,) = self.account("bob", "b0")
+        rec = self.alice.invite(BOOK, "bob")
+        self.assertTrue(rec.vouched)
+        self.assertTrue(self.alice.standing(bob, BOOK))
+
+    def test_vouch_is_scoped_to_the_invited_space(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertFalse(self.alice.standing(bob, GARDEN))
+
+    def test_newcomer_holds_first_contact(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertTrue(self.dave.accepted(bob))
+        self.assertFalse(self.dave.standing(bob, BOOK))
+        self.w.now += REENROLL_HOLD - 1
+        self.assertFalse(self.dave.standing(bob, BOOK))
+        self.w.now += 1
+        self.assertTrue(self.dave.standing(bob, BOOK))
+        self.assertTrue(self.dave.standing(bob, GARDEN))
+
+    def test_held_standing_counts_from_this_clients_acceptance(self):
+        # Bob's device has existed for days; Dave's hold starts when Dave
+        # first accepts it, not when it appeared.
+        (bob,) = self.account("bob", "b0")
+        self.w.now += 200
+        self.assertTrue(self.dave.accepted(bob))
+        self.w.now += REENROLL_HOLD - 1
+        self.assertFalse(self.dave.standing(bob, BOOK))
+
+    def test_inviting_a_known_account_vouches_for_nothing(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.alice.accepted(bob))
+        rec = self.alice.invite(BOOK, "bob")
+        self.assertFalse(rec.vouched)
+        self.assertEqual(rec.bindings, {bob})
+        self.assertFalse(self.alice.standing(bob, BOOK))
+
+    def test_reinvite_vouches_for_nothing_new(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)
+        self.assertFalse(self.alice.standing(bob, GARDEN))
+
+    def test_approved_device_inherits_vouched_scope(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(bob, b1)
+        self.assertTrue(self.alice.standing(b1, BOOK))
+        self.assertFalse(self.alice.standing(b1, GARDEN))
+
+    def test_declined_first_use_vouches_for_nothing(self):
+        self.account("bob", "b0")
+        self.w.add_device(B("bob", "m"))  # a second root
+        self.assertFalse(self.alice.invite(BOOK, "bob").vouched)
+
+
+class Takeover(Base):
+    def test_newcomer_after_takeover_holds(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        m = self.take_over("bob")
+        self.w.admit(BOOK, "dave")
+        self.assertTrue(self.dave.accepted(m))
+        self.assertFalse(self.dave.standing(m, BOOK))
+        self.assertFalse(self.alice.standing(m, BOOK))  # Alice holds for re-enrollment
+
+    def test_offline_member_first_syncing_after_takeover_holds(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.w.admit(BOOK, "dave")  # Dave was admitted before, but never synced Bob
+        m = self.take_over("bob")
+        self.assertFalse(self.dave.standing(m, BOOK))
+
+    def test_cross_space_vouch_does_not_reach_the_other_space(self):
+        # Astra's case: Bob, a member of Book club, is taken over. Dave, who
+        # never met Bob, invites him into Garden, then joins Book club.
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        m = self.take_over("bob")
+        self.assertTrue(self.dave.invite(GARDEN, "bob").vouched)
+        self.assertTrue(self.dave.standing(m, GARDEN))
+        self.w.admit(BOOK, "dave")
+        self.assertFalse(self.dave.standing(m, BOOK))
+
+    def test_inviting_a_held_pin_does_not_end_its_hold(self):
+        # Dave met the taken-over Bob yesterday in another space; inviting
+        # him now is not Dave's first contact.
+        (bob,) = self.account("bob", "b0")
+        m = self.take_over("bob")
+        self.assertTrue(self.dave.accepted(m))
+        self.w.now += 24
+        self.assertFalse(self.dave.invite(GARDEN, "bob").vouched)
+        self.assertFalse(self.dave.standing(m, GARDEN))
+
+    def test_inviter_who_knew_the_account_holds(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.alice.accepted(bob))
+        m = self.take_over("bob")
+        self.assertFalse(self.alice.invite(GARDEN, "bob").vouched)
+        self.assertFalse(self.alice.standing(m, GARDEN))
+
+    def test_limitation_inviter_who_never_met_the_account_grants_at_once(self):
+        # The remaining exposure: Dave's first contact with Bob is the
+        # attacker's device, met while inviting.
+        self.account("bob", "b0")
+        m = self.take_over("bob")
+        self.dave.invite(GARDEN, "bob")
+        self.assertTrue(self.dave.standing(m, GARDEN))
+
+    def test_reset_waits_out_both_holds(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.dave.accepted(bob))
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.dave.standing(bob, BOOK))
+        m = self.take_over("bob")
+        self.assertFalse(self.dave.accepted(m))  # re-enrollment hold
+        self.w.now += REENROLL_HOLD
+        self.assertTrue(self.dave.standing(m, BOOK))  # re-enrolled: every space
+
+
+class Approvals(Base):
+    def test_device_linked_during_hold_survives_its_signers_removal(self):
+        # An honest phone swap seen by a newcomer mid-hold: the old phone is
+        # removed before its first-contact hold ends, and the new one still
+        # earns standing on its own hold.
+        (b0,) = self.account("bob", "b0")
+        self.assertTrue(self.dave.accepted(b0))
+        self.w.now += 10
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.dave.accepted(b1))
+        self.w.delete_device(b0)
+        self.dave.sync()  # revocations take effect when learned
+        self.w.now += REENROLL_HOLD - 1
+        self.assertFalse(self.dave.standing(b1, BOOK))
+        self.w.now += 1
+        self.assertTrue(self.dave.standing(b1, BOOK))
+
+    def test_approved_device_inherits_held_standing(self):
+        (b0,) = self.account("bob", "b0")
+        self.assertTrue(self.dave.accepted(b0))
+        self.w.now += REENROLL_HOLD
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.dave.standing(b1, GARDEN))
+
+    def test_removed_signer_keeps_credit_earned_while_live(self):
+        # b0 linked b1 at hour 70 and was removed at hour 80, after its own
+        # hold ended; b1 inherits that standing though its own hold has not.
+        (b0,) = self.account("bob", "b0")
+        self.assertTrue(self.dave.accepted(b0))
+        self.w.now += 70
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.dave.accepted(b1))
+        self.w.now += 10
+        self.w.delete_device(b0)
+        self.dave.sync()
+        self.w.now += 1
+        self.assertTrue(self.dave.standing(b1, BOOK))
+
+    def test_removed_signer_does_not_lend_a_siblings_hold(self):
+        # b0 is removed at hour 10 with 10 hours credited. A removed device's
+        # key still approves while the account has a live device (b1), but
+        # its device inherits b0's credit, not b1's.
+        (b0,) = self.account("bob", "b0")
+        self.assertTrue(self.dave.accepted(b0))
+        self.w.now += 1
+        b1 = self.w.add_device(B("bob", "b1"))
+        self.w.approve(b0, b1)
+        self.assertTrue(self.dave.accepted(b1))
+        self.w.now += 9
+        self.w.delete_device(b0)
+        self.dave.sync()
+        self.w.now += 40
+        x = self.w.add_device(B("bob", "x"))
+        self.w.approve(b0, x)
+        self.assertTrue(self.dave.accepted(x))
+        self.w.now += 23
+        self.assertTrue(self.dave.standing(b1, BOOK))
+        self.assertFalse(self.dave.standing(x, BOOK))
+
+
+class Imports(Base):
+    def setUp(self):
+        super().setUp()
+        self.a1 = InviterClient(self.w, self.w.add_device(B("alice", "a1")), clock_offset=-30)
+        self.w.approve(self.alice.own, self.a1.own)
+        self.alice.pair(self.a1.own)
+        self.a1.pair(self.alice.own)
+
+    def test_invite_record_carries_vouch_to_unpinned_installation(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.assertTrue(self.a1.standing(bob, BOOK))
+        self.assertFalse(self.a1.standing(bob, GARDEN))
+
+    def test_invite_record_does_not_end_a_running_hold(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.a1.accepted(bob))
+        self.alice.invite(BOOK, "bob")
+        self.assertFalse(self.a1.standing(bob, BOOK))
+
+    def test_imported_vouch_does_not_end_a_running_hold(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.w.invites.clear()  # withheld by the PDS
+        self.assertTrue(self.a1.accepted(bob))
+        self.a1.import_state(self.alice.export_state())
+        self.assertFalse(self.a1.standing(bob, BOOK))
+
+    def test_imported_vouch_reaches_unpinned_installation(self):
+        (bob,) = self.account("bob", "b0")
+        self.alice.invite(BOOK, "bob")
+        self.w.invites.clear()
+        self.a1.import_state(self.alice.export_state())
+        self.assertTrue(self.a1.standing(bob, BOOK))
+
+    def test_first_contact_credit_transfers_without_comparing_clocks(self):
+        (bob,) = self.account("bob", "b0")
+        self.assertTrue(self.alice.accepted(bob))
+        self.w.now += 50
+        saved = self.alice.export_state()
+        self.w.now += 10  # storage time is not credited
+        self.a1.import_state(saved)
+        self.w.now += 21
+        self.assertFalse(self.a1.standing(bob, BOOK))
+        self.w.now += 1
+        self.assertTrue(self.a1.standing(bob, BOOK))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -51,8 +51,10 @@ function TrustMatrix() {
             <tr key={v.id} className={v.online ? "" : "offline"}>
               <th>{v.id}</th>
               {devices.map((b) => {
-                const t = trustStatus(v, b);
-                return <td key={bindingId(b)} className={t.status} title={t.detail}>{SYMBOL[t.status]}</td>;
+                const t = trustStatus(v, b, (u) => w.host.spaceName(u));
+                // Inviters policy: accepted, but not yet granted to in some joined space.
+                const fc = t.status === "accepted" && v.trust.policy === "inviters" && [...v.spaces.keys()].some((s) => !v.trust.standing(b, s));
+                return <td key={bindingId(b)} className={fc ? "held" : t.status} title={t.detail}>{fc ? "✓⏳" : SYMBOL[t.status]}</td>;
               })}
             </tr>
           ))}
@@ -60,6 +62,7 @@ function TrustMatrix() {
       </table>
       <p className="legend small">
         {Object.entries(SYMBOL).map(([k, s]) => <span key={k} className={k}>{s} {k}</span>)}
+        {w.policy === "inviters" && <span className="held">✓⏳ accepted, no grant standing yet in a joined space</span>}
       </p>
     </div>
   );

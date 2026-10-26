@@ -53,14 +53,28 @@ class Grant:
     provenance: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class InviteRecord:
+    """An invite record in the inviter account's space repo (proposal-inviters.md).
+    `vouched` is true only if the inviting device first met `bindings` in
+    making the invite."""
+
+    inviter: str
+    space: str
+    account: str
+    bindings: FrozenSet[Binding]
+    vouched: bool
+
+
 @dataclass
 class World:
-    """Public state: account repos, grants, and host membership."""
+    """Public state: account repos, grants, invites, and host membership."""
 
     devices: Dict[str, Set[Binding]] = field(default_factory=dict)
     approvals: Dict[str, Set[Approval]] = field(default_factory=dict)
     grants: Dict[str, Grant] = field(default_factory=dict)
     members: Dict[str, Set[str]] = field(default_factory=dict)
+    invites: List[InviteRecord] = field(default_factory=list)
     now: float = 0.0
 
     # Repo writes. Callers model who could make them.
@@ -84,6 +98,10 @@ class World:
 
     def admit(self, space: str, *accounts: str) -> None:
         self.members.setdefault(space, set()).update(accounts)
+
+    def invite(self, record: InviteRecord) -> None:
+        self.invites.append(record)
+        self.admit(record.space, record.account)
 
     def remove_member(self, space: str, account: str) -> None:
         self.members.get(space, set()).discard(account)
@@ -552,11 +570,15 @@ class SpecClient:
                 for ap in self.world.account_approvals(x):
                     if ap.signer in st.accepted and ap.target not in st.accepted:
                         st.accepted[ap.target] = f"approved by {ap.signer}"
+                        self._approved(ap)
                         if not self.world.present(ap.target):
                             st.revoked.add(ap.target)
                         added = True
             if not added:
                 return
+
+    def _approved(self, ap: Approval) -> None:
+        """Hook: an approval just accepted its target."""
 
     def _reach(self, x: str, starts: Iterable[Binding]) -> Set[Binding]:
         aps = self.world.account_approvals(x)
@@ -615,3 +637,156 @@ class SpecClient:
             for b in key:
                 st.accepted[b] = "re-enrolled"
             del st.holds[x]
+
+
+@dataclass
+class InviterState(SpecState):
+    """Persisted state for InviterClient: grant standing's own bases."""
+
+    vouches: Dict[str, Set[Binding]] = field(default_factory=dict)  # space -> vouched bindings
+    approvers: Dict[Binding, Binding] = field(default_factory=dict)  # target -> signer that accepted it
+    # binding -> (credited hours, local-clock checkpoint) since this client accepted it
+    fc_holds: Dict[Binding, Tuple[float, float]] = field(default_factory=dict)
+
+    def copy(self) -> "InviterState":
+        base = SpecState.copy(self)
+        return InviterState(base.accepted, base.revoked, base.holds, base.candidates_seen,
+                            base.alarms, {s: set(v) for s, v in self.vouches.items()},
+                            dict(self.approvers), dict(self.fc_holds))
+
+
+class InviterClient(SpecClient):
+    """The inviters proposal (proposal-inviters.md): acceptance as in
+    SpecClient, plus grant standing, which gates what this client grants.
+    A binding has standing in a space when it is vouched there (first met
+    while this client's account invited its account to that space), was
+    approved by a binding with standing (inheriting its scope), has had
+    REENROLL_HOLD credited since this client accepted it (the first-contact
+    hold), was re-enrolled, or is the client's own."""
+
+    def __init__(self, world: World, own: Binding, clock_offset: float = 0.0):
+        super().__init__(world, own, clock_offset)
+        self.state = InviterState(accepted={own: "own"})
+
+    # ---- public API ------------------------------------------------------
+
+    def invite(self, space: str, account: str) -> InviteRecord:
+        """Invite an account, meeting it now. The invite vouches only for
+        bindings this client first accepts in making it."""
+        knew = self._knew(account)
+        self.sync()
+        self._first_use(account)
+        self._approvals()
+        st = self.state
+        vouched = set()
+        if not knew:
+            vouched = {b for b, ev in st.accepted.items()
+                       if b.account == account and ev == "first use"}
+            st.vouches.setdefault(space, set()).update(vouched)
+        live = {b for b in st.accepted if b.account == account and self._usable(b)}
+        rec = InviteRecord(self.own.account, space, account, frozenset(live), bool(vouched))
+        self.world.invite(rec)
+        return rec
+
+    def standing(self, b: Binding, space: str) -> bool:
+        """Whether this client may grant space's key to b."""
+        self.sync()
+        self._first_use(b.account)
+        self._approvals()
+        self._tick()
+        return self._usable(b) and b in self.state.accepted and self._source(b, space, set())
+
+    def sync(self) -> None:
+        # Credit time up to this observation before it can revoke anything,
+        # so a removed binding keeps the credit it earned while live here.
+        self._tick()
+        super().sync()
+        self._own_invites()
+
+    def import_state(self, other: SpecState) -> None:
+        st = self.state
+        knew = {b.account for b in st.accepted}
+        self._tick()
+        now = self.local_now()
+        if isinstance(other, InviterState):
+            # First-contact holds transfer as credited time, never upgraded
+            # beyond what either installation credited.
+            for b, (credited, _theirs) in other.fc_holds.items():
+                mine = st.fc_holds.get(b)
+                st.fc_holds[b] = (credited if mine is None else max(credited, mine[0]), now)
+            # A vouch carries only to an installation that had no pin for
+            # the account, so it never ends a hold already running here.
+            for s, bs in other.vouches.items():
+                for b in bs:
+                    if b.account not in knew:
+                        st.vouches.setdefault(s, set()).add(b)
+            for t, s in other.approvers.items():
+                st.approvers.setdefault(t, s)
+        super().import_state(other)
+
+    # ---- rules -----------------------------------------------------------
+
+    def _source(self, b: Binding, space: str, seen: Set[Binding]) -> bool:
+        """Standing's sources, ignoring b's own revocation so approval chains
+        through removed devices still resolve."""
+        if b in seen:
+            return False
+        seen.add(b)
+        st = self.state
+        ev = st.accepted.get(b)
+        if ev is None:
+            return False
+        if b.account == self.own.account or ev == "re-enrolled":
+            return True
+        fc = st.fc_holds.get(b)
+        if fc is not None and fc[0] >= REENROLL_HOLD:
+            return True
+        if b in st.vouches.get(space, set()):
+            return True
+        signer = st.approvers.get(b)
+        return signer is not None and self._source(signer, space, seen)
+
+    def _start_fc_hold(self, b: Binding) -> None:
+        if b.account != self.own.account:
+            self.state.fc_holds.setdefault(b, (0.0, self.local_now()))
+
+    def _first_use(self, x: str) -> None:
+        super()._first_use(x)
+        for b, ev in self.state.accepted.items():
+            if b.account == x and ev == "first use":
+                self._start_fc_hold(b)
+
+    def _approved(self, ap: Approval) -> None:
+        # The target inherits its signer's standing, and starts its own
+        # first-contact hold, so a device linked during the signer's hold is
+        # not stranded if the signer is removed before that hold ends.
+        self.state.approvers[ap.target] = ap.signer
+        self._start_fc_hold(ap.target)
+
+    def _own_invites(self) -> None:
+        """An invite record from this client's own account carries its vouch
+        here, like a pin copied by pairing, but only for an account this
+        installation has never pinned."""
+        st = self.state
+        for rec in self.world.invites:
+            if rec.inviter != self.own.account or not rec.vouched or self._knew(rec.account):
+                continue
+            for b in rec.bindings:
+                st.accepted[b] = "invited"
+                if not self.world.present(b):
+                    st.revoked.add(b)
+                self._start_fc_hold(b)
+            st.vouches.setdefault(rec.space, set()).update(rec.bindings)
+
+    def _tick(self) -> None:
+        """Credit elapsed local time to re-enrollment holds and to the
+        first-contact holds of unrevoked bindings; a revoked binding's credit
+        stays where it stopped."""
+        super()._tick()
+        now = self.local_now()
+        st = self.state
+        for b, (credited, checkpoint) in list(st.fc_holds.items()):
+            if b in st.revoked:
+                st.fc_holds[b] = (credited, now)
+            else:
+                st.fc_holds[b] = (credited + max(0.0, now - checkpoint), now)

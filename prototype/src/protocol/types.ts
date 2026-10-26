@@ -5,6 +5,10 @@ import { type Cbor, ref } from "./encoding";
 
 export type Did = string;
 
+/** Which grant rule installations follow: the baseline specification, or the
+ * inviters proposal (proposal-inviters.md), which adds grant standing. */
+export type Policy = "baseline" | "inviters";
+
 export type Device = { deviceId: string; authPubkey: Uint8Array; encryptPubkey: Uint8Array };
 export type Binding = { account: Did; device: Device };
 export type DeviceIdentity = { account: Did; deviceId: string };
@@ -61,6 +65,19 @@ export type SpaceKeyGrant = {
   proof: Uint8Array;
 };
 
+/** An invite record in the inviting account's space repo
+ * (proposal-inviters.md#invite-records). `vouched` is true only if the
+ * inviting device first met `bindings` in making the invite. */
+export type Invite = {
+  version: 1;
+  space: string;
+  account: Did;
+  bindings: Binding[];
+  vouched: boolean;
+  issuer: DeviceIdentity;
+  proof: Uint8Array;
+};
+
 /** Simplified evidence: the manifest plus the exact blocks it names, so a
  * reader can resolve every reference without the source PDS (audit.md#evidence). */
 export type Evidence = { version: 1; space: string; blocks: Cbor[] };
@@ -81,6 +98,7 @@ export const COL = {
   grant: `${NS}.grant`,
   evidence: `${NS}.evidence`,
   keyRequest: `${NS}.keyRequest`,
+  invite: `${NS}.invite`,
   message: "app.example.message",
 } as const;
 

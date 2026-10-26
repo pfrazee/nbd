@@ -40,7 +40,7 @@ import random
 import unittest
 from typing import Dict, List, Optional, Set
 
-from nbd_trust import REENROLL_HOLD, Approval, Binding, SpecClient, World
+from nbd_trust import REENROLL_HOLD, Approval, Binding, InviterClient, SpecClient, World
 
 ACCOUNTS = ("alice", "bob", "carol")
 WALKS = int(os.environ.get("NBD_WALKS", "1500"))
@@ -54,6 +54,8 @@ class Walk:
     """One world, two installations of Alice, and the checker's own record
     of what has happened, independent of client state."""
 
+    CLIENT = SpecClient
+
     def __init__(self, offset: float):
         w = self.world = World()
         a0, a1 = B("alice", "a0"), B("alice", "a1")
@@ -61,7 +63,7 @@ class Walk:
         for b in (a0, a1, B("bob", "b0"), B("carol", "c0")):
             self._add(b)
         w.approve(a0, a1)
-        self.clients = [SpecClient(w, a0), SpecClient(w, a1, clock_offset=offset)]
+        self.clients = [self.CLIENT(w, a0), self.CLIENT(w, a1, clock_offset=offset)]
         self.clients[0].pair(a1)
         self.clients[1].pair(a0)
         self.slots: Dict[int, object] = {}
@@ -117,6 +119,7 @@ class Walk:
         w = self.world
         before = [(set(c.state.accepted), set(c.state.revoked), dict(c.state.holds))
                   for c in self.clients]
+        extra_before = [self.snapshot(c) for c in self.clients]
         synced: Optional[int] = None
         imported = None
         kind = act[0]
@@ -150,14 +153,28 @@ class Walk:
             if imported is not None:
                 synced = act[1]
                 self.clients[synced].import_state(imported.copy())
+        else:
+            synced = self.extra(act)
         for i, c in enumerate(self.clients):
             for _x, (cand, _cr, _ck) in c.state.holds.items():
                 self.first_seen.setdefault(cand, w.now)
             err = self._check(i, c, before[i], synced == i,
                               imported if synced == i else None,
                               act[2] if kind == "query" and synced == i else None)
+            err = err or self.extra_check(i, c, before[i], extra_before[i], act, synced == i,
+                                          imported if synced == i else None)
             if err:
                 return f"client {i}: {err}"
+        return None
+
+    def extra(self, act: tuple) -> Optional[int]:
+        """Hook: apply an action this walk adds; return the client it synced."""
+        return None
+
+    def snapshot(self, c) -> object:
+        return None
+
+    def extra_check(self, i, c, before, extra_before, act, synced, imported) -> Optional[str]:
         return None
 
     # ---- invariants ------------------------------------------------------
@@ -283,8 +300,8 @@ def _single_root(x: str, w: World, revoked: Set[Binding]) -> Optional[Set[Bindin
     return present if present <= reached else None
 
 
-def replay(offset: float, actions: List[tuple]) -> Optional[str]:
-    walk = Walk(offset)
+def replay(offset: float, actions: List[tuple], cls=None) -> Optional[str]:
+    walk = (cls or Walk)(offset)
     for n, act in enumerate(actions):
         err = walk.step(act)
         if err:
@@ -292,34 +309,38 @@ def replay(offset: float, actions: List[tuple]) -> Optional[str]:
     return None
 
 
-def shrink(offset: float, actions: List[tuple]) -> List[tuple]:
+def shrink(offset: float, actions: List[tuple], cls=None) -> List[tuple]:
     """Drop actions one at a time while the walk still fails."""
     changed = True
     while changed:
         changed = False
         for n in range(len(actions)):
             trial = actions[:n] + actions[n + 1:]
-            if replay(offset, trial):
+            if replay(offset, trial, cls):
                 actions, changed = trial, True
                 break
     return actions
 
 
+def run_walks(case: unittest.TestCase, cls) -> None:
+    for seed in range(WALKS):
+        rng = random.Random(seed)
+        offset = rng.uniform(-100.0, 100.0)
+        walk = cls(offset)
+        actions = []
+        for _ in range(STEPS):
+            act = walk.gen(rng)
+            actions.append(act)
+            if walk.step(act):
+                small = shrink(offset, actions, cls)
+                trace = "\n".join(f"  {a}" for a in small)
+                case.fail(f"seed {seed}, offset {offset:.1f}: "
+                          f"{replay(offset, small, cls)}\n{trace}")
+
+
 class Walks(unittest.TestCase):
     def test_random_walks_keep_invariants(self):
-        for seed in range(WALKS):
-            rng = random.Random(seed)
-            offset = rng.uniform(-100.0, 100.0)
-            walk = Walk(offset)
-            actions = []
-            for _ in range(STEPS):
-                act = walk.gen(rng)
-                actions.append(act)
-                if walk.step(act):
-                    small = shrink(offset, actions)
-                    trace = "\n".join(f"  {a}" for a in small)
-                    self.fail(f"seed {seed}, offset {offset:.1f}: "
-                              f"{replay(offset, small)}\n{trace}")
+        run_walks(self, Walk)
 
     def test_approval_order_does_not_change_accepted_set(self):
         for seed in range(WALKS):
@@ -343,6 +364,114 @@ class Walks(unittest.TestCase):
             self.assertEqual(results[0], results[1], f"seed {seed}")
             self.assertEqual(results[0] - {B("alice", "a0")}, _closure({nodes[0]}, w),
                              f"seed {seed}")
+
+
+SPACES = ("s1", "s2")
+
+
+class InviterWalk(Walk):
+    """The same walk over InviterClient (proposal-inviters.md), adding
+    invites into two spaces and standing queries. Extra invariants:
+
+    - Vouches are never lost, and a new vouch is for a space and binding
+      named by a vouched invite record of the client's own account, for an
+      account the client had never pinned before that step.
+    - First-contact credit never exceeds real time since any installation
+      first accepted the binding, never decreases, and starts at zero unless
+      imported.
+    - Standing matches a restatement of its five sources over the client's
+      persisted bases: own, re-enrolled, REENROLL_HOLD credited, vouched in
+      that space, or approved by a binding with standing.
+    """
+
+    CLIENT = InviterClient
+
+    def __init__(self, offset: float):
+        super().__init__(offset)
+        self.first_accepted: Dict[Binding, float] = {}
+
+    def gen(self, rng: random.Random) -> tuple:
+        r = rng.random()
+        if r < 0.08:
+            return ("invite", rng.randrange(2), rng.choice(("bob", "carol")), rng.choice(SPACES))
+        if r < 0.2:
+            all_made = [b for bs in self.made.values() for b in bs]
+            return ("standing", rng.randrange(2), rng.choice(all_made), rng.choice(SPACES))
+        return super().gen(rng)
+
+    def extra(self, act: tuple) -> Optional[int]:
+        c = self.clients[act[1]]
+        if act[0] == "invite":
+            c.invite(act[3], act[2])
+        elif act[0] == "standing":
+            self.answer = c.standing(act[2], act[3])
+        return act[1]
+
+    def snapshot(self, c) -> object:
+        st = c.state
+        return ({s: set(v) for s, v in st.vouches.items()}, dict(st.fc_holds))
+
+    def _check(self, i, c, before, synced, imported, queried) -> Optional[str]:
+        # An installation may adopt an account from its own account's invite
+        # record, like a paired pin, instead of running first use.
+        if queried is not None and any(
+                ev == "invited" for b, ev in c.state.accepted.items()
+                if b.account == queried.account and b not in before[0]):
+            queried = None
+        return super()._check(i, c, before, synced, imported, queried)
+
+    def extra_check(self, i, c, before, extra_before, act, synced, imported) -> Optional[str]:
+        w, st = self.world, c.state
+        vouches0, fc0 = extra_before
+        knew = {b.account for b in before[0]}
+        for b in st.accepted:
+            self.first_accepted.setdefault(b, w.now)
+        for s, bs in vouches0.items():
+            if not bs <= st.vouches.get(s, set()):
+                return f"vouches lost in {s}"
+        for s, bs in st.vouches.items():
+            for b in bs - vouches0.get(s, set()):
+                if b.account in knew:
+                    return f"vouched {b} in {s} though {b.account} was already pinned"
+                if not any(r.inviter == c.own.account and r.space == s and r.vouched
+                           and b in r.bindings for r in w.invites):
+                    return f"vouched {b} in {s} with no vouched invite record"
+        for b, (credited, _ck) in st.fc_holds.items():
+            if credited > w.now - self.first_accepted[b] + EPS:
+                return f"first-contact credit for {b} is {credited}h, more than real time"
+            old = fc0.get(b)
+            if old is not None and credited < old[0] - EPS:
+                return f"first-contact credit for {b} fell from {old[0]} to {credited}"
+            if old is None and imported is None and credited > EPS:
+                return f"new first-contact hold for {b} started with {credited}h"
+        if synced and act[0] == "standing":
+            b, s = act[2], act[3]
+            want = (b in st.accepted and b not in st.revoked and w.present(b)
+                    and _standing_ref(c, b, s, set()))
+            if self.answer != want:
+                return f"standing({b}, {s}) is {self.answer}; its sources say {want}"
+        return None
+
+
+def _standing_ref(c, b: Binding, s: str, seen: Set[Binding]) -> bool:
+    """Standing's sources, restated over the client's persisted bases."""
+    st = c.state
+    if b in seen or b not in st.accepted:
+        return False
+    seen.add(b)
+    if b.account == c.own.account or st.accepted[b] == "re-enrolled":
+        return True
+    if st.fc_holds.get(b, (0.0, 0.0))[0] >= REENROLL_HOLD:
+        return True
+    if b in st.vouches.get(s, set()):
+        return True
+    signer = st.approvers.get(b)
+    return signer is not None and _standing_ref(c, signer, s, seen)
+
+
+class InviterWalks(unittest.TestCase):
+    def test_random_inviter_walks_keep_invariants(self):
+        run_walks(self, InviterWalk)
 
 
 if __name__ == "__main__":

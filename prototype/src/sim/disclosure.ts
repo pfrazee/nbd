@@ -7,6 +7,10 @@
 //
 // Permitted paths, for issuer I, attacker device X of account A:
 // - First contact: I first knew A no earlier than X appeared (non-goal 1).
+//   Under the inviters policy (proposal-inviters.md) only one first contact
+//   excuses a grant: I's account vouched for X in this space, at an invite
+//   where the inviting installation first met A, and I had no pin for A
+//   before that invite. Every other first contact must wait out a hold.
 // - Elapsed hold: X appeared at least REENROLL_HOLD ago (goal 3).
 // - Compromised signer: a compromised key approved X while A still had a
 //   device the attacker does not control, so it was not a full reset. A
@@ -93,12 +97,23 @@ export class DisclosureCheck {
     const knew = this.firstKnown.get(issuer.id)?.get(account) ?? Infinity;
     const who = `${issuer.id} granted to attacker device ${account.slice(8)}/${x.slice(0, 6)}`;
 
-    if (knew > appearedSeq) return null; // first contact
+    if (w.policy === "inviters") {
+      if (this.vouched(issuer, g.space, account, x, knew)) return null; // the inviter's first contact
+    } else if (knew > appearedSeq) return null; // first contact
     if (w.t - appeared >= REENROLL_HOLD - EPS) return null; // a hold could have elapsed
     const approvals = p.approvals.filter((a) => a.target === x);
     if (approvals.some((a) => a.compromised && a.standing)) return null; // compromised signer, not a reset
     if (approvals.some((a) => p.attacker.has(a.signer) && this.liveAt(issuer, account, a.signer))) return null; // chain
+    if (w.policy === "inviters") return `${who} in ${g.space} ${(w.t - appeared).toFixed(1)}h after it appeared, with no vouch there`;
     return `${who} ${(w.t - appeared).toFixed(1)}h after it appeared, though it already knew ${account.slice(8)}`;
+  }
+
+  /** I's account vouched for device X of `account` in `space` at an invite
+   * where it first met the account, and I first knew the account no earlier
+   * than that invite (an installation that already pinned it takes no vouch). */
+  private vouched(i: Installation, space: string, account: string, x: string, knew: number): boolean {
+    return this.world.provenance.invites.some((v) => v.firstMet && v.inviter === i.did && v.space === space
+      && v.account === account && v.devices.includes(x) && knew > v.seq);
   }
 
   private liveAt(i: Installation, account: string, deviceId: string): boolean {

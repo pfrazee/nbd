@@ -1,6 +1,6 @@
 // Mutation check for the prototype: break one trust rule at a time and see
 // whether the random walks (and, with --all, every test) notice.
-// Run from prototype/: node test/mutate.mjs [--all]
+// Run from prototype/: node test/mutate.mjs [--all] [name filter]
 // MISSED means nothing notices that rule being broken.
 
 import { execFileSync } from "node:child_process";
@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const TRUST = "src/protocol/trust.ts";
 const CLIENT = "src/protocol/installation.ts";
+const GRANTS = "src/protocol/grants.ts";
 // name: [from, to] in trust.ts, or [file, from, to].
 const MUTATIONS = {
   "approvals during re-enrollment": ["if (this.live(account).length === 0) return; // re-enrollment: only the hold accepts", "// guard removed"],
@@ -29,13 +30,26 @@ const MUTATIONS = {
   "host alarm freezes membership": [CLIENT, "if (tampered) this.trust.raise(", "if (tampered) return void this.trust.raise("],
   "start-over quiets every grant": ["    if (!so?.list?.has(bindingId(b))) return false;", "    if (so) return true;"],
   "start-over list never closes": ["} else if (!(so && !so.done && so.list!.has(id))) {", "} else if (!(so && so.list!.has(id))) {"],
+  // The inviters policy (proposal-inviters.md).
+  "inviters: grants ignore standing": [GRANTS, "if (!basis) return fail(", "if (false) return fail("],
+  "inviters: vouch scoped account-wide": ["if (st.vouches.get(space)?.has(id)) return \"vouched\";", "if ([...st.vouches.values()].some((v) => v.has(id))) return \"vouched\";"],
+  "inviters: known account vouched": [CLIENT, "const met = knew ? [] : live.filter(", "const met = live.filter("],
+  "inviters: import ends a hold": ["if (b && !knew.has(b.account)) this.vouch(space, b);", "if (b) this.vouch(space, b);"],
+  "inviters: invite records override pins": ["if (!rec.vouched || this.knew(rec.account)) return false;", "if (!rec.vouched) return false;"],
+  "inviters: hold keyed to account instead of binding": ["const fcKey = (b: Binding): string => bindingId(b);", "const fcKey = (b: Binding): string => b.account;"],
+  "inviters: approved devices start no hold": ["            this.startFirstContactHold(ap.target);\n", ""],
+  "inviters: removal erases credit": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint); else h.credited = 0;"],
+  "inviters: revoked bindings keep crediting": ["if (!this.state.revoked.has(id)) h.credited += Math.max(0, now - h.checkpoint);", "h.credited += Math.max(0, now - h.checkpoint);"],
+  "inviters: removals observed before crediting": [CLIENT, "      this.trust.tick();\n      this.adoptOwnInvites();", "      this.adoptOwnInvites();"],
 };
 
 const all = process.argv.includes("--all");
-const originals = new Map([TRUST, CLIENT].map((f) => [f, readFileSync(f, "utf8")]));
+const only = process.argv.slice(2).find((a) => !a.startsWith("--"));
+const originals = new Map([TRUST, CLIENT, GRANTS].map((f) => [f, readFileSync(f, "utf8")]));
 let missed = 0;
 try {
   for (const [name, spec] of Object.entries(MUTATIONS)) {
+    if (only && !name.includes(only)) continue;
     const [file, from, to] = spec.length === 3 ? spec : [TRUST, ...spec];
     const original = originals.get(file);
     if (!original.includes(from)) throw new Error(`mutation "${name}" no longer applies`);
