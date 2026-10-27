@@ -13,9 +13,12 @@ and invite her. Each walk is a seeded sequence of:
   what it serves one client, at a new or a witnessed revision; withholding
   and stalling fetches per witness;
 - witness outages (longer than the relay's replay window too), relay
-  outages, unreachable witnesses, elapsed time, and wall-clock jumps;
+  outages, unreachable witnesses, witness clocks slow or fast against the
+  relay within `CLOCK_SKEW` (and fast beyond it), elapsed time, and
+  installation wall-clock jumps;
 - installations stopping and starting, exporting backups, being wiped and
-  restored from a stale backup, acknowledging gap warnings, and ticking;
+  restored from a stale backup onto either application's witness,
+  acknowledging gap warnings, and ticking;
 - Bob and Carol querying Alice's devices and inviting her.
 
 Invariants after every step:
@@ -25,20 +28,25 @@ Invariants after every step:
   and every running installation has alarmed, noticed, presented, recorded
   a covering gap, or shows the liveness warning 24 hours after acceptance.
 - Every acceptance rests on a commit the client's own witness reconstructed
-  at that relay seq, whose commit is the one the relay published there.
+  at that revision, whose commit is the one the relay published there.
 - Acceptance, revocation, own alarms, and gaps never shrink; acknowledging
   marks a gap, never removes it.
 - A fork alarm names two different commits at one revision, one of them
   relayed.
 
-The main walks run the proposal as written, without the conditions behind
-findings 1-4 (a witness behind the relay, enrollment after history the
-witness lacks, a suspending clock, a clock set back while stopped). The
-finding walks add those conditions: as written they find a violation; with
-the fixes (LIVE_RULE "head", FRESH_HISTORY_GAP) they keep the goal.
+The goal is checked with `CLOCK_SKEW` of slack on its deadline (finding
+10: a witness clock slow by less than the allowance understates frontier
+age by that much).
+
+The main walks run the proposal's rules. The lag walks add the conditions
+behind findings 1 and 2 (a witness hours behind the relay, fresh enrollment
+after history the witness lacks, 90-day waits), which the event-time
+frontier and the before-history gap now handle, so they must keep the goal.
+The finding walks also add the clock conditions behind findings 3 and 4 (a
+suspending clock, a clock set back while stopped) and must find a violation.
 
 Run: python3 -I -m unittest discover -s model
-More walks: NBD_WITNESS_WALKS=2000 python3 -I -m unittest discover -s model -p test_witness_walks.py
+More walks: NBD_WITNESS_WALKS=2000 NBD_WITNESS_STEPS=60 python3 -I -m unittest discover -s model -p test_witness_walks.py
 """
 
 import os
@@ -47,7 +55,7 @@ import unittest
 from typing import Dict, List, Optional
 
 from nbd_trust import Binding
-from nbd_witness import (RELAY_REPLAY_WINDOW, WITNESS_RETENTION, RelayWorld, Witness,
+from nbd_witness import (CLOCK_SKEW, RELAY_REPLAY_WINDOW, WITNESS_RETENTION, RelayWorld, Witness,
                          WitnessClient, goal_violations)
 
 WALKS = int(os.environ.get("NBD_WITNESS_WALKS", "300"))
@@ -56,6 +64,11 @@ WAITS = (0.25, 1.0, 5.0, 12.0, 23.0, 25.0, 48.0, RELAY_REPLAY_WINDOW + 8)
 SLOTS = 2
 TICK = 4.0  # hours between a running installation's frontier advances during waits
 SPACES = ("s1", "s2")
+# Witness clock offsets against the relay: slow and fast within the allowance,
+# and fast beyond it (safe: it overstates age). A clock slow beyond the
+# allowance breaks the goal's honest-clock assumption whenever it goes slow
+# while the witness is behind (finding 11), so only the tests cover it.
+WOFFS = (0.0, -0.9 * CLOCK_SKEW, 0.9 * CLOCK_SKEW, 1.0)
 
 
 def B(account: str, device: str) -> Binding:
@@ -63,15 +76,13 @@ def B(account: str, device: str) -> Binding:
 
 
 class WitnessWalk:
-    FINDINGS = False  # add the conditions behind findings 1-4
-    FIXED = False  # apply the fixes for findings 1 and 2
+    LAG = False  # add the conditions behind findings 1 and 2
+    CLOCKS = False  # add the conditions behind findings 3 and 4
 
     def __init__(self, offset: float):
         w = self.w = RelayWorld()
-        rule = "head" if self.FIXED else "literal"
-        self.wit = {"app1": Witness(w, "app1"), "app2": Witness(w, "app2", clock_offset=offset / 3)}
-        for x in self.wit.values():
-            x.LIVE_RULE = rule
+        woff = WOFFS[int(abs(offset) * 7) % len(WOFFS)]
+        self.wit = {"app1": Witness(w, "app1"), "app2": Witness(w, "app2", clock_offset=woff)}
         cls = self.client_cls()
         a0 = w.add_device(B("alice", "a0"))
         a1 = w.link(a0, B("alice", "a1"))
@@ -89,10 +100,10 @@ class WitnessWalk:
         self.fresh = 0
 
     def client_cls(self):
-        fixed = self.FIXED
+        suspending = self.CLOCKS
 
         class C(WitnessClient):
-            FRESH_HISTORY_GAP = fixed
+            MONO_COUNTS_SUSPEND = not suspending  # finding 3's condition
         return C
 
     # ---- actions -------------------------------------------------------------
@@ -102,11 +113,14 @@ class WitnessWalk:
         kinds = ["link", "remove", "imp", "imp_del", "resurrect", "reset", "replace_sync",
                  "withhold", "stall", "fork", "unfork", "wdown", "wup", "relay", "unreach",
                  "wait", "jump", "stop", "start", "export", "restore", "ack", "tick", "query", "invite"]
-        kinds.append("post")
-        weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3]
-        if self.FINDINGS:
-            kinds += ["lag", "fresh", "longwait", "suspend", "backjump"]
-            weights += [2, 1, 1, 1, 1]
+        kinds += ["post", "wclock"]
+        weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3, 1]
+        if self.LAG:
+            kinds += ["lag", "fresh", "longwait"]
+            weights += [2, 1, 1]
+        if self.CLOCKS:
+            kinds += ["suspend", "backjump"]
+            weights += [3, 2]
         kind = rng.choices(kinds, weights)[0]
         present = sorted(w.present_devices("alice"), key=repr)
         legit_present = [b for b in present if b in self.legit]
@@ -115,6 +129,8 @@ class WitnessWalk:
         i = rng.randrange(2)
         if kind == "post":
             return ("post", rng.choice(("alice", "bob")))
+        if kind == "wclock":
+            return ("wclock", wname, rng.choice(WOFFS))
         if kind == "link" and legit_present:
             return ("link", rng.choice(legit_present), B("alice", f"a{len(self.made)}"))
         if kind == "remove" and len(legit_present) > 1:
@@ -162,7 +178,7 @@ class WitnessWalk:
         if kind == "export":
             return ("export", i, rng.randrange(SLOTS))
         if kind == "restore":
-            return ("restore", i, rng.randrange(SLOTS))
+            return ("restore", i, rng.randrange(SLOTS), wname)
         if kind == "query":
             return ("query", rng.randrange(2), rng.choice(self.made + self.imps))
         if kind == "invite":
@@ -193,6 +209,8 @@ class WitnessWalk:
             w.delete_device(act[1])
         elif k == "post":
             w.post(act[1])
+        elif k == "wclock":
+            self.wit[act[1]].clock_offset = act[2]
         elif k == "imp":
             m, how, signer, via = act[1:]
             self.imps.append(m)
@@ -267,8 +285,9 @@ class WitnessWalk:
             slot = self.slots.get(act[2])
             if slot is not None and slot[0] == act[1]:
                 old = self.inst[act[1]]
-                self.inst[act[1]] = WitnessClient.restore(w, slot[1], old.witness, old.clock_offset)
-                self.inst[act[1]].__class__ = old.__class__
+                # onto either application's witness: the cursor is a revision
+                wit = self.wit[act[3]] if len(act) > 3 else old.witness
+                self.inst[act[1]] = self.client_cls().restore(w, slot[1], wit, old.clock_offset)
         elif k == "ack":
             for g in self.inst[act[1]].gap_warnings()[:1]:
                 self.inst[act[1]].acknowledge(g)
@@ -310,25 +329,24 @@ class WitnessWalk:
 
     def _check(self, before) -> Optional[str]:
         w = self.w
-        for v in goal_violations("alice", self.inst, self.others, self.legit, w.now):
+        for v in goal_violations("alice", self.inst, self.others, self.legit, w.now, slack=CLOCK_SKEW):
             return v
-        relayed = {e.seq: e for e in w.relay}
+        relayed = {(e.commit.account, e.commit.rev): e.commit for e in w.relay}
         for c in self.inst + self.others:
             arch: Dict[tuple, object] = {}
             for e in c.witness.archive:
                 if e.reconstructed:
-                    arch.setdefault((e.seq, e.account), []).append(e)
-            for b, (seq, _t) in c.state.basis.items():
-                es = arch.get((seq, b.account), [])
+                    arch.setdefault((e.hi, e.account), []).append(e)
+            for b, (rev, _t) in c.state.basis.items():
+                es = arch.get((rev, b.account), [])
                 ok = False
                 for e in es:
                     d, aps, _other = e.root
                     mentioned = set(d) | {a.target for a in aps} | {a.signer for a in aps}
-                    if b in mentioned and relayed.get(seq) is not None \
-                            and relayed[seq].commit == e.commit:
+                    if b in mentioned and relayed.get((b.account, rev)) == e.commit:
                         ok = True
                 if not ok:
-                    return f"{c.name} accepted {b} on seq {seq}, which its witness did not reconstruct"
+                    return f"{c.name} accepted {b} on rev {rev}, which its witness did not reconstruct"
             for wc, served in c.state.forks:
                 if wc.rev != served.rev or wc == served or not any(
                         e.commit == wc for e in w.relay):
@@ -347,8 +365,8 @@ class WitnessWalk:
                 return f"{c.name} lost or rewrote a gap"
         for x in self.wit.values():
             for e in x.archive:
-                if e.reconstructed and e.root != relayed[e.seq].commit.root:
-                    return f"{x.name} reconstructed seq {e.seq} wrongly"
+                if e.reconstructed and e.root != relayed[(e.account, e.hi)].root:
+                    return f"{x.name} reconstructed {e.account} rev {e.hi} wrongly"
         return None
 
 
@@ -394,19 +412,18 @@ def describe(found) -> str:
     return f"seed {seed}, offset {offset:.1f}: {err}\n{trace}"
 
 
+class LagWalk(WitnessWalk):
+    """The conditions behind findings 1 and 2, which the rules now handle."""
+
+    LAG = True
+
+
 class FindingWalk(WitnessWalk):
-    FINDINGS = True
+    """Also the clock conditions behind findings 3 and 4: a monotonic clock
+    that stops in suspend, and a wall clock set back while stopped."""
 
-
-class FixedWalk(WitnessWalk):
-    """Findings 1 and 2 fixed; findings 3 and 4 (clock assumptions) left out."""
-
-    FINDINGS = True
-    FIXED = True
-
-    def gen(self, rng):
-        act = super().gen(rng)
-        return ("tick", act[1]) if act[0] in ("suspend", "backjump") else act
+    LAG = True
+    CLOCKS = True
 
 
 class WitnessWalks(unittest.TestCase):
@@ -415,14 +432,14 @@ class WitnessWalks(unittest.TestCase):
         if found:
             self.fail(describe(found))
 
-    def test_walks_with_fixes_keep_the_goal_under_the_finding_conditions(self):
-        found = first_failure(FixedWalk)
+    def test_walks_keep_the_goal_with_a_witness_behind_and_late_history(self):
+        found = first_failure(LagWalk)
         if found:
             self.fail(describe(found))
 
-    def test_walks_find_the_goal_failing_as_written(self):
+    def test_walks_find_the_goal_failing_under_the_clock_conditions(self):
         found = first_failure(FindingWalk)
-        self.assertIsNotNone(found, "the finding conditions should break the goal as written")
+        self.assertIsNotNone(found, "the clock conditions should break the goal")
         if os.environ.get("NBD_SHOW_FINDINGS"):
             print("\n" + describe(found))
 

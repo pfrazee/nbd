@@ -18,7 +18,7 @@
 
 import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
-import { type Binding, bindingId, hasStanding, label } from "../protocol/types";
+import { type Approval, type Binding, bindingId, hasStanding, label } from "../protocol/types";
 import type { World } from "../world/world";
 import { DetectionCheck } from "./detection";
 import { DisclosureCheck, approvalAncestors } from "./disclosure";
@@ -157,7 +157,10 @@ export class InvariantMonitor {
         const reach = this.closure(i, base, before.revoked);
         for (const [id, a] of st.accepted) {
           if (before.accepted.has(id) || st.revoked.has(id) || !knew.has(a.binding.account)) continue;
-          if (!reach.has(id)) out.push(`accepted ${label(a.binding)} without an approval path or elapsed hold`);
+          // Under the witness policy a lagging witness can deliver a reset
+          // mid-step, so a hold may start and complete within one long step.
+          const heldInStep = a.evidence === "re-enrolled" && this.world.policy === "witness" && this.world.t - this.holdStart([a.binding]) >= REENROLL_HOLD - EPS;
+          if (!reach.has(id) && !heldInStep) out.push(`accepted ${label(a.binding)} without an approval path or elapsed hold`);
         }
       }
     }
@@ -259,7 +262,7 @@ export class InvariantMonitor {
     const wit = this.world.witnesses.get(i.app);
     const cursor = i.mon.cursors.get(b.account);
     if (!wit || cursor === undefined) return false;
-    return (wit.accounts.get(b.account)?.history ?? []).some((h) => h.kind === "state" && h.seq <= cursor && h.rev >= rev
+    return (wit.accounts.get(b.account)?.history ?? []).some((h) => h.kind === "state" && h.rev <= cursor && h.rev >= rev
       && !h.snap.records.has(`com.example.nbd.device/${b.device.deviceId}`));
   }
 
@@ -353,6 +356,20 @@ export class InvariantMonitor {
   /** Approval closure over this installation's verified approvals, following
    * only accounts with a binding that was live when the step began (an
    * acceptance and a later revocation can happen within one step). */
+  /** Witness policy: approvals in any witnessed commit `i` has processed
+   * for `account`. A lagging witness can deliver several commits in one
+   * step, and an acceptance may rest on an intermediate one. */
+  private witnessedApprovals(i: Installation, account: string): Approval[] {
+    const wit = this.world.witnesses.get(i.app);
+    const cursor = i.mon.cursors.get(account);
+    if (!wit || cursor === undefined) return [];
+    const out: Approval[] = [];
+    for (const h of wit.accounts.get(account)?.history ?? [])
+      if (h.kind === "state" && h.rev <= cursor)
+        for (const [k, v] of h.snap.records) if (k.startsWith("com.example.nbd.approval/")) out.push((v as { value: Approval }).value);
+    return out;
+  }
+
   private closure(i: Installation, start: Set<string>, revokedBefore: Set<string>): Set<string> {
     const st = i.trust.state;
     const seen = new Set(start);
@@ -365,7 +382,7 @@ export class InvariantMonitor {
       let added = false;
       for (const [account, view] of st.views) {
         if (!liveAccount(account)) continue;
-        for (const ap of view.approvals) {
+        for (const ap of [...view.approvals, ...this.witnessedApprovals(i, account)]) {
           const t = bindingId(ap.target);
           if (seen.has(bindingId(ap.signer)) && !seen.has(t)) {
             seen.add(t);

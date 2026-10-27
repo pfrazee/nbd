@@ -63,9 +63,9 @@ export type Provenance = {
    * whether it first met the account, and the device IDs it vouched for. */
   prepared: { inviter: Did; device: string; account: Did; space: string; rkey: string; firstMet: boolean; devices: string[]; seq: number }[];
   /** Every binding of another account an installation newly accepted:
-   * when, through what, and (witness policy) the relay sequence number of
-   * the witnessed commit it relied on and the witness that reported it. */
-  accepts: { inst: string; device: string; account: Did; target: string; world: number; order: number; seq: number | null; via: string; witness: string | null }[];
+   * when, through what, and (witness policy) the revision of the witnessed
+   * commit it relied on and the witness that reported it. */
+  accepts: { inst: string; device: string; account: Did; target: string; world: number; order: number; rev: number | null; via: string; witness: string | null }[];
 };
 
 const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
@@ -135,6 +135,18 @@ export class World implements Network {
     return w;
   }
 
+  /** A new application whose witness starts following the relay now: it
+   * holds no history from before, which it reports as a gap. */
+  lateWitness(app: string): Witness {
+    if (!this.relay) throw new Error("world: no relay outside the witness policy");
+    if (this.witnesses.has(app)) throw new Error(`world: ${app} already has a witness`);
+    this.relay.ingest();
+    const w = new Witness(`witness.${app}`, app, this.relay, (id, did) => this.pdsOf.get(did)?.serveFetch(id, did) ?? null, () => this.t, { late: true });
+    this.witnesses.set(app, w);
+    this.note(`${w.id} starts following the relay at seq ${w.cursor}`);
+    return w;
+  }
+
   witness(observer: string): WitnessApi | null {
     const inst = this.installations.get(observer);
     if (!inst || !this.relay) return null;
@@ -153,10 +165,10 @@ export class World implements Network {
     return out;
   }
 
-  accepted(by: Installation, b: Binding, seq: number | null, via: string): void {
+  accepted(by: Installation, b: Binding, rev: number | null, via: string): void {
     this.provenance.accepts.push({
-      inst: by.id, device: by.binding.device.deviceId, account: b.account, target: b.device.deviceId, world: this.t, order: this.tick(), seq, via,
-      witness: seq === null || !this.relay ? null : this.witnessOf(by.app).id,
+      inst: by.id, device: by.binding.device.deviceId, account: b.account, target: b.device.deviceId, world: this.t, order: this.tick(), rev, via,
+      witness: rev === null || !this.relay ? null : this.witnessOf(by.app).id,
     });
   }
 
@@ -701,8 +713,9 @@ export class World implements Network {
 
   /** Witness conditions: an outage of its relay subscription, clients unable
    * to reach it, or processing hours behind. */
-  setWitness(app: string, opts: { connected?: boolean; reachable?: boolean; lag?: number }): void {
+  setWitness(app: string, opts: { connected?: boolean; reachable?: boolean; lag?: number; clockOffset?: number }): void {
     const w = this.witnessOf(app);
+    if (opts.clockOffset !== undefined) w.clockOffset = opts.clockOffset;
     if (opts.connected !== undefined) w.setConnected(opts.connected);
     if (opts.reachable !== undefined) w.reachable = opts.reachable;
     if (opts.lag !== undefined) w.lag = opts.lag;
@@ -711,7 +724,8 @@ export class World implements Network {
   }
 
   /** An honest relay that delivers to one witness `hours` late while its
-   * pings still arrive (a slow consumer). */
+   * pings still arrive (a slow consumer). Events keep the time the relay
+   * sequenced them, so they arrive old. */
   relayDelay(app: string, hours: number): void {
     this.relay!.deliveryDelay.set(this.witnessOf(app).id, hours);
     this.note(`the relay delivers to ${this.witnessOf(app).id} ${hours}h late`);
@@ -744,7 +758,7 @@ export class World implements Network {
   }
 
   /** `from` is lost; a new installation restores its keys and the backup. */
-  restore(from: Installation, backupIndex: number, deviceName = `${from.name}-restored`): Installation {
+  restore(from: Installation, backupIndex: number, deviceName = `${from.name}-restored`, opts: { app?: string } = {}): Installation {
     const b = this.backups[backupIndex];
     from.online = false;
     if (from.sessionId) this.pdsOf.get(from.did)!.endSession(from.sessionId);
@@ -753,7 +767,7 @@ export class World implements Network {
     const inst = new Installation(this, id, deviceName, from.did, this.rng.derive(`install/${id}/${++this.counter}`), from.clockOffset,
       { sign: from.signKey, enc: from.encKey, deviceId: from.binding.device.deviceId });
     inst.sessionId = this.pdsOf.get(from.did)!.login(from.did, "app", id).id;
-    inst.app = from.app;
+    inst.app = opts.app ?? from.app;
     inst.predecessor = from;
     inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);

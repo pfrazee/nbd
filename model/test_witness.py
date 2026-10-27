@@ -11,15 +11,21 @@ Run: python3 -I -m unittest discover -s model
 import unittest
 
 from nbd_trust import Approval, Binding, InviterClient
-from nbd_witness import (INCOMPLETE, INF, LIVENESS_LIMIT, RELAY_REPLAY_WINDOW, WITNESS_RETENTION,
-                         ClientView, Commit, LyingWitness, RelayWorld, RogueWitness, Witness,
-                         WitnessClient, goal_violations)
+from nbd_witness import (CLOCK_SKEW, FETCH_TIMEOUT, INCOMPLETE, INF, LIVENESS_LIMIT, RELAY_REPLAY_WINDOW,
+                         WITNESS_RETENTION, ClientView, Commit, LyingWitness, RelayWorld, RogueWitness,
+                         Witness, WitnessClient, goal_violations)
 
 BOOK = "book-club"
 
 
 def B(account: str, device: str) -> Binding:
     return Binding(account, device)
+
+
+class NoFreshGap(WitnessClient):
+    """The earlier draft: fresh enrollment replays only what the witness has."""
+
+    FRESH_HISTORY_GAP = False
 
 
 class Base(unittest.TestCase):
@@ -374,6 +380,165 @@ class Rules(Base):
         self.assertFalse(self.bob.accepted(self.a1))  # both commits processed in order
 
 
+class Frontier(Base):
+    """The event-time frontier, clock skew, and revision cursors."""
+
+    def test_frontier_is_relay_time_not_delivery_time(self):
+        self.app1.lag = 2
+        self.w.now += 1
+        c = self.w.post("alice")
+        t = self.w.relay[-1].time
+        self.w.now += 3
+        self.alice.sync()
+        e = self.app1.latest_rec("alice")
+        self.assertEqual((e.hi, e.rtime), (c.rev, t))
+        self.assertAlmostEqual(e.wtime - e.rtime, 2)  # delivered 2 hours after the relay sequenced it
+        self.assertAlmostEqual(self.app1.frontier("alice"), self.w.now - 2)
+        self.assertAlmostEqual(self.alice.coverage_age(), 2)
+
+    def test_frontier_ahead_of_the_witness_clock_is_a_fault(self):
+        self.app1.clock_offset = -2 * CLOCK_SKEW  # the witness's clock is 10 minutes slow
+        self.alice.sync()
+        self.assertTrue(self.app1.skew_fault("alice"))
+        self.assertEqual(self.app1.frontier_age("alice"), INF)
+        self.assertTrue(self.alice.liveness_warning())  # the owner warns
+        self.app1.clock_offset = 0.0  # resolved
+        self.alice.sync()
+        self.assertFalse(self.alice.liveness_warning())
+
+    def test_skew_fault_lasts_while_the_witness_stalls(self):
+        # Found by the walks: a fault that cleared once the frontier fell
+        # more than the skew behind the slow clock let a stalled witness
+        # understate its frontier age by the clock's whole error.
+        self.app1.clock_offset = -0.5
+        self.alice.sync()
+        self.assertTrue(self.alice.liveness_warning())
+        self.app1.set_up(False)
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.hours(LIVENESS_LIMIT + 0.25, self.alice, step=0.5)
+        self.assertTrue(self.app1.skew_fault("alice"))
+        self.assertTrue(self.alice.liveness_warning())
+        self.assertEqual(self.goal(), [])
+
+    def test_finding_slow_witness_clock_is_undetected_once_behind(self):
+        # Finding 11. The skew check sees a slow witness clock only while the
+        # frontier is current. A clock that goes slow while the witness is
+        # down or behind is never a fault, and understates frontier age by
+        # its whole error, so the warning comes that much late.
+        self.app1.set_up(False)
+        self.app1.clock_offset = -0.5
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.hours(LIVENESS_LIMIT + 0.25, self.alice, step=0.5)
+        self.assertFalse(self.app1.skew_fault("alice"))
+        self.assertFalse(self.alice.liveness_warning())
+        self.assertTrue(self.goal())
+
+    def test_frontier_within_the_skew_is_no_fault(self):
+        self.app1.clock_offset = -CLOCK_SKEW / 2
+        self.alice.sync()
+        self.assertFalse(self.app1.skew_fault("alice"))
+        self.assertFalse(self.alice.liveness_warning())
+
+    def test_finding_skew_within_the_allowance_stretches_the_deadline(self):
+        # Finding 10. A witness clock slow by less than CLOCK_SKEW is no
+        # fault, but it understates frontier age by that much, so the
+        # warning comes up to 5 minutes after the 24 hours the goal states.
+        self.app1.clock_offset = -0.9 * CLOCK_SKEW
+        self.app1.set_up(False)
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.hours(LIVENESS_LIMIT + 0.8 * CLOCK_SKEW, self.alice, step=0.5)
+        self.assertFalse(self.alice.liveness_warning())
+        self.assertTrue(self.goal())
+        self.assertEqual(goal_violations("alice", [self.alice], [self.bob], self.legit, self.w.now,
+                                         slack=CLOCK_SKEW), [])
+
+    def test_pending_fetch_holds_its_accounts_frontier_at_its_time(self):
+        self.w.stall("app1", "alice")
+        self.w.now += 1
+        s = self.graft(kind="sync")
+        t = self.w.relay[-1].time
+        self.w.now += 0.5
+        self.w.post("bob")
+        self.alice.sync()
+        self.assertAlmostEqual(self.app1.frontier("alice"), t)
+        self.assertAlmostEqual(self.app1.frontier("bob"), self.w.now)  # other accounts unaffected
+        self.assertAlmostEqual(self.alice.coverage_age(), 0.5)
+        self.assertIsNone(self.app1.commit_at("alice", s.rev))  # not yet reported
+        self.w.now += FETCH_TIMEOUT
+        self.alice.sync()  # timed out: a gap, and the frontier moves on
+        self.assertTrue(self.alice.gap_covers(s.rev))
+        self.assertAlmostEqual(self.alice.coverage_age(), 0.0)
+
+    def test_commits_behind_a_pending_fetch_wait_in_order(self):
+        self.w.stall("app1", "alice")
+        s = self.graft(kind="sync")
+        self.ungraft()  # a #commit queued behind the stalled #sync
+        self.alice.sync()
+        self.assertEqual(self.alice.state.gaps, [])
+        self.w.stall("app1", "alice", on=False)
+        self.alice.sync()
+        self.assertTrue(self.alice.gap_covers(s.rev))  # root replaced: the #sync is a gap
+        self.assertNotIn(self.m, self.alice.state.seen_own)
+        self.assertEqual(self.app1.state["alice"], self.w.head["alice"].root)
+
+    def _bob_posts(self, n):
+        for _ in range(n):
+            self.w.post("bob")
+
+    def test_restore_onto_another_applications_witness_resumes_by_revision(self):
+        # app3's history of Alice starts before the backup but is much
+        # shorter than app1's log, so only a revision cursor means the same
+        # place on both.
+        self._bob_posts(10)
+        app3 = Witness(self.w, "app3", from_now=True)
+        self.w.post("alice")
+        self.alice.sync()
+        backup = self.alice.export_state()
+        self.w.now += 5
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.ungraft()
+        self.w.now += 5
+        restored = WitnessClient.restore(self.w, backup, app3)
+        self.assertIn(self.m, restored.state.own_alarms)
+        self.assertEqual(restored.state.gaps, [])
+        self.assertEqual(self.goal([restored]), [])
+
+    def test_pairing_onto_a_witness_whose_history_starts_later_warns(self):
+        self.alice.stop()
+        self.w.now += 1
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        rev = self.bob.state.basis[self.m][0]
+        self.ungraft()
+        self._bob_posts(10)
+        app3 = Witness(self.w, "app3", from_now=True)  # starts following Alice after the impostor
+        a2 = self.w.link(self.a0, B("alice", "a2"))
+        self.legit.add(a2)
+        paired = WitnessClient(self.w, a2, app3, transfer=self.alice.state)
+        paired.sync()
+        self.assertNotIn(self.m, paired.state.seen_own)
+        self.assertIn("before history", {g.kind for g in paired.state.gaps})
+        self.assertTrue(paired.gap_covers(rev))
+        self.assertEqual(self.goal([paired]), [])
+
+    def test_restore_onto_a_pruned_witness_warns_for_the_interval(self):
+        backup = self.alice.export_state()
+        self.w.now += 10
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.ungraft()
+        self.w.now += WITNESS_RETENTION + 1
+        self.app2.poll()
+        restored = WitnessClient.restore(self.w, backup, self.app2)  # another application's witness
+        self.assertIn("retention", {g.kind for g in restored.state.gaps})
+        self.assertTrue(restored.gap_covers(self.bob.state.basis[self.m][0]))
+        self.assertEqual(self.goal([restored]), [])
+
+
 class Limitations(Base):
     def test_limitation_dishonest_relay(self):
         self.w.relay_hides["app1"] = {"alice"}
@@ -384,7 +549,9 @@ class Limitations(Base):
         self.alice.sync()
         self.assertEqual(self.alice.state.own_alarms, set())
         self.assertEqual(self.alice.state.gaps, [])
-        self.w.now += LIVENESS_LIMIT
+        # Alice's cursor (a revision) never reaches the hidden commits, so the
+        # goal fails by its deadline clause, strictly after 24 hours.
+        self.w.now += LIVENESS_LIMIT + 1
         self.alice.sync()
         self.assertTrue(self.goal())
 
@@ -541,36 +708,36 @@ class Astra(Base):
 
 
 class Findings(Base):
-    def test_finding_live_witness_far_behind_the_relay_misses_the_deadline(self):
+    def test_finding_witness_far_behind_the_relay_warns_by_event_time(self):
         # Finding 1. Alice's witness is replaying a 30-hour backlog (resumed
         # from its cursor after an outage within the relay's window, or a
-        # slow consumer). It receives frames continuously and processes
-        # every delivered event, so the literal rule calls it live with
-        # frontier age 0 while the impostor's commit is undelivered.
-        self.app1.lag = 30
-        self.w.now += 0.1
-        self.graft()
-        self.assertTrue(self.bob.accepted(self.m))
-        self.ungraft()
-        self.hours(24.5, self.alice)
-        self.assertFalse(self.alice.liveness_warning())
-        self.assertNotIn(self.m, self.alice.state.own_alarms)
-        self.assertTrue(self.goal())
-
-    def test_finding_live_requires_reaching_the_relay_head(self):
-        self.app1.LIVE_RULE = "head"
+        # slow consumer). It receives frames continuously, so the first
+        # draft's rule (a frame within 60 seconds) called it live with
+        # frontier age 0 while the impostor's commit was undelivered, and the
+        # goal failed. The frontier is now the relay time of the newest event
+        # processed, 30 hours old here, so Alice warns within 24 hours.
         self.app1.lag = 30
         self.w.now += 0.1
         self.graft()
         self.assertTrue(self.bob.accepted(self.m))
         self.ungraft()
         self.hours(24, self.alice)
+        self.assertGreater(self.alice.coverage_age(), LIVENESS_LIMIT)
+        self.assertNotIn(self.m, self.alice.state.own_alarms)
         self.assertTrue(self.alice.liveness_warning())
         self.assertEqual(self.goal(), [])
-        self.hours(10, self.alice)  # backlog drained: the alarm arrives
-        self.app1.lag = 0
+
+    def test_finding_backlog_drains_and_the_alarm_arrives(self):
+        self.app1.lag = 30
+        self.w.now += 0.1
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.ungraft()
+        self.hours(10, self.alice)
+        self.app1.lag = 0  # backlog drained
         self.alice.sync()
         self.assertIn(self.m, self.alice.state.own_alarms)
+        self.assertFalse(self.alice.liveness_warning())
 
     def _late_enrollment(self, client_cls):
         rec = self.bob.invite(BOOK, "erin")
@@ -588,9 +755,9 @@ class Findings(Base):
     def test_finding_fresh_enrollment_after_the_witness_history_starts(self):
         # Finding 2. A witness that began following Erin's account after the
         # impostor came and went (a new application, or one rebuilt from a
-        # snapshot) has a clean start; fresh enrollment replays it, presents
-        # nothing, and records no gap.
-        self.assertTrue(self._late_enrollment(WitnessClient))
+        # snapshot) has a clean start; under the earlier draft, fresh
+        # enrollment replayed it, presented nothing, and recorded no gap.
+        self.assertTrue(self._late_enrollment(NoFreshGap))
 
     def test_finding_fresh_enrollment_beyond_retention(self):
         rec = self.bob.invite(BOOK, "erin")
@@ -600,18 +767,19 @@ class Findings(Base):
         self.w.now += WITNESS_RETENTION + 1
         self.app1.poll()
         e0 = self.w.add_device(B("erin", "e0"))
-        erin = WitnessClient(self.w, e0, self.app1)
+        erin = NoFreshGap(self.w, e0, self.app1)
         erin.sync()
         self.assertEqual(erin.state.presented | erin.state.own_alarms, set())
         self.assertEqual(erin.state.gaps, [])
         self.assertTrue(goal_violations("erin", [erin], [self.bob], {e0}, self.w.now))
         self.assertTrue(rec.pending)
+        fixed = WitnessClient(self.w, e0, self.app1)  # the rule now: a retention gap
+        fixed.sync()
+        self.assertEqual({g.kind for g in fixed.state.gaps}, {"retention"})
+        self.assertEqual(goal_violations("erin", [fixed], [self.bob], {e0}, self.w.now), [])
 
     def test_finding_fresh_enrollment_gap_before_history_fixes_both(self):
-        class Fixed(WitnessClient):
-            FRESH_HISTORY_GAP = True
-
-        self.assertEqual(self._late_enrollment(Fixed), [])
+        self.assertEqual(self._late_enrollment(WitnessClient), [])
 
     def test_finding_monotonic_clock_that_stops_in_suspend(self):
         # Finding 3. While "running", coverage age uses a monotonic clock;
@@ -637,20 +805,31 @@ class Findings(Base):
         self.alice.sync()  # an installation whose clock counts suspend warns
         self.assertTrue(self.alice.liveness_warning())
 
-    def test_finding_one_pds_stalling_fetches_stalls_every_accounts_frontier(self):
-        # Finding 5. The proposal does not say how long a witness waits on a
-        # `#sync` fetch. If a pending fetch holds the frontier (an event is
-        # not processed until reconstructed or a gap), one PDS that stalls
-        # every fetch keeps the witness from ever being live, and every user
-        # of the application sees a non-dismissible liveness warning.
+    def _stalling_mallory(self):
         x0 = self.w.add_device(B("mallory", "x0"))
         self.w.stall("app1", "mallory")
         for _ in range(30):
             self.w.publish_sync("mallory")
             self.w.now += 0.9
             self.alice.sync()
+        return x0
+
+    def test_finding_one_pds_stalling_fetches_stalls_every_accounts_frontier(self):
+        # Finding 5. An earlier draft did not say how long a witness waits on
+        # a `#sync` fetch. If a pending fetch holds the whole stream with no
+        # bound, one PDS that stalls fetches keeps every account's frontier
+        # back, and every user of the application sees a warning they cannot
+        # dismiss.
+        self.app1.PENDING = "stream"
+        self.app1.FETCH_TIMEOUT = INF
+        self.assertTrue(self._stalling_mallory())
         self.assertTrue(self.alice.liveness_warning())  # nothing happened to Alice
-        self.assertTrue(x0)
+
+    def test_stalled_fetch_holds_only_its_own_accounts_frontier(self):
+        self.app1.FETCH_TIMEOUT = INF
+        self._stalling_mallory()
+        self.assertFalse(self.alice.liveness_warning())
+        self.assertGreater(self.app1.frontier_age("mallory"), LIVENESS_LIMIT)
 
     def test_finding_stalled_fetch_counted_as_processed_is_neither(self):
         # Finding 5, the other reading: if a stalled fetch waits aside while
@@ -658,7 +837,7 @@ class Findings(Base):
         # nothing bounds the wait, the commit Bob accepted is neither
         # reconstructed nor a gap in Alice's history, and her coverage stays
         # fresh. This answers the proposal's review question 4 with yes.
-        self.app1.PENDING_HOLDS = False
+        self.app1.PENDING = "aside"
         self.app1.FETCH_TIMEOUT = INF
         self.w.stall("app1", "alice")
         self.graft(kind="sync")
@@ -669,12 +848,25 @@ class Findings(Base):
         self.assertTrue(self.goal())
 
     def test_finding_bounded_fetch_wait_makes_it_a_gap(self):
-        self.app1.PENDING_HOLDS = False  # a bounded wait aside is enough
+        self.app1.PENDING = "aside"  # a bounded wait aside is enough
         self.w.stall("app1", "alice")
         self.graft(kind="sync")
         self.assertTrue(self.bob.accepted(self.m))
         self.hours(25, self.alice)
         self.assertTrue(self.alice.gap_warnings())
+        self.assertEqual(self.goal(), [])
+
+    def test_unbounded_fetch_wait_holding_the_frontier_still_warns(self):
+        # Under the rule now, a commit awaiting a fetch holds its account's
+        # frontier at its relay time, so even with no timeout the deadline
+        # holds: the coverage age reaches 24 hours and Alice warns.
+        self.app1.FETCH_TIMEOUT = INF
+        self.w.stall("app1", "alice")
+        self.graft(kind="sync")
+        self.assertTrue(self.bob.accepted(self.m))
+        self.hours(24.5, self.alice)
+        self.assertEqual(self.alice.state.gaps, [])
+        self.assertTrue(self.alice.liveness_warning())
         self.assertEqual(self.goal(), [])
 
     def test_finding_revoked_signer_impostor_is_only_a_notice(self):

@@ -42,7 +42,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
       {inst.liveness() && <div className="alarm" title="Witness policy: coverage age over 24 hours; cannot be dismissed">{inst.liveness()} (coverage {Number.isFinite(inst.coverageAge()) ? `${inst.coverageAge().toFixed(1)}h` : "unknown"})</div>}
       {inst.gapWarnings().map((g) => (
         <div key={g.key} className="notice gap">
-          Gap in your account's history (relay seq {g.fromSeq}{g.toSeq !== g.fromSeq ? `-${g.toSeq}` : ""}): {g.reason}.{" "}
+          Gap in your account's history (revision {g.fromRev}{g.toRev !== g.fromRev ? `-${g.toRev}` : ""}): {g.reason}.{" "}
           <button onClick={() => sim.act(`${inst.id} acknowledged a gap`, () => inst.acknowledgeGap(g.key))}>Acknowledge</button>
         </div>
       ))}

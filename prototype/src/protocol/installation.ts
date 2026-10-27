@@ -13,7 +13,7 @@ import { type Issuance, move } from "./publish";
 import { type Snapshot, type WriteOp, recordsIn, verifySnapshot } from "./repo";
 import { type TrustState, PENDING_INVITE_TTL, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust, invitePayload } from "./trust";
 import {
-  type CoverageSegment, type GapWarning, type HistoryEntry, LIVENESS_LIMIT, type WitnessApi, type WitnessClientState,
+  type CoverageSegment, type GapWarning, type HistoryEntry, type HistoryResponse, LIVENESS_LIMIT, type WitnessApi, type WitnessClientState,
   cloneWitnessState, emptyWitnessState,
 } from "./witness";
 import {
@@ -57,8 +57,9 @@ export interface Network {
    * must never trust them (proposal: Trusted witnesses). */
   otherWitnesses?(observer: string): WitnessApi[];
   /** Ground truth for the checks: this installation newly accepted a binding
-   * of another account; `seq` is the witnessed commit it relied on, if any. */
-  accepted?(by: Installation, b: Binding, seq: number | null, via: string): void;
+   * of another account; `rev` is the revision of the witnessed commit it
+   * relied on, if any. */
+  accepted?(by: Installation, b: Binding, rev: number | null, via: string): void;
 }
 
 /** A signed invite or capture record, saved with its vouch decision before
@@ -223,12 +224,16 @@ export class Installation {
   pairFrom(approver: Installation): void {
     this.imports++;
     this.trust.importFrom(cloneTrust(approver.trust.state));
-    // The new device resumes the approver's audit cursors; its coverage is
-    // unknown until its own frontier first advances.
+    // The new device resumes the approver's audit cursors (repo revisions,
+    // so it may use another witness); its coverage is unknown until its own
+    // frontier first advances.
     for (const [d, c] of approver.mon.cursors) this.mon.cursors.set(d, c);
     for (const g of approver.mon.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
-    // The approver's commit published this device's record.
-    const published = approver.trust.state.accepted.get(bindingId(this.binding))?.rev;
+    // The approver's commit published this device's record. If its
+    // acknowledgement was lost, the revision is unknown, but later than any
+    // the approver had seen.
+    const published = approver.trust.state.accepted.get(bindingId(this.binding))?.rev
+      ?? (approver.trust.state.views.get(this.did)?.rev ?? 0) + 1;
     this.trust.state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own", rev: published });
     this.trust.state.approvedByMe.add(bindingId(this.binding));
     // Own devices known at pairing are not news to this user.
@@ -251,6 +256,8 @@ export class Installation {
     this.trust.importFrom(cloneTrust(s.trust));
     if (s.witness) {
       // Resume from the backup's cursors, not from now, and replay since.
+      // They are repo revisions, so the restored installation may use a
+      // different witness: what that witness lacks after them is a gap.
       for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, c);
       for (const g of s.witness.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
       this.mon.auditGaps.push(...s.witness.auditGaps.map((g) => ({ ...g })));
@@ -606,21 +613,21 @@ export class Installation {
   // ---- witness policy (proposal-reliable-detection.md) ---------------------
 
   /** Ground truth: report bindings of other accounts accepted since last time. */
-  private reportAccepts(seq: number | null, via: string, account?: Did): void {
+  private reportAccepts(rev: number | null, via: string, account?: Did): void {
     for (const [id, a] of this.trust.state.accepted) {
       if (this.reported.has(id) || a.binding.account === this.did || (account && a.binding.account !== account)) continue;
       if (this.trust.state.revoked.has(id)) continue; // accepted already revoked: never usable
       this.reported.add(id);
-      this.net.accepted?.(this, a.binding, seq, via);
+      this.net.accepted?.(this, a.binding, rev, via);
     }
   }
 
   /** Decisions on witnessed state: apply a commit the trusted witness
    * reports as published and reconstructed. */
-  private observeWitnessed(did: Did, snap: Snapshot, seq: number, via: string): void {
+  private observeWitnessed(did: Did, snap: Snapshot, via: string): void {
     this.reportAccepts(null, "transferred or adopted");
     this.trust.observe(did, snap);
-    this.reportAccepts(seq, via, did);
+    this.reportAccepts(snap.commit.rev, via, did);
   }
 
   /** Follow one account's history through the trusted witness: from the
@@ -649,31 +656,32 @@ export class Installation {
         this.decide(`INCOMPLETE ${did}: its latest published commit is not reconstructed`);
         return;
       }
-      this.observeWitnessed(did, start.snap, start.seq, "first contact");
-      this.mon.cursors.set(did, start.seq);
+      this.observeWitnessed(did, start.snap, "first contact");
+      this.mon.cursors.set(did, start.pos);
       this.crossCheck(w, did);
       return;
     }
-    let frontierAge = Infinity;
+    let last: HistoryResponse | null = null;
     let applied = false;
     for (let more = true; more; ) {
       const r = w.history(this.id, did, cursor);
       if (r.truncatedTo !== null && r.truncatedTo > cursor)
-        this.recordGap(did, cursor + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
+        this.recordGap(did, `${did}:retention:${cursor + 1}-${r.truncatedTo}`, cursor + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
       for (const e of own ? this.ownEntries(r.entries) : this.pinnedEntries(r.entries)) {
         if (e.kind === "state") {
-          this.observeWitnessed(did, e.snap, e.seq, e.via);
+          this.observeWitnessed(did, e.snap, e.via);
           applied = true;
-        } else this.recordGap(did, e.seq, e.toSeq, e.rev, e.reason);
+        } else this.witnessGap(did, cursor, e);
+        cursor = Math.max(cursor, e.pos ?? 0);
       }
-      cursor = r.head;
       more = r.more;
-      if (!more) frontierAge = r.frontierAge;
+      if (!more) last = r;
     }
     this.mon.cursors.set(did, cursor);
     // Nothing new: re-apply the rules to the witnessed view (holds elapse).
     if (!applied) this.trust.refresh(did);
-    if (own) this.advance(frontierAge);
+    if (own && last) this.mon.fault = last.fault;
+    if (own) this.advance(last?.frontierAge ?? Infinity);
     this.crossCheck(w, did);
   }
 
@@ -693,27 +701,34 @@ export class Installation {
   private enroll(w: WitnessApi): void {
     let cursor: number | null = null;
     const seen = new Map<string, Binding>();
-    let last: { snap: Snapshot; seq: number } | null = null;
+    let last: Snapshot | null = null;
     let frontierAge = Infinity;
     for (let more = true; more; ) {
       const r = w.history(this.id, this.did, cursor);
+      // History the witness no longer holds, from the account's first event.
+      if (r.truncatedTo !== null && r.truncatedTo > (cursor ?? 0))
+        this.recordGap(this.did, `${this.did}:retention:${(cursor ?? 0) + 1}-${r.truncatedTo}`, (cursor ?? 0) + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
       for (const e of r.entries) {
+        const at = cursor ?? 0;
+        cursor = Math.max(at, e.pos ?? 0);
         if (e.kind === "gap") {
-          this.recordGap(this.did, e.seq, e.toSeq, e.rev, e.reason);
+          this.witnessGap(this.did, at, e);
           continue;
         }
-        last = { snap: e.snap, seq: e.seq };
+        last = e.snap;
         for (const [k, v] of recordsIn(e.snap, COL.device)) {
           const b = (v as { value?: Binding }).value;
           if (b?.device?.deviceId === k && b.account === this.did) seen.set(bindingId(b), b);
         }
       }
-      cursor = Math.max(cursor ?? 0, r.head);
       more = r.more;
-      if (!more) frontierAge = r.frontierAge;
+      if (!more) {
+        frontierAge = r.frontierAge;
+        this.mon.fault = r.fault;
+      }
     }
     if (!last) return; // nothing reconstructed yet: INCOMPLETE
-    this.observeWitnessed(this.did, last.snap, last.seq, "enrollment");
+    this.observeWitnessed(this.did, last, "enrollment");
     const now = this.trust.state.views.get(this.did)!;
     for (const [id, b] of seen) {
       if (sameBinding(b, this.binding) || this.trust.state.approvedByMe.has(id)) continue;
@@ -727,12 +742,18 @@ export class Installation {
 
   /** Record a gap: the own account's raise their own warning; a pinned
    * account's are intervals audit reports as unchecked. */
-  private recordGap(did: Did, fromSeq: number, toSeq: number, rev: number | null, reason: string): void {
-    const key = `${did}:${fromSeq}-${toSeq}`;
-    const g = { key, account: did, fromSeq, toSeq, rev, reason, at: this.localNow(), world: this.net.now() };
+  private recordGap(did: Did, key: string, fromRev: number, toRev: number, rev: number | null, reason: string): void {
+    const g = { key, account: did, fromRev, toRev, rev, reason, at: this.localNow(), world: this.net.now() };
     if (did === this.did) {
       if (!this.mon.gaps.some((x) => x.key === key)) this.mon.gaps.push({ ...g, acked: false });
     } else if (!this.mon.auditGaps.some((x) => x.key === key)) this.mon.auditGaps.push(g);
+  }
+
+  /** A gap the witness reports, for the part after `cursor`: history from
+   * before the cursor was already checked (with another witness, perhaps). */
+  private witnessGap(did: Did, cursor: number, e: Extract<HistoryEntry, { kind: "gap" }>): void {
+    const from = Math.max(e.fromRev, cursor + 1);
+    if (from <= e.toRev) this.recordGap(did, `${did}:${e.id}`, from, e.toRev, e.rev, e.reason);
   }
 
   /** The PDS may still serve records, but a commit it serves is checked
@@ -806,7 +827,11 @@ export class Installation {
     if (!this.witnessed) return null;
     const age = this.coverageAge();
     if (age <= LIVENESS_LIMIT) return null;
-    return this.mon.reachable ? "Your app's witness is not live: device changes on your account can't be checked." : "Your app's witness is unreachable: device changes on your account can't be checked.";
+    const cause = !this.mon.reachable ? "is unreachable"
+      : this.mon.fault === "clock" ? "reports a clock fault: its relay's times are ahead of its clock"
+      : this.mon.fault === "fetch" ? "is waiting on a fetch of your account's repo"
+      : "is behind the relay";
+    return `Your app's witness ${cause}: device changes on your account can't be checked.`;
   }
 
   /** Own-account gap warnings not yet acknowledged. */

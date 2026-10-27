@@ -69,6 +69,11 @@ const MUTATIONS = {
   "witness: backward clock trusted across restart": [CLIENT, "cp && d >= 0 && Number.isFinite(cp.age)", "cp && Number.isFinite(cp.age)"],
   "witness: stream gaps ignored": [RELAY, "if (this.relay.outdated(this.cursor)) {", "if (false) {"],
   "witness: result not checked against the commit root": [RELAY, "if (next && snapshotData(next) === e.commit.data && invert(", "if (next && invert("],
+  // Witness progress by relay event time, and cursors as repo revisions.
+  "witness: frontier from delivery time, not relay time": [RELAY, "this.frontier = Math.max(this.frontier, through);", "this.frontier = Math.max(this.frontier, through + this.relay.delayOf(this.id));"],
+  "witness: a pending fetch doesn't hold the frontier": [RELAY, "return p ? Math.min(this.frontier, p.e.time) : this.frontier;", "return this.frontier;"],
+  "witness: clock skew fault ignored": [RELAY, "if (this.clockFault(did)) return Infinity;", ""],
+  "witness: witness-local cursors": [RELAY, "return h.kind === \"state\" ? h.rev : h.toRev; // a repo revision", "return h.local;"],
 };
 
 const all = process.argv.includes("--all");

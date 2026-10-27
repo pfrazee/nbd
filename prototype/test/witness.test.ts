@@ -111,7 +111,7 @@ describe("reconstruction and gaps", () => {
     expect(carol.trust.isAccepted(x.binding)).toBe(true);
     const acc = w.provenance.accepts.find((a) => a.inst === carol.id && a.target === x.binding.device.deviceId)!;
     const g = bob.gapWarnings()[0];
-    expect(g.fromSeq <= acc.seq! && acc.seq! <= g.toSeq).toBe(true);
+    expect(g.fromRev <= acc.rev! && acc.rev! <= g.toRev).toBe(true);
   });
 
   it("operations that fail inversion are a gap", () => {
@@ -136,7 +136,7 @@ describe("reconstruction and gaps", () => {
     w.setWitness("lantern", { connected: false });
     w.install(bobDid, "tablet", { link: bob });
     w.advance(RELAY_REPLAY_WINDOW + 1);
-    expect(bob.liveness()).toMatch(/not live/);
+    expect(bob.liveness()).toMatch(/behind the relay/);
     w.setWitness("lantern", { connected: true });
     expect(bob.gapWarnings().some((g) => /stream gap/.test(g.reason))).toBe(true);
     expect(bob.liveness()).toBeNull();
@@ -265,7 +265,7 @@ describe("liveness and deadline", () => {
     w.advance(20);
     expect(bob.coverageAge()).toBeCloseTo(20);
     w.advance(5);
-    expect(bob.liveness()).toMatch(/not live/);
+    expect(bob.liveness()).toMatch(/behind the relay/);
   });
 
   it("across a restart, coverage carries by wall clock; a clock moved backward makes it unknown", () => {
@@ -285,11 +285,11 @@ describe("liveness and deadline", () => {
   });
 });
 
-describe("findings", () => {
-  it("FINDING: an honest relay that delivers to Bob's witness late keeps it 'live' while it misses the deadline", () => {
-    // Live is defined against what the relay has delivered, so a witness
-    // whose events queue at the relay (a slow consumer) reports frontier age
-    // 0 while it is a day behind the witness that Carol's app uses.
+describe("the frontier, by relay event time", () => {
+  it("an honest relay that delivers to Bob's witness 30h late: its events arrive old, so Bob's phone warns within 24h", () => {
+    // Formerly a FINDING: liveness by received frames counted this witness as
+    // current. The frontier is now the relay's own time on the newest event
+    // the witness processed, so the backlog counts against it.
     const { w, m, bob, carol, bobDid } = world("f1");
     w.relayDelay("lantern", 30);
     const x = w.forkedImpostor(bobDid, [carol]);
@@ -298,18 +298,86 @@ describe("findings", () => {
     w.advance(25);
     m.after();
     expect(carol.trust.isAccepted(x.binding)).toBe(true);
-    expect(bob.liveness()).toBeNull();
     expect(about(bob, x)).toEqual([]);
-    expect(violations(m).filter((v) => v.startsWith("detection goal"))).toHaveLength(1);
+    expect(bob.liveness()).toMatch(/behind the relay/);
+    expect(w.witnessOf("lantern").frontierAge(bobDid)).toBeGreaterThan(24);
+    expect(w.witnessOf("other").frontierAge(bobDid)).toBeLessThan(1);
+    expect(violations(m)).toEqual([]);
     w.advance(6);
-    expect(about(bob, x).length).toBe(1); // it does alarm, at hour 30
+    expect(about(bob, x).length).toBe(1); // the fork arrives, at hour 30
   });
 
-  it("FINDING: a fresh enrollment after retention presents nothing and warns of nothing", () => {
-    // A brand-new account impersonated around a pending invite: if the user
-    // first installs more than WITNESS_RETENTION later, the deleted impostor
-    // is gone from the witness and fresh enrollment, which raises no
-    // retention gap, says nothing.
+  it("a frontier more than CLOCK_SKEW ahead of the witness's clock is a fault: the owner warns, until it is resolved", () => {
+    const { w, bob, bobDid } = world("k1");
+    const lantern = w.witnessOf("lantern");
+    w.setWitness("lantern", { clockOffset: -0.5 }); // the witness's clock 30 minutes slow
+    const r = lantern.history(bob.id, bobDid, null);
+    expect(r.fault).toBe("clock");
+    expect(r.frontierAge).toBe(Infinity);
+    w.advance(23);
+    expect(bob.liveness()).toBeNull(); // coverage runs from the last good report
+    w.advance(2);
+    expect(bob.liveness()).toMatch(/clock fault/);
+    // Within CLOCK_SKEW (3 minutes) is no fault: frontier age clamps at zero.
+    w.setWitness("lantern", { clockOffset: -0.05 });
+    expect(lantern.history(bob.id, bobDid, null)).toMatchObject({ fault: null, frontierAge: 0 });
+    expect(bob.liveness()).toBeNull();
+  });
+
+  it("a slow witness clock can't hide a backlog: ahead beyond CLOCK_SKEW counts as over any limit", () => {
+    // The witness's clock is 40 hours slow and the relay delivers to it 30
+    // hours late: its clock minus its frontier is negative. Clamped to zero,
+    // that would hide the backlog past the deadline.
+    const { w, m, bob, carol, bobDid } = world("k2");
+    w.setWitness("lantern", { clockOffset: -40 });
+    w.relayDelay("lantern", 30);
+    const x = w.forkedImpostor(bobDid, [carol]);
+    invite(w, carol, bobDid, x);
+    m.before();
+    w.advance(25);
+    m.after();
+    expect(about(bob, x)).toEqual([]);
+    expect(bob.liveness()).toMatch(/clock fault/);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a commit awaiting a fetch holds that account's frontier at its time, and no other account's", () => {
+    const { w, bob, bobDid } = world("p1");
+    const alice = w.install(w.account("alice"), "phone"); // also on Lantern
+    const lantern = w.witnessOf("lantern");
+    const stop = w.withholdFetch(bobDid, "lantern");
+    const pds = w.pdsOf.get(bobDid)!;
+    pds.relayHooks.push((d) => (d === bobDid ? { kind: "sync" } : null));
+    const rev = pds.repo(bobDid).commit().commit.rev;
+    w.settle();
+    w.advance(0.5);
+    expect(lantern.history(bob.id, bobDid, null).fault).toBe("fetch");
+    expect(lantern.frontierAge(bobDid)).toBeCloseTo(0.5);
+    expect(lantern.frontierAge(alice.did)).toBeCloseTo(0);
+    expect(bob.coverageAge()).toBeCloseTo(0.5);
+    expect(alice.coverageAge()).toBeCloseTo(0);
+    expect(bob.mon.cursors.get(bobDid)!).toBeLessThan(rev);
+    // The fetch succeeds: the commit is reconstructed and the frontier catches up.
+    stop();
+    w.advance(0.25);
+    expect(lantern.frontierAge(bobDid)).toBeCloseTo(0);
+    expect(bob.mon.cursors.get(bobDid)).toBe(rev);
+    expect(bob.gapWarnings()).toEqual([]);
+    // A fetch that never succeeds is a gap after FETCH_TIMEOUT, and the
+    // frontier moves past it.
+    w.withholdFetch(bobDid, "lantern");
+    const rev2 = pds.repo(bobDid).commit().commit.rev;
+    w.settle();
+    w.advance(1);
+    expect(bob.gapWarnings().map((g) => [g.fromRev, g.toRev, g.reason])).toEqual([[rev2, rev2, "the repo was not served within FETCH_TIMEOUT"]]);
+    expect(lantern.frontierAge(bobDid)).toBeCloseTo(0);
+    expect(bob.liveness()).toBeNull();
+  });
+
+  it("a fresh enrollment after retention warns of a gap for the history the witness no longer holds", () => {
+    // Formerly a FINDING: fresh enrollment raised no retention gap, so an
+    // impostor captured by a pending invite more than WITNESS_RETENTION
+    // before the first install went unseen.
     const w = new World("f2", { policy: "witness" });
     const bobDid = w.account("bob", "pds.bob.example");
     const carol = w.install(w.account("carol"), "phone", { app: "other" });
@@ -319,7 +387,62 @@ describe("findings", () => {
     w.advance(WITNESS_RETENTION + 24);
     const bob = w.install(bobDid, "phone");
     expect(bob.trust.state.notices.filter((n) => n.kind === "history-binding")).toEqual([]);
-    expect(bob.mon.gaps).toEqual([]);
+    expect(bob.gapWarnings().map((g) => [g.fromRev, g.reason])).toEqual([[1, "older than WITNESS_RETENTION"]]);
+  });
+});
+
+describe("cursors are repo revisions", () => {
+  /** Commits to Carol's repo, so that each witness's own numbering of its
+   * entries runs well ahead of Bob's revisions. */
+  const busy = (w: World, carol: Installation) => {
+    for (let n = 0; n < 6; n++) w.install(carol.did, `d${n}`, { link: carol });
+  };
+  const revWith = (w: World, did: string, x: Installation) =>
+    w.pdsOf.get(did)!.repo(did).history.find((s) => s.records.has(`com.example.nbd.device/${x.binding.device.deviceId}`))!.commit.rev;
+
+  it("a restore onto another application's witness resumes from the backup's revision: it alarms on an impostor added and deleted since, and warns for history that witness lacks", () => {
+    const { w, m, bob, carol, bobDid } = world("c1");
+    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
+    busy(w, carol);
+    step(() => w.backup(bob));
+    step(() => w.setOnline(bob, false));
+    // Before the new application's witness starts: it will lack this.
+    const early = w.flashImpostor(bobDid, "early");
+    step(() => early.undo());
+    step(() => w.lateWitness("beacon"));
+    const f = w.flashImpostor(bobDid, "late");
+    step(() => invite(w, carol, bobDid, f.sub));
+    step(() => f.undo());
+    step(() => w.advance(72));
+    let restored!: Installation;
+    step(() => (restored = w.restore(bob, 0, "phone-restored", { app: "beacon" })));
+    expect(about(restored, f.sub).length).toBe(1);
+    const r = revWith(w, bobDid, early.sub);
+    const g = restored.gapWarnings().find((x) => x.fromRev <= r && r <= x.toRev);
+    expect(g?.reason).toMatch(/before this witness's history/);
+    expect(g!.fromRev).toBe(bob.mon.cursors.get(bobDid)! + 1); // only what follows the backup's cursor
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a device paired onto another application's witness resumes from its approver's revision", () => {
+    const { w, m, bob, carol, bobDid } = world("c2");
+    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
+    busy(w, carol);
+    step(() => w.setWitness("lantern", { reachable: false }));
+    const cursor = bob.mon.cursors.get(bobDid)!;
+    const early = w.flashImpostor(bobDid, "early");
+    step(() => early.undo());
+    step(() => w.lateWitness("beacon"));
+    const f = w.flashImpostor(bobDid, "late");
+    step(() => invite(w, carol, bobDid, f.sub));
+    step(() => f.undo());
+    let laptop!: Installation;
+    step(() => (laptop = w.install(bobDid, "laptop", { link: bob, app: "beacon" })));
+    expect(bob.mon.cursors.get(bobDid)).toBe(cursor); // the phone saw none of it
+    expect(about(laptop, f.sub).length).toBe(1);
+    const r = revWith(w, bobDid, early.sub);
+    expect(laptop.gapWarnings().some((x) => x.fromRev === cursor + 1 && r <= x.toRev)).toBe(true);
+    expect(violations(m)).toEqual([]);
   });
 });
 

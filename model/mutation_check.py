@@ -154,29 +154,29 @@ MUTATIONS = {
 # WitnessClient and Witness (nbd_witness.py): the relay-witness rules.
 WITNESS_MUTATIONS = {
     "accept on PDS-served commit": (
-        "        lr = self._c._latest(x)\n        return lr[1].root if lr else EMPTY",
+        "        lr = self._c._latest(x)\n        return lr.root if lr else EMPTY",
         "        c = self._w.pds_serve(self._c.name, x)\n        return c.root if c else EMPTY"),
     "any-witness trust": (
         "            if src is not self.witness:\n                continue",
         "            if False:\n                continue"),
     "latest-only watching": (
-        "        for _idx, e in w.read(x, start):",
-        "        for _idx, e in ([p for p in w.read(x, start) if p[1].reconstructed][-1:] if own\n"
-        "                        else w.read(x, start)):"),
+        "        for e, pos in self._resume(w, x, cur):",
+        "        for e, pos in ([p for p in self._resume(w, x, cur) if p[0].reconstructed][-1:] if own\n"
+        "                       else self._resume(w, x, cur)):"),
     "gap erased on resync": (
-        "            if e.reconstructed:\n                st.obs[x], st.obs_seq[x] = e.root, e.seq",
+        "            if e.reconstructed:\n                st.obs[x], st.obs_rev[x] = e.root, e.hi",
         "            if e.reconstructed:\n                if e.kind == \"resync\" and own:\n"
-        "                    st.gaps.clear()\n                st.obs[x], st.obs_seq[x] = e.root, e.seq"),
+        "                    st.gaps.clear()\n                st.obs[x], st.obs_rev[x] = e.root, e.hi"),
     "deadline reset at check completion": (
-        "        self.state.cov_base = self.witness.frontier_age()", "        self.state.cov_base = 0.0"),
+        "        self.state.cov_base = self.witness.frontier_age(own)", "        self.state.cov_base = 0.0"),
     "restore from now instead of cursor": (
-        "            st.read_from = st.cursor_seq.get(own.account, -1)",
-        "            st.cursors[own.account], st.cursor_seq[own.account] = witness.end(), witness.done_seq\n"
-        "            st.read_from = st.cursor_seq.get(own.account, -1)"),
+        "            st.read_from = st.cursors.get(own.account, 0)",
+        "            st.cursors[own.account] = witness.last_rev.get(own.account, 0)\n"
+        "            st.read_from = st.cursors.get(own.account, 0)"),
     "snapshot skipping for pinned accounts": (
-        "        for _idx, e in w.read(x, start):",
-        "        for _idx, e in ([p for p in w.read(x, start) if p[1].reconstructed][-1:] if not own\n"
-        "                        else w.read(x, start)):"),
+        "        for e, pos in self._resume(w, x, cur):",
+        "        for e, pos in ([p for p in self._resume(w, x, cur) if p[0].reconstructed][-1:] if not own\n"
+        "                       else self._resume(w, x, cur)):"),
     "gap ack suppresses liveness": (
         "        return self.running and self.coverage_age() > LIVENESS_LIMIT",
         "        return self.running and self.coverage_age() > LIVENESS_LIMIT and not any(\n"
@@ -189,34 +189,49 @@ WITNESS_MUTATIONS = {
     "restart credits no downtime": (
         "        st.cov_base = INF if d is None or d < 0 else st.cov_base + d",
         "        st.cov_base = INF if d is None or d < 0 else st.cov_base"),
-    "no retention gap at restore": ("        if start < w.base:  # pruned", "        if False:  # pruned"),
+    "no gap for history the witness lacks": (
+        "        if lack > cur and (self.FRESH_HISTORY_GAP or not fresh):",
+        "        if False:"),
     "no fork alarm": ("            if wc != c and (wc, c) not in self.state.forks:", "            if False:"),
     "unreported commits decide": (
         "        return c.rev > self.witness.max_rev(x)", "        return False"),
     "absence before presence revokes": (
-        "            elif b in st.proven and seq > st.proven[b]:", "            else:"),
+        "            elif b in st.proven and rev > st.proven[b]:", "            else:"),
     "fresh enrollment starts at the head": (
-        "                st.cursors[x], st.cursor_seq[x] = w.base, -1",
-        "                st.cursors[x], st.cursor_seq[x] = w.end(), w.done_seq"),
+        "                st.cursors[x] = 0\n",
+        "                st.cursors[x] = w.last_rev.get(x, 0)\n"),
     "fresh enrollment presents nothing": (
         "            if fresh:\n                st.presented.add(b)", "            if fresh:\n                pass"),
     "unreachable witness decides": (
         "        if not self.witness.reachable:\n            return True",
         "        if False:\n            return True"),
+    "cursor as a witness-local index": (
+        "        return [(e, e.hi) for e in w.read(x, cur)]",
+        "        return [(e, e.idx) for e in w.read(x, -1) if e.idx > cur]"),
     "witness: no inversion check": (
         "        if e.kind == \"commit\" and cur is not None and e.prev == cur:",
         "        if e.kind == \"commit\":"),
     "witness: later snapshot reconstructs an earlier root": (
         "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
-        "            self._gap(a, e)\n        return True\n\n    def _retry(self)",
+        "            self._gap(a, e)\n\n    def _drain(self)",
         "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
-        "            self._record(a, \"commit\", e, self.world.head[a].root)\n        return True\n\n    def _retry(self)"),
+        "            self._record(a, \"commit\", e, self.world.head[a].root)\n\n    def _drain(self)"),
     "witness: no stream gap": (
         "            self._stream_gap()  # the relay", "            pass  # the relay"),
     "witness: frontier from a successful answer": (
-        "        if self.pending is not None and not self._retry():\n            return",
-        "        if self.pending is not None and not self._retry():\n            self.last_live = self.wnow()\n"
-        "            return"),
+        "        if not self.up or not w.relay_up:\n            return\n        self._drain()",
+        "        if not self.up or not w.relay_up:\n            self.stream_time = w.now\n"
+        "            return\n        self._drain()"),
+    "witness: frontier from delivery time": (
+        "        self.stream_time = max(self.stream_time, horizon)",
+        "        self.stream_time = max(self.stream_time, self.wnow())"),
+    "witness: pending fetch does not hold the frontier": (
+        "        if q and self.PENDING != \"aside\":", "        if False:"),
+    "witness: skew fault ignored": (
+        "        if self.skew_fault(account):\n            return INF", "        if False:\n            return INF"),
+    "witness: skew fault not latched": (
+        "        return self.skewed or self.frontier(account) > self.wnow() + CLOCK_SKEW",
+        "        return self.frontier(account) > self.wnow() + CLOCK_SKEW"),
 }
 
 

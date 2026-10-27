@@ -76,7 +76,7 @@ function dayLater(what: string, opts: { gap?: boolean } = {}): Step {
       const out: Check[] = [];
       if (w.policy === "witness") {
         if (opts.gap) {
-          const g = c.inst.bobPhone.mon.gaps.find((x) => acc?.seq != null && x.fromSeq <= acc.seq && acc.seq <= x.toSeq);
+          const g = c.inst.bobPhone.mon.gaps.find((x) => acc?.rev != null && x.fromRev <= acc.rev && acc.rev <= x.toRev);
           out.push(check("Bob's phone warns of a gap covering the commit Carol relied on", !!g, g?.reason));
           out.push(check("…recorded within 24 hours of Carol's acceptance", !!g && !!acc && g.world - acc.world <= 24));
         } else {
@@ -437,25 +437,24 @@ const oldBackup: Scenario = {
   id: "witness-old-backup",
   policy: "witness",
   title: "35. Witness: a backup older than retention",
-  summary: `Bob restores a backup made ${WITNESS_RETENTION / 24 + 11} days earlier. History older than WITNESS_RETENTION is gone from the witness, so the restored phone warns of a gap for that interval and keeps its liveness warning separate.`,
+  summary: `Bob restores a backup made ${WITNESS_RETENTION / 24 + 11} days earlier. His account's history after the backup's cursor is older than WITNESS_RETENTION and gone from the witness, so the restored phone warns of a gap for that interval and keeps its liveness warning separate.`,
   steps: [
     setup(),
     {
-      title: "Bob backs up his phone, then loses it",
-      narration: "",
+      title: "Bob backs up his phone, links two devices, then loses the phone",
+      narration: "The backup's cursor is the revision of Bob's repo it had processed. Each link is a later commit to his repo.",
       run: (w, c) => {
         w.backup(c.inst.bobPhone);
+        c.inst.bobTablet = w.install(c.did.bob, "tablet", { link: c.inst.bobPhone });
+        c.inst.bobLaptop = w.install(c.did.bob, "laptop", { link: c.inst.bobPhone });
         w.setOnline(c.inst.bobPhone, false);
       },
     },
     {
       title: `${WITNESS_RETENTION / 24 + 11} days later, Bob restores the backup`,
-      narration: "The restored phone asks its witness for history from the backup's cursor; the start is older than the witness retains. It records that interval as a gap and raises a warning for it. Acknowledging it acknowledges only that gap.",
+      narration: "The restored phone asks its witness for history from the backup's cursor; the commits after it are older than the witness retains (it keeps only the latest state as a starting point). It records that interval of revisions as a gap and raises a warning for it. Acknowledging it acknowledges only that gap.",
       run: (w, c) => {
-        // The relay carries other accounts' commits meanwhile.
-        w.advance(240);
-        w.install(c.did.carol, "tablet", { link: c.inst.carolPhone });
-        w.advance(WITNESS_RETENTION + 24);
+        w.advance(WITNESS_RETENTION + 264);
         c.inst.bobRestored = w.restore(c.inst.bobPhone, 0);
       },
       expect: (_w, c) => [

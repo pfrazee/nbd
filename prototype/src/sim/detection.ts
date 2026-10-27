@@ -10,16 +10,16 @@
 //   it next ran.
 //
 // For acceptance by installation I at world time t on the witnessed commit
-// with relay sequence s, and each honest installation O of A whose state
+// at revision s of A's repo, and each honest installation O of A whose state
 // began no later than t (a restored installation inherits its backup's
 // start, and counts what its lost predecessor did; a device linked later is
 // new, its approver having read that history), the obligation is met by the deadline (t + 24h if O was
 // running then, otherwise O's next run) when O
 //   (a) alarmed about the device, or presented it (an own-added notice, a
 //       fresh-enrollment history notice, a start-over list), or
-//   (b) recorded a gap warning whose interval covers s, or
+//   (b) recorded a gap warning whose revision interval covers s, or
 //   (c) showed the liveness warning while its own history was processed
-//       only to before s.
+//       only to before revision s.
 // The goal is conditional on an honest reference relay and witness, so
 // obligations whose owner's witness or relay a scenario made dishonest are
 // skipped. Under a non-witness policy only (a) can apply: that is how the
@@ -63,11 +63,11 @@ export function detectionViolations(w: World): Obligation[] {
     if (!p.attacker.has(r.target) || p.attacker.has(r.device)) continue;
     const short = `${r.account.slice(8)}/${r.target.slice(0, 6)}`;
     if (witnessed) {
-      if (r.seq === null) continue; // transferred or adopted: the original acceptance carries it
+      if (r.rev === null) continue; // transferred or adopted: the original acceptance carries it
       const wit = [...w.witnesses.values()].find((x) => x.id === r.witness);
-      const entry = wit?.accounts.get(r.account)?.history.find((h) => h.seq === r.seq);
-      if (wit && entry && (entry.kind !== "state" || ![...entry.snap.records.keys()].some((k) => k.endsWith(`/${r.target}`))))
-        out.push({ key: `basis:${r.inst}:${r.target}`, text: `${r.inst} accepted ${short} on witnessed commit ${r.seq}, which doesn't contain it` });
+      const entries = wit?.accounts.get(r.account)?.history.filter((h) => h.rev === r.rev) ?? [];
+      if (wit && entries.length && !entries.some((e) => e.kind === "state" && [...e.snap.records.keys()].some((k) => k.endsWith(`/${r.target}`))))
+        out.push({ key: `basis:${r.inst}:${r.target}`, text: `${r.inst} accepted ${short} on witnessed commit at revision ${r.rev}, which doesn't contain it` });
     }
     const deadline = r.world + LIVENESS_LIMIT;
     for (const o of w.installations.values()) {
@@ -77,11 +77,11 @@ export function detectionViolations(w: World): Obligation[] {
       if (due === null || w.t < due - EPS) continue;
       // A restored installation's lost predecessor may already have met it.
       let done = false;
-      for (let x: Installation | null = o; x && !done; x = x.predecessor) done = met(x, r.target, r.seq, r.world, due, w.t);
+      for (let x: Installation | null = o; x && !done; x = x.predecessor) done = met(x, r.target, r.rev, r.world, due, w.t);
       if (done) continue;
       out.push({
         key: `${r.inst}:${r.target}:${o.id}`,
-        text: `${o.id} neither alarmed nor warned within 24h of ${r.inst} accepting ${short}${r.seq !== null ? ` (relay seq ${r.seq})` : ""} at ${r.world.toFixed(1)}h`,
+        text: `${o.id} neither alarmed nor warned within 24h of ${r.inst} accepting ${short}${r.rev !== null ? ` (revision ${r.rev})` : ""} at ${r.world.toFixed(1)}h`,
       });
     }
   }
@@ -107,18 +107,18 @@ function dueBy(o: Installation, deadline: number, now: number): number | null {
   return null;
 }
 
-function met(o: Installation, device: string, seq: number | null, accepted: number, due: number, now: number): boolean {
+function met(o: Installation, device: string, rev: number | null, accepted: number, due: number, now: number): boolean {
   const st = o.trust.state;
   if (st.alarms.some((a) => a.device === device && (a.world ?? Infinity) <= due + EPS)) return true;
   if (st.notices.some((n) => n.about?.device.deviceId === device && (n.kind === "own-added" || n.kind === "history-binding") && (n.world ?? Infinity) <= due + EPS)) return true;
   if ([...(st.startOver?.list?.values() ?? [])].some((b) => b.device.deviceId === device)) return true;
-  if (seq === null) return false;
-  if (o.mon.gaps.some((g) => g.fromSeq <= seq && seq <= g.toSeq && g.world <= due + EPS)) return true;
-  // Liveness: in a segment where its own history stopped before `seq`, the
+  if (rev === null) return false;
+  if (o.mon.gaps.some((g) => g.fromRev <= rev && rev <= g.toRev && g.world <= due + EPS)) return true;
+  // Liveness: in a segment where its own history stopped before `rev`, the
   // warning shows once coverage age passes the limit.
   for (let i = 0; i < o.segments.length; i++) {
     const s = o.segments[i];
-    if (s.cursor >= seq) continue;
+    if (s.cursor >= rev) continue;
     const last = i + 1 === o.segments.length;
     const end = last ? now : o.segments[i + 1].world;
     const warnAt = s.world + Math.max(0, LIVENESS_LIMIT - s.base);
