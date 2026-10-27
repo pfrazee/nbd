@@ -7,7 +7,7 @@ End-to-end encryption for atproto spaces. **Discussion draft:** baseline decisio
 1. Convenient: No big deal to implement
 2. Relaxed: No big deal data should be kept in it
 
-This scheme is for casual computing needs. It gives people who already know you time to stop a remote account takeover, alerts you to changes in your own devices, and lets members detect a malicious PDS after the fact. A stricter scheme would replace the trust-on-first-use (TOFU) scheme, add forward secrecy, and/or ensure regular key rotation. NBD is for people who trust the members of their space, semi-trust their PDS, and do not want to hide historic space activity from new members. It aims to minimize security tasks by users. If NBD does not fit your use-case, do not use it.
+This scheme is for casual computing needs. It gives your space time to stop a remote account takeover, except from the member who invites the compromised account, and alerts you to changes in your own devices. If a PDS impersonates you, your devices find out once someone has shared a key with the impostor. A stricter scheme would replace the trust-on-first-use (TOFU) scheme, add forward secrecy, and/or ensure regular key rotation. NBD is for people who trust the members of their space, semi-trust their PDS, and do not want to hide historic space activity from new members. It aims to minimize security tasks by users. If NBD does not fit your use-case, do not use it.
 
 Usage looks like:
 
