@@ -19,6 +19,7 @@
 import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
 import { type Approval, type Binding, bindingId, hasStanding, label } from "../protocol/types";
+import { beyondAllowance } from "../world/relay";
 import type { World } from "../world/world";
 import { DetectionCheck } from "./detection";
 import { DisclosureCheck, approvalAncestors } from "./disclosure";
@@ -110,6 +111,7 @@ export class InvariantMonitor {
         if (!this.firstSeen.has(k)) this.firstSeen.set(k, this.holdStart(h.bindings));
       }
       for (const v of this.check(i)) out.push(`${i.id}: ${v}`);
+      for (const v of this.checkIntegrity(i)) out.push(`${i.id}: ${v}`);
     }
     for (const v of this.disclosure.check()) out.push(`goal: ${v}`);
     for (const v of this.detection?.check() ?? []) out.push(`detection goal: ${v}`);
@@ -133,6 +135,30 @@ export class InvariantMonitor {
     this.factsSeen = facts.length;
     if (hasStanding(this.world.policy)) this.noteKnown();
     for (const text of out) this.violations.push({ at: this.world.t, text });
+    return out;
+  }
+
+  /** Witness policy: integrity alarms about what the relay published are
+   * never false. An unrelayed-commit alarm is about a commit its PDS never
+   * sent the relay (one an honest relay dropped, or one beyond
+   * REV_ALLOWANCE, never alarms); a relay-integrity alarm is about an
+   * account whose revisions the relay published out of order. */
+  private checkIntegrity(i: Installation): string[] {
+    const relay = this.world.relay;
+    if (!relay) return [];
+    const out: string[] = [];
+    for (const p of i.unrelayedProofs)
+      if (relay.received.has(`${p.did}:${p.served.rev}`)) out.push(`integrity alarm on ${p.did}'s commit at revision ${p.served.rev}, which its PDS sent the relay`);
+    for (const a of i.trust.state.alarms) {
+      if (a.kind !== "relay-integrity" || !a.subject) continue;
+      let last = 0, backward = false;
+      for (const e of relay.events) {
+        if (e.did !== a.subject || beyondAllowance(e.commit.rev, e.time)) continue; // never the latest revision
+        if (e.commit.rev <= last) backward = true;
+        last = Math.max(last, e.commit.rev);
+      }
+      if (!backward) out.push(`relay-integrity alarm on ${a.subject}, whose revisions the relay published in order`);
+    }
     return out;
   }
 

@@ -138,6 +138,10 @@ export class Installation {
   originOrder = Infinity;
   /** The lost installation this one was restored from, if any. */
   predecessor: Installation | null = null;
+  /** Integrity alarms on PDS-served commits the relay never published, with
+   * their proof: the served commit, and the revisions of the two commits the
+   * witness reconstructed consecutively around it. */
+  readonly unrelayedProofs: { did: Did; served: Snapshot["commit"]; below: number; above: number }[] = [];
   lastRun = -Infinity;
   /** World-time intervals during which it ran (ground truth). */
   runs: { from: number; to: number }[] = [];
@@ -674,6 +678,7 @@ export class Installation {
         } else this.witnessGap(did, cursor, e);
         cursor = Math.max(cursor, e.pos ?? 0);
       }
+      this.integrity(did, r);
       more = r.more;
       if (!more) last = r;
     }
@@ -721,6 +726,7 @@ export class Installation {
           if (b?.device?.deviceId === k && b.account === this.did) seen.set(bindingId(b), b);
         }
       }
+      this.integrity(this.did, r);
       more = r.more;
       if (!more) {
         frontierAge = r.frontierAge;
@@ -756,9 +762,19 @@ export class Installation {
     if (from <= e.toRev) this.recordGap(did, `${did}:${e.id}`, from, e.toRev, e.rev, e.reason);
   }
 
+  /** Integrity alarms the witness raised for an account's history. */
+  private integrity(did: Did, r: HistoryResponse): void {
+    for (const x of r.integrity)
+      this.trust.raise(`relay-integrity:${x.id}`, "relay-integrity", `The reference relay published ${did}'s commit at revision ${x.rev} after one at revision ${x.after}: revisions must increase.`, did);
+  }
+
   /** The PDS may still serve records, but a commit it serves is checked
    * against the witness: a different commit at a witnessed revision is a
-   * fork; one the witness does not yet report is INCOMPLETE. */
+   * fork, and so is one strictly between two commits the witness
+   * reconstructed consecutively, which the relay never published in order,
+   * unless it changes nothing (its root is the earlier commit's); one inside
+   * a recorded gap is what the witness could not check, neither an alarm nor
+   * INCOMPLETE; one above the witness's latest is INCOMPLETE. */
   private crossCheck(w: WitnessApi, did: Did): void {
     const snap = this.net.enumerate(this.id, did);
     const key = this.net.repoKey(did);
@@ -769,6 +785,12 @@ export class Installation {
       this.mon.incomplete.delete(did);
       if (vouch.data !== snap.commit.data)
         this.trust.raise(`fork:${did}:${rev}`, "fork", `${did}'s PDS served a commit at revision ${rev} that differs from the one the relay published.`, did);
+      return;
+    }
+    if (vouch.status === "unpublished" && snap.commit.data !== vouch.belowData) {
+      this.mon.incomplete.delete(did);
+      if (!this.unrelayedProofs.some((p) => p.did === did && p.served.rev === rev)) this.unrelayedProofs.push({ did, served: snap.commit, below: vouch.below, above: vouch.above });
+      this.trust.raise(`unrelayed:${did}:${rev}`, "unrelayed-commit", `${did}'s PDS served a commit at revision ${rev} that the relay never published: it lies between two commits the relay published one after the other, and changes records.`, did);
       return;
     }
     if (vouch.status === "unknown" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {

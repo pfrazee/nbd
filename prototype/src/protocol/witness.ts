@@ -95,9 +95,26 @@ export type HistoryResponse = {
    * (pruned past WITNESS_RETENTION): revisions after the cursor asked for,
    * up to this one, are gone. */
   truncatedTo: number | null;
+  /** Integrity alarms the witness raised for the account, whatever the
+   * cursor: a commit the relay published at a revision not above the
+   * account's previous one. */
+  integrity: IntegrityReport[];
 };
 
-export type CommitStatus = { status: "reconstructed"; data: string } | { status: "gap" } | { status: "unknown" };
+/** An integrity alarm a witness raised about what the relay published:
+ * relay sequence number `seq` carried revision `rev`, not above `after`. */
+export type IntegrityReport = { id: string; seq: number; rev: number; after: number; reason: string };
+
+/** What a witness knows of an account's commit at a revision: reconstructed
+ * (with its root); inside a recorded gap, including a commit it did not
+ * accept for its revision; strictly between two commits it reconstructed
+ * consecutively, the later from a `#commit` whose operations inverted to the
+ * earlier, with no gap between them (`unpublished`: the relay published
+ * nothing there in order; `belowData` is the earlier commit's root); or
+ * nothing (`unknown`). */
+export type CommitStatus =
+  | { status: "reconstructed"; data: string } | { status: "gap" }
+  | { status: "unpublished"; below: number; belowData: string; above: number } | { status: "unknown" };
 
 /** What a client asks its trusted witness. Every answer carries the
  * frontier age (in `history`); `latest` is a starting point for an account

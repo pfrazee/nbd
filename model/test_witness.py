@@ -1,7 +1,10 @@
 """Cases for WitnessClient (proposal-reliable-detection.md, relay-witnessed
 repos): each row of the proposal's "What it achieves" table, with the
 baseline InviterClient fooled under a forking PDS where it applies; the
-"What stays out of reach" items (`test_limitation_`); Astra's cases; and
+"What stays out of reach" items (`test_limitation_`); Astra's cases; the
+revision rules (`Revisions`: unrelayed commits against consecutive
+reconstructions, honest relay drops, far-future and non-increasing
+revisions); and
 findings about the proposal (`test_finding_`), each showing the goal failing
 under the rule as written and, where there is one, holding under the fix.
 
@@ -12,8 +15,8 @@ import unittest
 
 from nbd_trust import Approval, Binding, InviterClient
 from nbd_witness import (CLOCK_SKEW, FETCH_TIMEOUT, INCOMPLETE, INF, LIVENESS_LIMIT, RELAY_REPLAY_WINDOW,
-                         WITNESS_RETENTION, ClientView, Commit, LyingWitness, RelayWorld, RogueWitness,
-                         Witness, WitnessClient, goal_violations)
+                         REV_ALLOWANCE, WITNESS_RETENTION, ClientView, Commit, LyingWitness, RelayWorld,
+                         RogueWitness, Witness, WitnessClient, goal_violations, rev_at)
 
 BOOK = "book-club"
 
@@ -707,6 +710,223 @@ class Astra(Base):
         self.assertTrue(self.alice.liveness_warning())
 
 
+class Revisions(Base):
+    """Unrelayed commits served by the PDS, honest relay drops, and
+    revisions far in the future or not increasing."""
+
+    def integrity_alarms(self, c):
+        return [a for a in c.state.alarms if a.startswith(("fork", "unrelayed", "revision"))]
+
+    def test_unrelayed_commit_between_consecutive_reconstructions_alarms(self):
+        before = self.w.head["alice"]
+        hidden = self.graft(relay=False)
+        self.w.serve("bob/b0", hidden)
+        self.assertIs(self.bob.accepted(self.m), INCOMPLETE)  # above the witness's latest revision
+        after = self.ungraft(prev="relayed")  # inverts to the relayed commit, hiding the one between
+        self.assertFalse(self.bob.accepted(self.m))
+        self.assertEqual(self.bob.state.unrelayed, [(before, hidden, after)])
+        self.assertEqual(self.integrity_alarms(self.bob), [f"unrelayed alice rev {hidden.rev}"])
+        self.assertTrue(self.base_bob.accepted(self.m))  # the baseline believes the PDS
+
+    def test_unrelayed_commit_inside_a_recorded_gap_raises_nothing(self):
+        hidden = self.graft(relay=False)
+        self.ungraft()  # inverts to the unrelayed commit, so it fails inversion: a gap
+        self.w.serve("bob/b0", hidden)
+        self.assertFalse(self.bob.accepted(self.m))
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+        self.alice.sync()
+        self.assertTrue(self.alice.gap_covers(hidden.rev))
+
+    def test_unrelayed_commit_above_the_latest_revision_is_incomplete(self):
+        self.graft(relay=False)
+        self.assertIs(self.bob.accepted(self.m), INCOMPLETE)
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+
+    def test_commit_an_honest_relay_drops_is_a_gap_not_an_alarm(self):
+        self.w.drop_next.add("alice")
+        a2 = self.w.link(self.a0, B("alice", "a2"))  # dropped, e.g. under a rate limit
+        self.legit.add(a2)
+        dropped, = self.w.dropped
+        self.assertIs(self.bob.accepted(a2), INCOMPLETE)
+        self.w.post("alice")  # its operations fail inversion against the witness's state
+        self.w.serve("bob/b0", dropped)  # a proof Bob fetched before the next commit
+        self.assertTrue(self.bob.accepted(a2))  # in the resynchronized state
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+        self.alice.sync()
+        self.assertTrue(self.alice.gap_covers(dropped.rev))
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+        self.assertEqual(self.app1.alarms, [])
+
+    def _drop_unchanged(self):
+        self.w.drop_next.add("alice")
+        empty = self.w.commit("alice")  # changes no record
+        self.w.post("alice")
+        self.alice.sync()
+        self.assertEqual(self.alice.state.gaps, [])
+        return empty
+
+    def test_dropped_commit_changing_nothing_raises_nothing(self):
+        # A commit with the same data as the one before it (re-signed after a
+        # signing-key rotation, say) leaves the next commit's operations
+        # inverting to the witness's state when an honest relay drops it, so
+        # its neighbours are consecutive; a commit that changes nothing hides
+        # nothing, so serving it raises no alarm.
+        empty = self._drop_unchanged()
+        self.w.serve("bob/b0", empty)
+        self.assertTrue(self.bob.accepted(self.a0))
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+
+    def test_finding_dropped_commit_changing_nothing_alarmed_under_the_earlier_text(self):
+        # Finding 13: without the exemption, PDS and relay both honest, a
+        # client holding the dropped commit alarms.
+        class NoExemption(WitnessClient):
+            EXEMPT_UNCHANGED = False
+
+        bob = NoExemption(self.w, self.b0, self.app2)
+        empty = self._drop_unchanged()
+        self.w.serve(bob.name, empty)
+        bob.accepted(self.a0)
+        self.assertEqual(self.integrity_alarms(bob), [f"unrelayed alice rev {empty.rev}"])
+
+    def test_unrelayed_commit_with_changes_still_alarms_beside_an_unchanged_one(self):
+        # The exemption compares data, not revisions: a hidden commit that
+        # changes records still alarms.
+        before = self.w.head["alice"]
+        hidden = self.graft(relay=False)
+        self.w.serve("bob/b0", hidden)
+        self.ungraft(prev="relayed")
+        self.bob.accepted(self.a0)
+        self.assertNotEqual(hidden.root, before.root)
+        self.assertEqual(self.integrity_alarms(self.bob), [f"unrelayed alice rev {hidden.rev}"])
+
+    def test_sync_after_a_dropped_commit_raises_nothing(self):
+        # A `#sync` carries no operations, so nothing shows the witness that
+        # the relay dropped a commit before it: only a `#commit` that
+        # inverted to the earlier reconstruction brackets an unrelayed one.
+        dropped = self._drop_then_sync()
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+        self.assertFalse(self.bob.state.unrelayed)
+        self.assertIsNotNone(dropped)
+
+    def test_finding_sync_after_a_dropped_commit_alarms_under_the_text(self):
+        # Under the proposal's wording (any two consecutive reconstructions),
+        # the honest relay drops a commit, the PDS's next event is a `#sync`
+        # (after a migration, say), the witness fetches its exact root, and
+        # a client holding the dropped commit alarms; PDS and relay honest.
+        self.app2.CONSECUTIVE = "any"
+        dropped = self._drop_then_sync()
+        self.assertEqual(self.integrity_alarms(self.bob), [f"unrelayed alice rev {dropped.rev}"])
+
+    def _drop_then_sync(self):
+        self.w.drop_next.add("alice")
+        dropped = self.w.post("alice")
+        self.w.publish_sync("alice")
+        self.w.serve("bob/b0", dropped)
+        self.assertTrue(self.bob.accepted(self.a0))
+        return dropped
+
+    def test_finding_out_of_order_commit_is_called_unrelayed_while_the_witness_is_behind(self):
+        # Finding 14. The relay publishes, after two consecutive commits, one
+        # whose revision falls between them. Before Bob's witness reaches it
+        # Bob calls it unrelayed; once it does, it is a non-increasing alarm.
+        self.w.now += 1
+        self.w.post("alice")
+        self.w.now += 0.5
+        later = self.w.post("alice")
+        self.bob.sync()
+        self.app2.lag = 0.25
+        self.w.now += 0.1
+        c = self.graft(rev=later.rev - 1000)
+        self.assertFalse(self.bob.accepted(self.m))
+        self.assertEqual(self.integrity_alarms(self.bob), [f"unrelayed alice rev {c.rev}"])
+        self.assertIn(c, {e.commit for e in self.w.relay})  # though it was relayed
+        self.app2.lag = 0
+        self.bob.sync()
+        self.assertEqual(self.app2.alarms[0][2], c)
+
+    def test_far_future_revision_is_a_gap_without_alarm(self):
+        latest = self.app1.max_rev("alice")
+        far = rev_at(self.w.now + 1.0)  # the PDS's clock an hour ahead, once
+        a2 = B("alice", "a2")
+        self.legit.add(a2)
+        c = self.w.pds_write("alice", add=[a2], approve=[(self.a0, a2)], rev=far)
+        self.alice.sync()
+        self.assertEqual(self.app1.max_rev("alice"), latest)  # the latest revision is not raised
+        self.assertEqual(self.app1.last_rev["alice"], latest)
+        self.assertEqual([g.kind for g in self.alice.gap_warnings()], ["future-rev"])
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+        self.assertEqual(self.app1.alarms, [])
+        self.assertIs(self.bob.accepted(a2), False)  # not in the history, but reported: no wait
+        # Later commits, with honest revisions below the far one, are read
+        # normally: the first as one after a gap, by a verified fetch (made
+        # before the next write, or finding 8's race makes it a gap too).
+        for _ in range(3):
+            self.w.now += 0.1
+            self.w.post("alice")
+            self.alice.sync()
+        a3 = self.w.link(a2, B("alice", "a3"))
+        self.legit.add(a3)
+        self.alice.sync()
+        self.assertLess(self.w.head["alice"].rev, c.rev)
+        self.assertEqual(self.app1.max_rev("alice"), self.w.head["alice"].rev)
+        self.assertEqual(len(self.alice.state.gaps), 1)
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+        self.assertTrue(self.bob.accepted(a3))
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+        self.assertEqual(self.app2.alarms, [])
+
+    def test_revision_within_the_allowance_is_accepted(self):
+        a2 = B("alice", "a2")
+        self.legit.add(a2)
+        self.w.pds_clock["alice"] = 0.9 * REV_ALLOWANCE
+        self.w.link(self.a0, a2)
+        self.w.pds_clock["alice"] = 0.0
+        self.w.post("alice")  # an honest PDS keeps revisions increasing after its clock is fixed
+        self.alice.sync()
+        self.assertEqual(self.alice.state.gaps, [])
+        self.assertTrue(self.bob.accepted(a2))
+
+    def test_pds_clock_ahead_beyond_the_allowance_gaps_every_commit(self):
+        # A PDS whose clock stays ahead keeps every revision ahead (an honest
+        # relay would reject them all): each is a gap, none an alarm.
+        self.w.pds_clock["alice"] = 1.0
+        for _ in range(3):
+            self.w.post("alice")
+        self.alice.sync()
+        self.assertEqual([g.kind for g in self.alice.state.gaps], ["future-rev"] * 3)
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+
+    def test_non_increasing_revision_is_a_gap_and_an_alarm(self):
+        self.w.now += 1
+        self.w.post("alice")
+        self.alice.sync()
+        latest = self.app1.max_rev("alice")
+        c = self.graft(rev=latest - 1000)  # between two relayed revisions
+        self.alice.sync()
+        self.assertEqual(self.integrity_alarms(self.alice), [f"revision not increasing alice rev {c.rev}"])
+        self.assertEqual([g.kind for g in self.alice.gap_warnings()], ["rev-not-increasing"])
+        self.assertEqual(self.app1.max_rev("alice"), latest)
+        self.assertNotIn(self.m, self.alice.state.seen_own)
+        self.assertFalse(self.bob.accepted(self.m))  # published, reported as a gap: no extra alarm
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+        self.ungraft()  # reconstructed as one after a gap
+        self.alice.sync()
+        self.assertEqual(self.app1.state["alice"], self.w.head["alice"].root)
+        self.assertEqual(len(self.alice.state.gaps), 1)
+
+    def test_non_increasing_revision_read_from_a_restored_cursor(self):
+        # The cursor works only because the witness refuses to move it back.
+        self.w.now += 1
+        self.w.post("alice")
+        self.alice.sync()
+        backup = self.alice.export_state()
+        c = self.graft(rev=self.app1.max_rev("alice") - 1000)  # below the backup's cursor
+        self.w.now += 1
+        restored = WitnessClient.restore(self.w, backup, self.app1)
+        self.assertEqual(self.integrity_alarms(restored), [f"revision not increasing alice rev {c.rev}"])
+        self.assertEqual([g.kind for g in restored.gap_warnings()], ["rev-not-increasing"])
+
+
 class Findings(Base):
     def test_finding_witness_far_behind_the_relay_warns_by_event_time(self):
         # Finding 1. Alice's witness is replaying a 30-hour backlog (resumed
@@ -896,14 +1116,16 @@ class Findings(Base):
         self.assertTrue(self.alice.gap_warnings())
         self.assertEqual(self.alice.state.own_alarms, set())
 
-    def test_finding_unpublished_commit_below_the_witnessed_head_raises_nothing(self):
-        # Finding 7. Fork detection compares only same-revision commits. A
-        # PDS that serves a client a signed commit at a revision the relay
-        # never carried, then relays later revisions, is never caught.
-        self.w.fork("bob/b0", "alice", add=[self.m], approve=[(self.m, self.a0)])
+    def test_finding_unpublished_commit_below_the_witnessed_head_alarms(self):
+        # Finding 7. Fork detection compared only same-revision commits, so a
+        # PDS that served a client a signed commit at a revision the relay
+        # never carried, then relayed later revisions, was never caught. The
+        # rule now alarms on one between two consecutive reconstructions.
+        f = self.w.fork("bob/b0", "alice", add=[self.m], approve=[(self.m, self.a0)])
         self.w.link(self.a0, B("alice", "a2"))
         self.assertFalse(self.bob.accepted(self.m))
         self.assertEqual(self.bob.state.forks, [])
+        self.assertIn(f"unrelayed alice rev {f.rev}", self.bob.state.alarms)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 // The Relay-Witnessed Repos proposal (proposal-reliable-detection.md) as a
-// world policy. Scenarios 27-35 run in scenarios.test.ts; these cover Astra's
+// world policy. Scenarios 27-36 run in scenarios.test.ts; these cover Astra's
 // cases, each rule the mutations in mutate.mjs break, and the findings the
 // prototype makes about the proposal (see README.md#relay-witnessed-repos).
 
@@ -8,6 +8,7 @@ import { detectionViolations } from "../src/sim/detection";
 import { InvariantMonitor } from "../src/sim/invariants";
 import { Run } from "../src/sim/scenario";
 import { scenarios } from "../src/sim/scenarios";
+import { revAt } from "../src/world/pds";
 import { RELAY_REPLAY_WINDOW, WITNESS_RETENTION } from "../src/world/relay";
 import { World } from "../src/world/world";
 import type { Installation } from "../src/protocol/installation";
@@ -364,12 +365,13 @@ describe("the frontier, by relay event time", () => {
     expect(bob.mon.cursors.get(bobDid)).toBe(rev);
     expect(bob.gapWarnings()).toEqual([]);
     // A fetch that never succeeds is a gap after FETCH_TIMEOUT, and the
-    // frontier moves past it.
+    // frontier moves past it. The gap runs from just after the last revision
+    // recorded: a commit the relay dropped before it would lie in it.
     w.withholdFetch(bobDid, "lantern");
     const rev2 = pds.repo(bobDid).commit().commit.rev;
     w.settle();
     w.advance(1);
-    expect(bob.gapWarnings().map((g) => [g.fromRev, g.toRev, g.reason])).toEqual([[rev2, rev2, "the repo was not served within FETCH_TIMEOUT"]]);
+    expect(bob.gapWarnings().map((g) => [g.fromRev, g.toRev, g.reason])).toEqual([[rev + 1, rev2, "the repo was not served within FETCH_TIMEOUT"]]);
     expect(lantern.frontierAge(bobDid)).toBeCloseTo(0);
     expect(bob.liveness()).toBeNull();
   });
@@ -471,5 +473,224 @@ describe("the detection check", () => {
     w.advance(25);
     m.after();
     expect(violations(m).some((v) => v.startsWith("detection goal") && v.includes(bob.id))).toBe(true);
+  });
+});
+
+describe("unrelayed commits and revision checks", () => {
+  /** Carol shares Garden with Bob, so she pins his account. */
+  const pinned = (seed: string) => {
+    const x = world(seed);
+    const garden = x.carol.createSpace("Garden");
+    x.carol.invite(garden, x.bobDid);
+    x.bob.join(garden);
+    x.w.settle();
+    return { ...x, repo: x.w.pdsOf.get(x.bobDid)!.repo(x.bobDid) };
+  };
+  const kinds = (i: Installation) => i.trust.state.alarms.map((a) => a.kind).filter((k) => k === "unrelayed-commit" || k === "relay-integrity" || k === "fork");
+  /** Commits of `did` its PDS made that the relay never published. */
+  const unpublished = (w: World, did: string) => {
+    const published = new Set(w.relay!.events.filter((e) => e.did === did).map((e) => e.commit.rev));
+    return w.pdsOf.get(did)!.repo(did).history.map((s) => s.commit.rev).filter((r) => !published.has(r));
+  };
+  /** Bob's PDS commits an impostor it never sends the relay, then restores
+   * his records; `next` makes the commit that follows. */
+  const unrelayedThenCommit = (w: World, carol: Installation, bobDid: string, repo: ReturnType<typeof pinned>["repo"], next: () => void) => {
+    const honest = new Map(repo.records);
+    const x = w.unrelayedImpostor(bobDid, [carol]);
+    const rx = repo.latest().commit.rev;
+    expect(carol.mon.incomplete.has(bobDid)).toBe(true); // above the witness's latest: INCOMPLETE
+    repo.records = honest;
+    next();
+    w.serveAt(bobDid, rx, [carol]);
+    return { x, rx };
+  };
+
+  it("a PDS commit never relayed, between two commits reconstructed consecutively, raises an integrity alarm with both commits as proof", () => {
+    const { w, m, bob, carol, bobDid, repo } = pinned("u1");
+    m.before();
+    const { x, rx } = unrelayedThenCommit(w, carol, bobDid, repo, () => {
+      w.advance(1);
+      w.install(bobDid, "tablet", { link: bob });
+    });
+    m.after();
+    expect(kinds(carol)).toEqual(["unrelayed-commit"]);
+    const p = carol.unrelayedProofs[0];
+    expect(p.served.rev).toBe(rx);
+    expect(p.below < rx && rx < p.above).toBe(true);
+    expect(carol.mon.incomplete.has(bobDid)).toBe(false);
+    expect(carol.trust.isAccepted(x.binding)).toBe(false);
+    expect(kinds(bob)).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("the same unrelayed commit inside a recorded gap raises no alarm", () => {
+    const { w, m, bob, carol, bobDid, repo } = pinned("u2");
+    m.before();
+    const pds = w.pdsOf.get(bobDid)!;
+    const stop = w.withholdFetch(bobDid, "other");
+    unrelayedThenCommit(w, carol, bobDid, repo, () => {
+      // The next commit is a #sync whose fetch Carol's witness never gets:
+      // after FETCH_TIMEOUT it is a gap reaching back past the unrelayed one.
+      let once = true;
+      pds.relayHooks.push((d) => (d === bobDid && once ? { kind: "sync" as const } : null));
+      repo.commit();
+      once = false;
+      w.settle();
+      w.advance(2);
+    });
+    stop();
+    w.install(bobDid, "tablet", { link: bob });
+    m.after();
+    expect(w.witnessOf("other").accounts.get(bobDid)!.history.some((h) => h.kind === "gap")).toBe(true);
+    expect(carol.mon.auditGaps.length).toBe(1);
+    expect(kinds(carol)).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("an honest relay that drops a commit: the next commit fails against the witness's state, so the dropped one lies in a gap, and serving it raises no alarm", () => {
+    const { w, m, bob, carol, bobDid, repo } = pinned("u3");
+    m.before();
+    w.advance(1);
+    w.relayDrops(bobDid);
+    const tablet = w.install(bobDid, "tablet", { link: bob });
+    w.advance(1);
+    w.install(bobDid, "laptop", { link: bob });
+    const [rx] = unpublished(w, bobDid);
+    expect(rx).toBeDefined();
+    const g = bob.gapWarnings().find((x) => x.fromRev <= rx && rx <= x.toRev);
+    expect(g?.reason).toBe("operations fail inversion");
+    expect(carol.mon.auditGaps.some((x) => x.fromRev <= rx && rx <= x.toRev)).toBe(true);
+    // A PDS serving the dropped commit (to a lagging reader, say) is no fork.
+    w.serveAt(bobDid, rx, [carol, bob]);
+    m.after();
+    expect(kinds(carol)).toEqual([]);
+    expect(kinds(bob)).toEqual([]);
+    // The commit after the gap is reconstructed again, by a fetch.
+    m.before();
+    w.advance(1);
+    w.install(bobDid, "desktop", { link: bob });
+    m.after();
+    expect(w.witnessOf("other").accounts.get(bobDid)!.history.at(-1)).toMatchObject({ kind: "state", via: "sync", rev: repo.latest().commit.rev });
+    expect(carol.trust.isAccepted(tablet.binding)).toBe(true);
+    expect(kinds(carol)).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a dropped commit that changes nothing sits between consecutive reconstructions, and its unchanged data exempts it", () => {
+    // Formerly a FINDING: the next commit's operations still invert to the
+    // witness's state, so read without the exemption serving the dropped
+    // commit was a false alarm.
+    const { w, m, bob, carol, bobDid, repo } = pinned("u4");
+    m.before();
+    w.advance(1);
+    w.relayDrops(bobDid);
+    repo.commit();
+    w.settle();
+    w.advance(1);
+    w.install(bobDid, "tablet", { link: bob });
+    const [rx] = unpublished(w, bobDid);
+    const v = w.witnessOf("other").commitAt(carol.id, bobDid, rx);
+    expect(v).toMatchObject({ status: "unpublished", belowData: repo.atRev(rx)!.commit.data });
+    w.serveAt(bobDid, rx, [carol]);
+    m.after();
+    expect(carol.mon.auditGaps).toEqual([]);
+    expect(kinds(carol)).toEqual([]);
+    expect(carol.mon.incomplete.has(bobDid)).toBe(false);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a dropped commit followed by a #sync: the #sync's commit is not consecutive with the one before, so no alarm", () => {
+    // Formerly a FINDING: a #sync carries no operations, so nothing fails
+    // against the witness's state and no gap is recorded; counting it as
+    // consecutive made the dropped commit an integrity alarm.
+    const { w, m, bob, carol, bobDid, repo } = pinned("u5");
+    m.before();
+    w.advance(1);
+    w.relayDrops(bobDid);
+    w.install(bobDid, "tablet", { link: bob });
+    const pds = w.pdsOf.get(bobDid)!;
+    let once = true;
+    pds.relayHooks.push((d) => (d === bobDid && once ? { kind: "sync" as const } : null));
+    repo.commit();
+    once = false;
+    w.settle();
+    const [rx] = unpublished(w, bobDid);
+    expect(w.witnessOf("other").commitAt(carol.id, bobDid, rx).status).toBe("unknown");
+    w.serveAt(bobDid, rx, [carol]);
+    m.after();
+    expect(kinds(carol)).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a revision more than REV_ALLOWANCE ahead of its relay time is a gap, without an alarm or a new latest revision; later commits are processed normally", () => {
+    const { w, m, bob, carol, bobDid } = pinned("u6");
+    m.before();
+    w.advance(1);
+    const rf = w.futureCommit(bobDid, 24);
+    const lantern = w.witnessOf("lantern").accounts.get(bobDid)!;
+    expect(lantern.lastRev).toBeLessThan(rf);
+    expect(lantern.history.at(-1)).toMatchObject({ kind: "gap", rev: rf });
+    w.advance(1);
+    const tablet = w.install(bobDid, "tablet", { link: bob });
+    w.advance(1);
+    const laptop = w.install(bobDid, "laptop", { link: tablet });
+    m.after();
+    for (const app of ["lantern", "other"]) {
+      const a = w.witnessOf(app).accounts.get(bobDid)!;
+      expect(a.lastRev).toBeLessThan(rf);
+      expect(a.integrity).toEqual([]);
+      expect(a.history.at(-1)!.kind).toBe("state");
+      expect(a.history.filter((h) => h.kind === "gap").length).toBe(1);
+    }
+    expect([...kinds(bob), ...kinds(carol), ...kinds(tablet)]).toEqual([]);
+    expect(bob.gapWarnings().map((g) => g.reason)).toEqual(["its revision is more than REV_ALLOWANCE ahead of its relay time"]);
+    expect(bob.gapWarnings()[0].toRev).toBeLessThan(rf);
+    expect(carol.trust.isAccepted(laptop.binding)).toBe(true);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a served head the witness did not accept for its revision is neither INCOMPLETE nor an alarm", () => {
+    const { w, m, carol, bobDid, repo } = pinned("u9");
+    m.before();
+    w.advance(1);
+    const rf = w.futureCommit(bobDid, 24);
+    m.after();
+    expect(repo.latest().commit.rev).toBe(rf); // what the PDS serves Carol
+    expect(w.witnessOf("other").commitAt(carol.id, bobDid, rf).status).toBe("gap");
+    expect(carol.mon.incomplete.has(bobDid)).toBe(false);
+    expect(kinds(carol)).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a revision within REV_ALLOWANCE is accepted into the history", () => {
+    const { w, bob, bobDid } = pinned("u7");
+    w.advance(1);
+    const rf = w.futureCommit(bobDid, 4 / 60);
+    const a = w.witnessOf("lantern").accounts.get(bobDid)!;
+    expect(a.history.at(-1)).toMatchObject({ kind: "state", rev: rf });
+    expect(bob.gapWarnings()).toEqual([]);
+    expect(rf).toBeGreaterThan(revAt(w.t));
+  });
+
+  it("a revision the relay publishes not above the account's previous one is a gap and an integrity alarm, even for a client already past it", () => {
+    const { w, m, bob, carol, bobDid, repo } = pinned("u8");
+    m.before();
+    w.advance(1);
+    w.install(bobDid, "tablet", { link: bob });
+    const last = repo.latest().commit.rev;
+    expect(repo.atRev(last - 1)).toBeUndefined();
+    w.uncheckedRelay(bobDid);
+    w.commitAtRev(bobDid, last - 1);
+    m.after();
+    expect(carol.mon.cursors.get(bobDid)).toBe(last);
+    for (const i of [bob, carol]) expect(kinds(i)).toEqual(["relay-integrity"]);
+    const a = w.witnessOf("lantern").accounts.get(bobDid)!;
+    expect(a.history.at(-1)).toMatchObject({ kind: "gap", rev: last - 1 });
+    expect(a.lastRev).toBe(last);
+    // The next commit is reconstructed as one after a gap.
+    w.advance(1);
+    w.install(bobDid, "laptop", { link: bob });
+    expect(a.history.at(-1)!.kind).toBe("state");
+    expect(violations(m)).toEqual([]);
   });
 });

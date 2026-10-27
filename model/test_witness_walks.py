@@ -5,13 +5,18 @@ whose witnesses have different clocks); Bob (app2) and Carol (app1) meet
 and invite her. Each walk is a seeded sequence of:
 
 - honest links and removals of Alice's devices, and honest writes to
-  other collections, which change the repo root;
+  other collections, which change the repo root; honest writes the relay
+  drops (a rate limit), and honest writes whose revision is far ahead of
+  the relay's time (a PDS clock wrong once);
 - a malicious PDS adding and deleting impostor devices (rooted over her
   devices, approved by a removed device's key, or bare), through `#commit`,
   `#sync` served to some witnesses, or never relayed; resetting her
   account; recreating removed records; replacing `#sync` roots; forking
-  what it serves one client, at a new or a witnessed revision; withholding
-  and stalling fetches per witness;
+  what it serves one client, at a new or a witnessed revision; serving one
+  client a commit it never relayed (or one the relay dropped) after a later
+  commit inverts to the last relayed one or not; publishing an impostor at
+  a revision not above the last; withholding and stalling fetches per
+  witness;
 - witness outages (longer than the relay's replay window too), relay
   outages, unreachable witnesses, witness clocks slow or fast against the
   relay within `CLOCK_SKEW` (and fast beyond it), elapsed time, and
@@ -33,6 +38,13 @@ Invariants after every step:
   marks a gap, never removes it.
 - A fork alarm names two different commits at one revision, one of them
   relayed.
+- No false integrity alarm from honest behavior: an unrelayed-commit alarm
+  names a commit the relay never published, between two relayed commits
+  with no event of the account between them, and never a commit an honest
+  relay dropped (unless the PDS then concealed it); a non-increasing
+  alarm names a relayed commit whose revision is not above an earlier one
+  within the allowance; and no witness's latest revision is more than
+  `REV_ALLOWANCE` ahead of the relay's time.
 
 The goal is checked with `CLOCK_SKEW` of slack on its deadline (finding
 10: a witness clock slow by less than the allowance understates frontier
@@ -55,8 +67,8 @@ import unittest
 from typing import Dict, List, Optional
 
 from nbd_trust import Binding
-from nbd_witness import (CLOCK_SKEW, RELAY_REPLAY_WINDOW, WITNESS_RETENTION, RelayWorld, Witness,
-                         WitnessClient, goal_violations)
+from nbd_witness import (CLOCK_SKEW, RELAY_REPLAY_WINDOW, REV_ALLOWANCE, WITNESS_RETENTION, RelayWorld,
+                         Witness, WitnessClient, goal_violations, rev_at)
 
 WALKS = int(os.environ.get("NBD_WITNESS_WALKS", "300"))
 STEPS = int(os.environ.get("NBD_WITNESS_STEPS", "60"))
@@ -98,6 +110,8 @@ class WitnessWalk:
             c.sync()
         self.slots: Dict[int, tuple] = {}
         self.fresh = 0
+        self.hidden: List = []  # commits the PDS made and never relayed, on purpose
+        self.concealed: set = set()  # dropped commits a later commit then concealed
 
     def client_cls(self):
         suspending = self.CLOCKS
@@ -113,8 +127,9 @@ class WitnessWalk:
         kinds = ["link", "remove", "imp", "imp_del", "resurrect", "reset", "replace_sync",
                  "withhold", "stall", "fork", "unfork", "wdown", "wup", "relay", "unreach",
                  "wait", "jump", "stop", "start", "export", "restore", "ack", "tick", "query", "invite"]
-        kinds += ["post", "wclock"]
-        weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3, 1]
+        kinds += ["post", "wclock", "drop", "futurerev", "oldrev", "conceal", "serve"]
+        weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3, 1,
+                   2, 1, 1, 1, 2]
         if self.LAG:
             kinds += ["lag", "fresh", "longwait"]
             weights += [2, 1, 1]
@@ -131,6 +146,21 @@ class WitnessWalk:
             return ("post", rng.choice(("alice", "bob")))
         if kind == "wclock":
             return ("wclock", wname, rng.choice(WOFFS))
+        if kind in ("drop", "futurerev"):
+            nb = B("alice", f"a{len(self.made)}")
+            what = ("link", rng.choice(legit_present), nb) if legit_present and rng.random() < 0.5 else ("post",)
+            if kind == "drop":
+                return ("drop", what)
+            return ("futurerev", rng.choice((0.5, 6.0, 30.0)), what)
+        if kind == "oldrev":
+            return ("oldrev", B("alice", f"m{len(self.imps)}"), rng.choice((0, 1, 1000)))
+        if kind == "conceal":
+            return ("conceal",)
+        if kind == "serve":
+            pool = self.hidden + [d for d in w.dropped if d.account == "alice"]
+            if pool:
+                viewer = rng.choice([c.name for c in self.others + self.inst])
+                return ("serve", viewer, rng.choice(pool))
         if kind == "link" and legit_present:
             return ("link", rng.choice(legit_present), B("alice", f"a{len(self.made)}"))
         if kind == "remove" and len(legit_present) > 1:
@@ -211,6 +241,25 @@ class WitnessWalk:
             w.post(act[1])
         elif k == "wclock":
             self.wit[act[1]].clock_offset = act[2]
+        elif k == "drop":
+            w.drop_next.add("alice")
+            self._honest(act[1])
+            w.drop_next.discard("alice")
+        elif k == "futurerev":
+            self._honest(act[2], rev=rev_at(w.now + act[1]))
+        elif k == "oldrev":
+            m, back = act[1:]
+            self.imps.append(m)
+            last = w.relay_head("alice")
+            rev = max(1, (last.commit.rev if last else 1) - back)
+            w.pds_write("alice", add=[m], approve=[(m, b) for b in sorted(w.present_devices("alice"), key=repr)[:1]],
+                        rev=rev)
+        elif k == "conceal":
+            last = w.relay_head("alice")
+            self.concealed |= {d for d in w.dropped if last is None or d.rev > last.commit.rev}
+            w.pds_write("alice", prev="relayed")
+        elif k == "serve":
+            w.serve(act[1], act[2])
         elif k == "imp":
             m, how, signer, via = act[1:]
             self.imps.append(m)
@@ -314,12 +363,22 @@ class WitnessWalk:
             c.suspended += act[2]
         return self._check(before)
 
+    def _honest(self, what: tuple, rev=None) -> None:
+        w = self.w
+        if what[0] == "link":
+            self.made.append(what[2])
+            self.legit.add(what[2])
+            w.pds_write("alice", add=[what[2]], approve=[(what[1], what[2])], rev=rev)
+        else:
+            w.other["alice"] = w.other.get("alice", 0) + 1
+            w.commit("alice", rev=rev)
+
     def _write(self, via: str, **ops) -> None:
         w = self.w
         if via == "commit":
             w.pds_write("alice", **ops)
         elif via == "hidden":
-            w.pds_write("alice", relay=False, **ops)
+            self.hidden.append(w.pds_write("alice", relay=False, **ops))
         elif via == "sync":
             w.publish_sync("alice", **ops)
         else:
@@ -331,7 +390,13 @@ class WitnessWalk:
         w = self.w
         for v in goal_violations("alice", self.inst, self.others, self.legit, w.now, slack=CLOCK_SKEW):
             return v
-        relayed = {(e.commit.account, e.commit.rev): e.commit for e in w.relay}
+        relayed: Dict[tuple, object] = {}
+        for e in w.relay:  # the first at a revision, among those a witness accepts the revision of
+            if e.commit.rev <= rev_at(e.time + REV_ALLOWANCE):
+                relayed.setdefault((e.commit.account, e.commit.rev), e.commit)
+        err = self._check_integrity_alarms()
+        if err:
+            return err
         for c in self.inst + self.others:
             arch: Dict[tuple, object] = {}
             for e in c.witness.archive:
@@ -367,6 +432,40 @@ class WitnessWalk:
             for e in x.archive:
                 if e.reconstructed and e.root != relayed[(e.account, e.hi)].root:
                     return f"{x.name} reconstructed {e.account} rev {e.hi} wrongly"
+        return None
+
+
+    def _check_integrity_alarms(self) -> Optional[str]:
+        w = self.w
+        events = [e for e in w.relay if e.commit.account == "alice"]
+        published = {e.commit for e in events}
+        index = {}
+        for n, e in enumerate(events):
+            index.setdefault(e.commit, n)
+
+        def not_increasing(r: int) -> bool:
+            return any(e.commit.rev == r and any(
+                r <= p.commit.rev <= rev_at(p.time + REV_ALLOWANCE) for p in events[:n])
+                for n, e in enumerate(events))
+
+        for c in self.inst + self.others:
+            for before, served, after in c.state.unrelayed:
+                # A commit relayed later with a revision below one already
+                # relayed is a fault too, alarmed on when the witness gets there.
+                if served in published and not not_increasing(served.rev):
+                    return f"{c.name} alarmed that relayed {served} was never relayed"
+                if served in w.dropped and served not in self.concealed:
+                    return f"{c.name} alarmed on {served}, which an honest relay dropped"
+                i, j = index.get(before), index.get(after)
+                if i is None or j is None or j != i + 1 or not before.rev < served.rev < after.rev:
+                    return f"{c.name} alarmed on {served} between {before} and {after}"
+            for a in c.state.alarms:
+                if a.startswith("revision not increasing alice rev "):
+                    if not not_increasing(int(a.rsplit(" ", 1)[1])):
+                        return f"{c.name} raised {a!r} on an increasing revision"
+        for x in self.wit.values():
+            if x.max_rev("alice") > rev_at(w.now + REV_ALLOWANCE):
+                return f"{x.name} raised alice's latest revision ahead of the relay's time"
         return None
 
 

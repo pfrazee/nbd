@@ -113,7 +113,8 @@ export class Walk {
       kinds.push(["flash", 2], ["unflash", 2]);
       if (!this.shared)
         kinds.push(["wfork", 1], ["unrelayed", 1], ["syncReplaced", 1], ["syncRoot", 1], ["replaceRoot", 1], ["withholdFetch", 1],
-          ["witnessConn", 1], ["witnessReach", 1], ["witnessLag", 1], ["relayDelay", 1], ["witnessClock", 1]);
+          ["witnessConn", 1], ["witnessReach", 1], ["witnessLag", 1], ["relayDelay", 1], ["witnessClock", 1],
+          ["relayDrop", 1], ["futureRev", 1]);
     }
     if (!this.shared)
       kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
@@ -244,6 +245,10 @@ export class Walk {
         return ["relayDelay", pick(["lantern", "other"]), pick([0, 1, 6, 30])];
       case "witnessClock":
         return ["witnessClock", pick(["lantern", "other"]), pick([0, 0.05, -0.05, -0.5, 3, -40])];
+      case "relayDrop":
+        return ["relayDrop", acct, pick([1, 2])];
+      case "futureRev":
+        return ["futureRev", acct, pick([0.05, 1, 24, 1000])];
       default:
         return ["wait", pick(WAITS)];
     }
@@ -298,6 +303,8 @@ export class Walk {
     else if (kind === "witnessLag") w.setWitness(String(a[1]), { lag: Number(a[2]) });
     else if (kind === "relayDelay") w.relayDelay(String(a[1]), Number(a[2]));
     else if (kind === "witnessClock") w.setWitness(String(a[1]), { clockOffset: Number(a[2]) });
+    else if (kind === "relayDrop") w.relayDrops(did(String(a[1])), Number(a[2]));
+    else if (kind === "futureRev") w.futureCommit(did(String(a[1])), Number(a[2]));
   }
 
   /** Undo functions of brief impostors still published. */

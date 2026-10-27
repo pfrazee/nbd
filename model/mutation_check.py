@@ -193,6 +193,32 @@ WITNESS_MUTATIONS = {
         "        if lack > cur and (self.FRESH_HISTORY_GAP or not fresh):",
         "        if False:"),
     "no fork alarm": ("            if wc != c and (wc, c) not in self.state.forks:", "            if False:"),
+    "alarm on any unreported lower revision": (
+        "        around = self.witness.unrelayed_between(x, c.rev)",
+        "        around = (c, c) if c.rev < self.witness.max_rev(x) else None"),
+    "no alarm between consecutive reconstructions": (
+        "        around = self.witness.unrelayed_between(x, c.rev)", "        around = None"),
+    "unchanged unrelayed commit alarms": (
+        "    EXEMPT_UNCHANGED = True", "    EXEMPT_UNCHANGED = False"),
+    "unchanged exemption compares the later commit": (
+        "c.root == around[0].root", "c.root == around[1].root"),
+    "a #sync brackets an unrelayed commit": (
+        "    CONSECUTIVE = \"inverted\"", "    CONSECUTIVE = \"any\""),
+    "served unplaced commit waits": (
+        "        if self.witness.reports_unplaced(x, c):\n            return False", ""),
+    "witness: future revision accepted into history": (
+        "        if self._future(e):\n            self._unplaced", "        if False:\n            self._unplaced"),
+    "witness: future revision raises the latest revision": (
+        "            self._unplaced(a, e, \"future-rev\", None)",
+        "            self._unplaced(a, e, \"future-rev\", None)\n            self.last_rev[a] = e.commit.rev"),
+    "witness: future revision alarms": (
+        "            self._unplaced(a, e, \"future-rev\", None)",
+        "            self._unplaced(a, e, \"future-rev\", f\"revision far ahead {a}\")"),
+    "witness: non-increasing revision accepted": (
+        "        if e.commit.rev <= self.last_rev.get(a, 0):", "        if False:"),
+    "witness: non-increasing revision without alarm": (
+        "            self._unplaced(a, e, \"rev-not-increasing\", f\"revision not increasing {a} rev {e.commit.rev}\")",
+        "            self._unplaced(a, e, \"rev-not-increasing\", None)"),
     "unreported commits decide": (
         "        return c.rev > self.witness.max_rev(x)", "        return False"),
     "absence before presence revokes": (
@@ -212,10 +238,10 @@ WITNESS_MUTATIONS = {
         "        if e.kind == \"commit\" and cur is not None and e.prev == cur:",
         "        if e.kind == \"commit\":"),
     "witness: later snapshot reconstructs an earlier root": (
-        "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
+        "        if res:\n            self._record(a, \"sync\", e, e.commit.root)\n        else:\n"
         "            self._gap(a, e)\n\n    def _drain(self)",
-        "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
-        "            self._record(a, \"commit\", e, self.world.head[a].root)\n\n    def _drain(self)"),
+        "        if res:\n            self._record(a, \"sync\", e, e.commit.root)\n        else:\n"
+        "            self._record(a, \"sync\", e, self.world.head[a].root)\n\n    def _drain(self)"),
     "witness: no stream gap": (
         "            self._stream_gap()  # the relay", "            pass  # the relay"),
     "witness: frontier from a successful answer": (

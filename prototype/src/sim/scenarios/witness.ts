@@ -473,6 +473,91 @@ const oldBackup: Scenario = {
   ],
 };
 
+/** PDS-served commits the relay never published, and a PDS clock briefly
+ * wrong (Decisions on witnessed state; Reference relay). */
+const servedId = new WeakMap<World, number>();
+const unrelayed: Scenario = {
+  id: "witness-unrelayed",
+  policy: "witness",
+  title: "36. Witness: unrelayed commits, a dropped commit, and a revision from the future",
+  summary: "Carol pins Bob's account. The relay drops one of Bob's commits under a rate limit, and his PDS serves it to Carol: it lies in a gap, so nothing alarms. Bob's PDS then signs an impostor it never relays, followed by an honest commit, and serves Carol the impostor: it lies between two commits the relay published one after the other, so Carol's app raises an integrity alarm. Finally the PDS's clock runs a day fast for one commit, which a relay that doesn't check revisions publishes: a gap, no alarm, and Bob's later commits are witnessed as usual.",
+  steps: [
+    setup(),
+    {
+      title: "Carol creates Garden and invites Bob's phone",
+      narration: "Carol's app pins Bob's account, so it follows his history through its witness and checks each commit Bob's PDS serves it against that history.",
+      run: (w, c) => {
+        c.space.garden = c.inst.carolPhone.createSpace("Garden");
+        c.inst.carolPhone.invite(c.space.garden, c.did.bob);
+        c.inst.bobPhone.join(c.space.garden);
+        w.settle();
+      },
+      expect: (_w, c) => [check("Carol accepted Bob's phone", c.inst.carolPhone.trust.isAccepted(c.inst.bobPhone.binding))],
+    },
+    {
+      title: "The relay drops the commit that links Bob's tablet",
+      narration: "An honest relay may drop commits under a rate limit. Bob's next commit, linking his laptop, names a previous revision and root that no witness holds, so each witness records a gap reaching back past the dropped commit. A later commit is reconstructed again by fetching the repo.",
+      run: (w, c) => {
+        w.advance(1);
+        w.relayDrops(c.did.bob);
+        c.inst.bobTablet = w.install(c.did.bob, "tablet", { link: c.inst.bobPhone });
+        w.advance(1);
+        c.inst.bobLaptop = w.install(c.did.bob, "laptop", { link: c.inst.bobPhone });
+        w.advance(1);
+        c.inst.bobDesktop = w.install(c.did.bob, "desktop", { link: c.inst.bobPhone });
+      },
+      expect: (_w, c) => [
+        check("Bob's phone warns of a gap", c.inst.bobPhone.gapWarnings().length === 1),
+        check("Carol's app records an audit gap for Bob's account", c.inst.carolPhone.mon.auditGaps.length === 1),
+        check("Carol's app accepts the tablet once a later commit is witnessed", c.inst.carolPhone.trust.isAccepted(c.inst.bobTablet.binding)),
+      ],
+    },
+    {
+      title: "Bob's PDS serves Carol the dropped commit",
+      narration: "Its revision lies inside the gap Carol's witness recorded: part of what the witness already reports it could not check. No alarm.",
+      run: (w, c) => {
+        const published = new Set(w.relay!.events.map((e) => `${e.did}:${e.commit.rev}`));
+        const dropped = w.pdsOf.get(c.did.bob)!.repo(c.did.bob).history.find((s) => !published.has(`${c.did.bob}:${s.commit.rev}`))!;
+        servedId.set(w, w.serveAt(c.did.bob, dropped.commit.rev, [c.inst.carolPhone]));
+      },
+      expect: (_w, c) => [check("Carol's app raises no alarm", !anyAlarm(c.inst.carolPhone, "unrelayed-commit"))],
+    },
+    {
+      title: "Bob's PDS signs an impostor it never relays, then an honest commit",
+      narration: "The PDS replaces Bob's devices with its own in a commit it never sends the relay, then restores them in the next commit, which it does relay. Served the impostor commit, Carol's app first finds it above anything the witness reports: INCOMPLETE. Once the honest commit is witnessed, the impostor's revision lies strictly between two commits Carol's witness reconstructed one after the other, with no gap between, so the relay published nothing there: an integrity alarm, with the PDS's signed commit as proof.",
+      run: (w, c) => {
+        w.adversary.remove(servedId.get(w)!);
+        const repo = w.pdsOf.get(c.did.bob)!.repo(c.did.bob);
+        const honest = new Map(repo.records);
+        c.inst.impostor = w.unrelayedImpostor(c.did.bob, [c.inst.carolPhone]);
+        const rev = repo.latest().commit.rev;
+        repo.records = honest;
+        w.advance(1);
+        repo.commit();
+        w.serveAt(c.did.bob, rev, [c.inst.carolPhone]);
+      },
+      expect: (_w, c) => [
+        check("Carol's app raises an integrity alarm", anyAlarm(c.inst.carolPhone, "unrelayed-commit")),
+        check("…and never accepts the impostor", !c.inst.carolPhone.trust.isAccepted(c.inst.impostor.binding)),
+      ],
+    },
+    {
+      title: "Bob's PDS clock runs a day fast for one commit",
+      narration: "A relay that doesn't check revisions publishes a commit whose revision is a day ahead of the relay's time on its event. Each witness records it as a gap, without an alarm, since a PDS clock can simply be wrong, and doesn't raise the account's latest revision to it, so Bob's later commits, at honest revisions, are not mistaken for revisions going backward.",
+      run: (w, c) => {
+        w.futureCommit(c.did.bob, 24);
+        w.advance(1);
+        c.inst.bobWatch = w.install(c.did.bob, "watch", { link: c.inst.bobPhone });
+      },
+      expect: (_w, c) => [
+        check("No relay-integrity alarm anywhere", ![c.inst.bobPhone, c.inst.carolPhone].some((i) => anyAlarm(i, "relay-integrity"))),
+        check("Bob's phone warns of a gap for the commit", c.inst.bobPhone.gapWarnings().some((g) => /REV_ALLOWANCE/.test(g.reason))),
+        check("Carol's app accepts Bob's watch", c.inst.carolPhone.trust.isAccepted(c.inst.bobWatch.binding)),
+      ],
+    },
+  ],
+};
+
 export const witnessScenarios: Scenario[] = [
   ...variants((p) => forked(p, 27, false)),
   ...variants((p) => forked(p, 28, true)),
@@ -483,4 +568,5 @@ export const witnessScenarios: Scenario[] = [
   liveness,
   colluding,
   oldBackup,
+  unrelayed,
 ];

@@ -18,6 +18,14 @@ export type Session = { id: string; did: Did; kind: SessionKind; alive: boolean;
 
 const PROTECTED = new Set<string>([COL.device, COL.approval]);
 
+/** Revision units per hour of world time. atproto revisions are TIDs,
+ * microsecond timestamps the PDS chooses; under the witness policy a commit's
+ * revision is its world time in microseconds, or one more than the previous
+ * revision if that is not lower. Elsewhere revisions are consecutive. */
+export const REV_PER_HOUR = 3_600_000_000;
+/** The lowest revision a timestamped commit made at world time `t` gets. */
+export const revAt = (t: number): number => Math.floor(t * REV_PER_HOUR);
+
 /** One repository: the account's public repo, or its repo in one space. */
 export class Repo {
   rev = 0;
@@ -28,7 +36,7 @@ export class Repo {
   onCommit: ((snap: Snapshot) => void) | null = null;
 
   constructor(readonly did: Did, readonly name: string, private key: KeyPair, private readonly clock: () => number,
-    init?: { rev: number; records: Map<RecordPath, Cbor> }, onCommit?: (snap: Snapshot) => void) {
+    init?: { rev: number; records: Map<RecordPath, Cbor> }, onCommit?: (snap: Snapshot) => void, private readonly timestampRevs = false) {
     if (init) {
       this.rev = init.rev;
       this.records = new Map(init.records);
@@ -44,8 +52,15 @@ export class Repo {
   }
 
   commit(): Snapshot {
-    this.rev += 1;
-    const snap = this.sign(new Map(this.records), this.rev);
+    this.rev = Math.max(this.rev + 1, this.timestampRevs ? revAt(this.clock()) : 0);
+    return this.commitAt(this.rev);
+  }
+
+  /** A commit at a revision the PDS chooses. Honest flows use commit(); a
+   * PDS whose clock is briefly wrong commits once at a revision outside its
+   * sequence, which its later commits don't continue from. */
+  commitAt(rev: number): Snapshot {
+    const snap = this.sign(new Map(this.records), rev);
     this.history.push(snap);
     this.times.push(this.clock());
     this.onCommit?.(snap);
@@ -107,12 +122,17 @@ export class Pds {
   readonly relayForks = new Map<string, Snapshot>();
   private sessionCounter = 0;
 
-  constructor(readonly name: string, private readonly rng: Rng, private readonly clock: () => number) {}
+  /** Revisions are timestamps (witness policy), not consecutive. */
+  private readonly timestampRevs: boolean;
+
+  constructor(readonly name: string, private readonly rng: Rng, private readonly clock: () => number, opts: { timestampRevs?: boolean } = {}) {
+    this.timestampRevs = opts.timestampRevs ?? false;
+  }
 
   createAccount(did: Did): Uint8Array {
     const key = signingKeyPair(this.rng.derive(`repo-key/${did}`));
     this.keys.set(did, key);
-    this.repos.set(did, new Repo(did, did, key, this.clock, undefined, (s) => this.emit(did, s)));
+    this.repos.set(did, new Repo(did, did, key, this.clock, undefined, (s) => this.emit(did, s), this.timestampRevs));
     return key.publicKey;
   }
 
@@ -171,7 +191,7 @@ export class Pds {
   adopt(did: Did, repos: { name: string; rev: number; records: Map<RecordPath, Cbor> }[]): Uint8Array {
     const key = signingKeyPair(this.rng.derive(`repo-key/${did}/adopted/${this.clock()}`));
     this.keys.set(did, key);
-    for (const r of repos) this.repos.set(r.name, new Repo(did, r.name, key, this.clock, r, r.name === did ? (s) => this.emit(did, s, "sync") : undefined));
+    for (const r of repos) this.repos.set(r.name, new Repo(did, r.name, key, this.clock, r, r.name === did ? (s) => this.emit(did, s, "sync") : undefined, this.timestampRevs));
     return key.publicKey;
   }
 
@@ -192,7 +212,7 @@ export class Pds {
     if (!r) {
       const key = this.keys.get(did);
       if (!key) throw new Error(`pds ${this.name}: no account ${did}`);
-      r = new Repo(did, name, key, this.clock);
+      r = new Repo(did, name, key, this.clock, undefined, undefined, this.timestampRevs);
       this.repos.set(name, r);
     }
     return r;

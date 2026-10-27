@@ -74,6 +74,18 @@ const MUTATIONS = {
   "witness: a pending fetch doesn't hold the frontier": [RELAY, "return p ? Math.min(this.frontier, p.e.time) : this.frontier;", "return this.frontier;"],
   "witness: clock skew fault ignored": [RELAY, "if (this.clockFault(did)) return Infinity;", ""],
   "witness: witness-local cursors": [RELAY, "return h.kind === \"state\" ? h.rev : h.toRev; // a repo revision", "return h.local;"],
+  // PDS-served commits the relay never published, and revision checks.
+  "witness rev: alarm on any unreported lower revision": [RELAY, "if (es.some((h) => h.kind === \"gap\" && h !== a.open && h.fromRev <= rev && rev <= h.toRev)) return { status: \"gap\" };", "if (es.some((h) => h.kind === \"state\" && h.rev > rev)) return { status: \"unpublished\", below: 0, above: rev + 1 };"],
+  "witness rev: no alarm between consecutive reconstructions": [RELAY, "return { status: \"unpublished\", below: lo.rev, belowData: lo.snap.commit.data, above: hi.rev };", "return { status: \"unknown\" };"],
+  "witness rev: a #sync counts as consecutive": [RELAY, "hi.kind === \"state\" && hi.via === \"commit\" && lo.rev", "hi.kind === \"state\" && lo.rev"],
+  "witness rev: no-change commit not exempt": [CLIENT, "if (vouch.status === \"unpublished\" && snap.commit.data !== vouch.belowData) {", "if (vouch.status === \"unpublished\") {"],
+  "witness rev: a served gap is INCOMPLETE": [CLIENT, "if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {", "if ((vouch.status === \"unknown\" || vouch.status === \"gap\") && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {"],
+  "witness rev: dropped commit reconstructed by fetch": [RELAY, "      if (a.state) {\n        // The commit must follow", "      if (a.state && e.prevData === snapshotData(a.state.records)) {\n        // The commit must follow"],
+  "witness rev: future revision accepted into history": [RELAY, "if (beyondAllowance(e.commit.rev, e.time)) return this.future(a, e);", ""],
+  "witness rev: future revision raises the latest revision": [RELAY, "    a.state = null;\n    if (a.open) return;", "    a.state = null;\n    a.lastRev = Math.max(a.lastRev, e.commit.rev);\n    if (a.open) return;"],
+  "witness rev: future revision alarms": [RELAY, "    this.push(a, gap);\n    a.open = gap;", "    this.push(a, gap);\n    a.open = gap;\n    a.integrity.push({ id: gap.id, seq: e.seq, rev: e.commit.rev, after: a.lastRev, reason: gap.reason });"],
+  "witness rev: non-increasing revision not checked": [RELAY, "if (e.commit.rev <= a.lastRev) return this.backward(a, e);", ""],
+  "witness rev: integrity alarms only from history after the cursor": [CLIENT, "for (const x of r.integrity)", "for (const x of r.integrity.filter((y) => y.rev > (this.mon.cursors.get(did) ?? 0)))"],
 };
 
 const all = process.argv.includes("--all");

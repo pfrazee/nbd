@@ -11,7 +11,7 @@ import { type Approval, type Binding, COL, type Did, type Invite, type Policy, a
 import type { WitnessApi } from "../protocol/witness";
 import { Adversary } from "./adversary";
 import { Host } from "./host";
-import { Pds, type Session } from "./pds";
+import { Pds, type Session, revAt } from "./pds";
 import { Relay, RogueWitness, Witness } from "./relay";
 
 export type LogEntry = { at: number; text: string };
@@ -288,7 +288,7 @@ export class World implements Network {
   pds(name: string): Pds {
     let p = this.pdses.get(name);
     if (!p) {
-      p = new Pds(name, this.rng.derive(`pds/${name}`), () => this.t);
+      p = new Pds(name, this.rng.derive(`pds/${name}`), () => this.t, { timestampRevs: this.policy === "witness" });
       p.relay = this.relay;
       this.pdses.set(name, p);
     }
@@ -709,6 +709,49 @@ export class World implements Network {
       this.settle();
     };
     return { sub, undo };
+  }
+
+  /** The PDS serves `observers` its commit of `did` at revision `rev`
+   * from now on, whatever it commits later. Returns the policy's id. */
+  serveAt(did: Did, rev: number, observers: Installation[]): number {
+    const pds = this.pdsOf.get(did)!;
+    const id = this.adversary.add({ kind: "withhold", did, observers: observers.map((i) => i.id), rev, describe: `${pds.name} serves ${observers.map((i) => i.id).join(", ")} its commit of ${did} at revision ${rev}` }).id;
+    this.note(`${pds.name} serves ${observers.map((i) => i.id).join(", ")} its commit of ${did} at revision ${rev}`);
+    this.settle();
+    return id;
+  }
+
+  /** An honest relay drops `did`'s next `n` commits, as under a rate
+   * limit: the PDS sent them, and later commits follow them. */
+  relayDrops(did: Did, n = 1): void {
+    this.relay!.dropNext(did, n);
+    this.note(`the relay will drop ${did}'s next ${n === 1 ? "commit" : `${n} commits`}`);
+  }
+
+  /** A relay that checks neither that `did`'s revisions increase nor that
+   * they are within REV_ALLOWANCE of its clock (the sync specification asks
+   * relays to; this one doesn't). */
+  uncheckedRelay(did: Did): void {
+    this.relay!.unchecked.add(did);
+    this.note(`the relay stops checking ${did}'s revisions`);
+  }
+
+  /** `did`'s PDS commits once at revision `rev`, outside its sequence (a
+   * clock briefly wrong); its later commits continue the usual sequence. */
+  commitAtRev(did: Did, rev: number): void {
+    const pds = this.pdsOf.get(did)!;
+    pds.repo(did).commitAt(rev);
+    this.note(`${pds.name} commits ${did} at revision ${rev}`);
+    this.settle();
+  }
+
+  /** `did`'s PDS clock is `hours` fast for one commit, which a relay that
+   * doesn't check revisions publishes. */
+  futureCommit(did: Did, hours: number): number {
+    this.uncheckedRelay(did);
+    const rev = revAt(this.t + hours);
+    this.commitAtRev(did, rev);
+    return rev;
   }
 
   /** Witness conditions: an outage of its relay subscription, clients unable
