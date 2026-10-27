@@ -8,8 +8,16 @@ export type Did = string;
 /** Which grant rule installations follow: "inviters", the specified rule
  * with grant standing (device-enrollment.md#grant-standing) and invites
  * (core.md#invites), or "baseline", the rule from before it, kept for
- * comparison. */
-export type Policy = "baseline" | "inviters";
+ * comparison. "witness" is the inviters rule plus the Relay-Witnessed Repos
+ * proposal (proposal-reliable-detection.md): device decisions only on
+ * commits a trusted witness reconstructed from the reference relay, and
+ * full-history watching of the own account. */
+export type Policy = "baseline" | "inviters" | "witness";
+
+/** Grant standing and invites apply (inviters and witness policies). */
+export function hasStanding(p: Policy): boolean {
+  return p !== "baseline";
+}
 
 export type Device = { deviceId: string; authPubkey: Uint8Array; encryptPubkey: Uint8Array };
 export type Binding = { account: Did; device: Device };

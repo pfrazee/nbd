@@ -8,9 +8,11 @@ import { Installation, type InstallationState, type InviteEvent, type Network } 
 import type { RecordPath, Snapshot, WriteOp } from "../protocol/repo";
 import { approvalPayload } from "../protocol/trust";
 import { type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, label } from "../protocol/types";
+import type { WitnessApi } from "../protocol/witness";
 import { Adversary } from "./adversary";
 import { Host } from "./host";
 import { Pds, type Session } from "./pds";
+import { Relay, RogueWitness, Witness } from "./relay";
 
 export type LogEntry = { at: number; text: string };
 
@@ -60,6 +62,10 @@ export type Provenance = {
   /** Every invite or capture record made, published or not: who made it,
    * whether it first met the account, and the device IDs it vouched for. */
   prepared: { inviter: Did; device: string; account: Did; space: string; rkey: string; firstMet: boolean; devices: string[]; seq: number }[];
+  /** Every binding of another account an installation newly accepted:
+   * when, through what, and (witness policy) the relay sequence number of
+   * the witnessed commit it relied on and the witness that reported it. */
+  accepts: { inst: string; device: string; account: Did; target: string; world: number; order: number; seq: number | null; via: string; witness: string | null }[];
 };
 
 const tb = (b: Binding): TraceBinding => [b.account.replace("did:plc:", ""), b.device.deviceId];
@@ -78,11 +84,11 @@ export class World implements Network {
   readonly lag = new Map<string, number>();
   readonly adversary = new Adversary((did) => this.pdsOf.get(did));
   readonly stolen: StolenKeys[] = [];
-  readonly backups: { name: string; from: string; at: number; state: InstallationState }[] = [];
+  readonly backups: { name: string; from: string; at: number; state: InstallationState; origin: { at: number; order: number } }[] = [];
   /** Write faults per installation: "reject" fails before applying; "lost-ack"
    * applies the write, then fails as a lost acknowledgement would. */
   readonly faults = new Map<string, { mode: "reject" | "lost-ack"; collection?: string; count: number }>();
-  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [], invites: [], prepared: [] };
+  readonly provenance: Provenance = { attacker: new Set(), stolenAt: new Map(), publishedAt: new Map(), publishedSeq: new Map(), approvals: [], invites: [], prepared: [], accepts: [] };
   /** Orders events that happen at the same world time. */
   private seq = 0;
 
@@ -103,9 +109,64 @@ export class World implements Network {
    * it, kept for comparison and for the model's SpecClient traces. */
   readonly policy: Policy;
 
+  /** Witness policy: the reference relay and each application's witness. */
+  readonly relay: Relay | null;
+  readonly witnesses = new Map<string, Witness>();
+  private rogues = new Map<string, RogueWitness>();
+
   constructor(seed = "nbd", opts: { policy?: Policy } = {}) {
     this.rng = Rng.fromLabel(seed);
     this.policy = opts.policy ?? "inviters";
+    this.relay = this.policy === "witness" ? new Relay((did) => this.registry.get(did) ?? null, () => this.t) : null;
+    if (this.relay) for (const app of ["lantern", "other", "attacker"]) this.witnessOf(app);
+  }
+
+  // ---- witness policy -----------------------------------------------------------
+
+  /** The witness of application `app` (created on first use). */
+  witnessOf(app: string): Witness {
+    let w = this.witnesses.get(app);
+    if (!w) {
+      if (!this.relay) throw new Error("world: no relay outside the witness policy");
+      w = new Witness(`witness.${app}`, app, this.relay, (id, did) => this.pdsOf.get(did)?.serveFetch(id, did) ?? null, () => this.t);
+      // Witnesses in this world have followed the relay from its start.
+      this.witnesses.set(app, w);
+    }
+    return w;
+  }
+
+  witness(observer: string): WitnessApi | null {
+    const inst = this.installations.get(observer);
+    if (!inst || !this.relay) return null;
+    const w = this.witnessOf(inst.app);
+    return w.reachable ? w : null;
+  }
+
+  otherWitnesses(observer: string): WitnessApi[] {
+    const inst = this.installations.get(observer);
+    const out: WitnessApi[] = [...this.witnesses.values()].filter((w) => w.app !== inst?.app && w.reachable);
+    for (const p of this.pdses.values()) {
+      let r = this.rogues.get(p.name);
+      if (!r) this.rogues.set(p.name, (r = new RogueWitness(`witness.${p.name}`, (o, did) => this.pdsOf.get(did) === p ? p.enumerate(o, did) : null)));
+      out.push(r);
+    }
+    return out;
+  }
+
+  accepted(by: Installation, b: Binding, seq: number | null, via: string): void {
+    this.provenance.accepts.push({
+      inst: by.id, device: by.binding.device.deviceId, account: b.account, target: b.device.deviceId, world: this.t, order: this.tick(), seq, via,
+      witness: seq === null || !this.relay ? null : this.witnessOf(by.app).id,
+    });
+  }
+
+  /** Move relay events to the witnesses. Returns whether anything moved. */
+  private pumpRelay(): boolean {
+    if (!this.relay) return false;
+    let n = this.relay.ingest();
+    for (const inst of this.installations.values()) this.witnessOf(inst.app);
+    for (const w of this.witnesses.values()) n += w.pump();
+    return n > 0;
   }
 
   // ---- Network ---------------------------------------------------------------
@@ -216,6 +277,7 @@ export class World implements Network {
     let p = this.pdses.get(name);
     if (!p) {
       p = new Pds(name, this.rng.derive(`pds/${name}`), () => this.t);
+      p.relay = this.relay;
       this.pdses.set(name, p);
     }
     return p;
@@ -233,10 +295,12 @@ export class World implements Network {
   /** Install the app. With `link`, the new device is approved by `link` and
    * pairs with it; without, it publishes its record alone (first device, or
    * an unlinked one). */
-  install(did: Did, deviceName: string, opts: { link?: Installation; clockOffset?: number; keys?: StolenKeys; startOver?: boolean } = {}): Installation {
+  install(did: Did, deviceName: string, opts: { link?: Installation; clockOffset?: number; keys?: StolenKeys; startOver?: boolean; app?: string } = {}): Installation {
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`), opts.clockOffset ?? 0, opts.keys);
+    inst.app = opts.app ?? opts.link?.app ?? "lantern";
     inst.sessionId = this.pdsOf.get(did)!.login(did, "app", id).id;
+    inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);
     if (opts.link) {
       // Linking needs the approver to publish. A write whose acknowledgement
@@ -303,6 +367,8 @@ export class World implements Network {
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
     inst.sessionId = s.id;
+    inst.app = "attacker"; // attacker code trusts the attacker's own witness
+    inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);
     inst.publishOwnRecord();
     this.provenance.attacker.add(inst.binding.device.deviceId);
@@ -320,6 +386,8 @@ export class World implements Network {
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
     inst.sessionId = pds.login(did, "password", "attacker").id;
+    inst.app = "attacker"; // attacker code trusts the attacker's own witness
+    inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);
     inst.publishOwnRecord();
     this.provenance.attacker.add(inst.binding.device.deviceId);
@@ -423,6 +491,8 @@ export class World implements Network {
     const id = `${did.replace("did:plc:", "")}/${deviceName}`;
     const inst = new Installation(this, id, deviceName, did, this.rng.derive(`install/${id}/${++this.counter}`));
     inst.sessionId = pds.login(did, "password", `${pds.name} operator`).id;
+    inst.app = "attacker"; // attacker code trusts the attacker's own witness
+    inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);
     this.provenance.attacker.add(inst.binding.device.deviceId);
     this.published(inst.binding.device.deviceId);
@@ -482,6 +552,183 @@ export class World implements Network {
     this.settle();
   }
 
+  // ---- malicious PDS against the relay, and witness conditions (witness policy) ----
+
+  /** `records` with every device and approval record replaced by `sub`'s. */
+  private substituted(records: Map<RecordPath, Cbor>, sub: Installation): Map<RecordPath, Cbor> {
+    const record = sub.deviceRecord() as { collection: string; rkey: string; value: Cbor };
+    const out = new Map<RecordPath, Cbor>();
+    for (const [k, v] of records) if (!k.startsWith(COL.device + "/") && !k.startsWith(COL.approval + "/")) out.set(k, v);
+    out.set(`${record.collection}/${record.rkey}`, record.value);
+    return out;
+  }
+
+  /** The PDS sends the relay a fork of `did`'s repo in which every device is
+   * replaced by one it controls, and serves the same fork to `showTo` (and
+   * the impostor), while serving everyone else, including the account's own
+   * installations, the real repo. Without a relay (non-witness policies) the
+   * served fork is all there is, as in substituteDevices. */
+  forkedImpostor(did: Did, showTo: Installation[], deviceName = "impostor"): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const sub = this.pdsDevice(did, deviceName);
+    const transform = (records: Map<RecordPath, Cbor>) => this.substituted(records, sub);
+    if (this.relay) pds.relayHooks.push((d, records) => (d === did ? { records: transform(records) } : null));
+    this.adversary.add({ kind: "forge", did, observers: [...showTo.map((i) => i.id), sub.id], revOffset: 0, describe: `${pds.name} shows ${showTo.map((i) => i.id).join(", ")} a fork of ${did} with ${sub.id}`, transform });
+    pds.repo(did).commit(); // carries the fork to the relay
+    this.note(`${pds.name} forks ${did}: ${this.relay ? "the relay and " : ""}${showTo.map((i) => i.id).join(", ")} see ${sub.id} as its only device; its own devices see the real repo`);
+    this.settle();
+    return sub;
+  }
+
+  private syncRoots = new Map<Did, { honest: Map<RecordPath, Cbor>; rev: number; withhold: number; fetch: (w: string, r: import("./pds").Repo) => Snapshot | null | undefined }>();
+
+  /** Publish a `#sync` root in which every device of `did` is replaced by an
+   * impostor, hiding the commit from the account's own installations. Only
+   * witnesses in `serveTo` are served that root when they fetch it; any
+   * other witness is served the replacement (the honest records, signed at
+   * the next revision), which the PDS publishes with replaceSyncRoot. */
+  publishSyncRoot(did: Did, serveTo: string[], deviceName = "impostor", settle = true): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const repo = pds.repo(did);
+    const own = [...this.installations.values()].filter((i) => i.did === did).map((i) => i.id);
+    const withhold = this.adversary.add({ kind: "withhold", did, observers: own, rev: repo.rev, describe: `${pds.name} hides ${did}'s #sync root from its own devices` }).id;
+    const sub = this.pdsDevice(did, deviceName);
+    const honest = new Map(repo.records);
+    repo.records = this.substituted(honest, sub);
+    let once = true;
+    const kind = (d: Did) => (d === did && once ? { kind: "sync" as const } : null);
+    pds.relayHooks.push(kind);
+    const r1 = repo.commit();
+    once = false;
+    const replacement = repo.sign(honest, r1.commit.rev + 1);
+    const fetch = (w: string, r: import("./pds").Repo) => {
+      if (r.did !== did || r.rev !== r1.commit.rev) return undefined;
+      return serveTo.includes(w) || w === this.witnessOf("attacker").id ? r1 : replacement;
+    };
+    pds.fetchHooks.push(fetch);
+    this.syncRoots.set(did, { honest, rev: r1.commit.rev + 1, withhold, fetch });
+    this.note(`${pds.name} published a #sync root of ${did} with ${sub.id}, served only to ${serveTo.join(", ") || "no witness"}`);
+    if (settle) this.settle();
+    return sub;
+  }
+
+  /** Publish the replacement root (a `#sync` with the honest records). */
+  replaceSyncRoot(did: Did, settle = true): void {
+    const pds = this.pdsOf.get(did)!;
+    const s = this.syncRoots.get(did);
+    if (!s) return;
+    this.syncRoots.delete(did);
+    const repo = pds.repo(did);
+    repo.records = new Map(s.honest);
+    let once = true;
+    pds.relayHooks.push((d) => (d === did && once ? { kind: "sync" as const } : null));
+    repo.commit();
+    once = false;
+    pds.fetchHooks.splice(pds.fetchHooks.indexOf(s.fetch), 1);
+    this.adversary.remove(s.withhold);
+    this.note(`${pds.name} replaced ${did}'s #sync root`);
+    if (settle) this.settle();
+  }
+
+  /** Publish a `#sync` root with an impostor and replace it before any
+   * witness fetches it. */
+  syncReplaced(did: Did, deviceName = "impostor"): Installation {
+    const sub = this.publishSyncRoot(did, [], deviceName, false);
+    this.replaceSyncRoot(did, false);
+    this.settle();
+    return sub;
+  }
+
+  /** The PDS withholds `did`'s repo from one witness's fetches. Returns a
+   * function that stops it. */
+  withholdFetch(did: Did, app: string): () => void {
+    const pds = this.pdsOf.get(did)!;
+    const id = this.witnessOf(app).id;
+    const hook = (w: string, r: import("./pds").Repo) => (r.did === did && w === id ? null : undefined);
+    pds.fetchHooks.push(hook);
+    this.note(`${pds.name} withholds ${did}'s repo from ${id}`);
+    return () => {
+      const i = pds.fetchHooks.indexOf(hook);
+      if (i >= 0) pds.fetchHooks.splice(i, 1);
+    };
+  }
+
+  /** The PDS commits a commit that it never sends the relay, replacing
+   * every device of `did` with an impostor, and serves it to `showTo`. */
+  unrelayedImpostor(did: Did, showTo: Installation[], deviceName = "impostor"): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const repo = pds.repo(did);
+    const sub = this.pdsDevice(did, deviceName);
+    const others = [...this.installations.values()].filter((i) => i.did === did && i !== sub && !showTo.includes(i)).map((i) => i.id);
+    this.adversary.add({ kind: "withhold", did, observers: others, rev: repo.rev, describe: `${pds.name} hides an unrelayed commit of ${did}` });
+    const honest = new Map(repo.records);
+    let once = true;
+    if (this.relay) pds.relayHooks.push((d) => (d === did && once ? { drop: true } : null));
+    repo.records = this.substituted(honest, sub);
+    repo.commit();
+    once = false;
+    this.note(`${pds.name} signed a commit of ${did} with ${sub.id} and never sent it to the relay; it serves it to ${showTo.map((i) => i.id).join(", ")}`);
+    this.settle();
+    return sub;
+  }
+
+  /** The PDS replaces every device of `did` with an impostor in an ordinary
+   * commit, hiding it from the account's own installations; undoFlash
+   * removes it again. */
+  flashImpostor(did: Did, deviceName = "impostor"): { sub: Installation; undo: () => void } {
+    const pds = this.pdsOf.get(did)!;
+    const repo = pds.repo(did);
+    const own = [...this.installations.values()].filter((i) => i.did === did).map((i) => i.id);
+    const withhold = this.adversary.add({ kind: "withhold", did, observers: own, rev: repo.rev, describe: `${pds.name} hides ${did}'s brief impostor from its own devices` }).id;
+    const sub = this.pdsDevice(did, deviceName);
+    const devices = [...repo.records].filter(([k]) => k.startsWith(COL.device + "/"));
+    for (const [k] of devices) this.trace?.push({ op: "delete", b: [did.replace("did:plc:", ""), k.slice(COL.device.length + 1)] });
+    this.trace?.push({ op: "add", b: tb(sub.binding) });
+    pds.write(sub.sessionId!, [...devices.map(([k]) => ({ action: "delete" as const, collection: COL.device, rkey: k.slice(COL.device.length + 1) })), sub.deviceRecord()]);
+    this.note(`${pds.name} replaced ${did}'s devices with ${sub.id}, hidden from its own devices`);
+    this.settle();
+    const undo = () => {
+      this.trace?.push({ op: "delete", b: tb(sub.binding) });
+      for (const [k] of devices) this.trace?.push({ op: "add", b: [did.replace("did:plc:", ""), k.slice(COL.device.length + 1)] });
+      if (!this.pdsOf.get(did)?.hosts(did) || this.pdsOf.get(did) !== pds) return; // migrated away meanwhile
+      pds.write(pds.login(did, "password", `${pds.name} operator`).id, [{ action: "delete", collection: COL.device, rkey: sub.binding.device.deviceId }, ...devices.map(([k, v]) => ({ action: "create" as const, collection: COL.device, rkey: k.slice(COL.device.length + 1), value: v }))]);
+      this.adversary.remove(withhold);
+      this.note(`${pds.name} deleted ${sub.id} and restored ${did}'s devices`);
+      this.settle();
+    };
+    return { sub, undo };
+  }
+
+  /** Witness conditions: an outage of its relay subscription, clients unable
+   * to reach it, or processing hours behind. */
+  setWitness(app: string, opts: { connected?: boolean; reachable?: boolean; lag?: number }): void {
+    const w = this.witnessOf(app);
+    if (opts.connected !== undefined) w.setConnected(opts.connected);
+    if (opts.reachable !== undefined) w.reachable = opts.reachable;
+    if (opts.lag !== undefined) w.lag = opts.lag;
+    this.note(`${w.id}: ${Object.entries(opts).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+    this.settle();
+  }
+
+  /** An honest relay that delivers to one witness `hours` late while its
+   * pings still arrive (a slow consumer). */
+  relayDelay(app: string, hours: number): void {
+    this.relay!.deliveryDelay.set(this.witnessOf(app).id, hours);
+    this.note(`the relay delivers to ${this.witnessOf(app).id} ${hours}h late`);
+    this.settle();
+  }
+
+  /** Out of reach: a dishonest witness that leaves every relay event for
+   * `did` after `afterSeq` out of the history it reports, commits and gaps
+   * alike. */
+  dishonestWitness(app: string, did: Did, afterSeq: number): void {
+    const w = this.witnessOf(app);
+    const seqs = w.omits.get(did) ?? new Set<number>();
+    for (const e of this.relay!.events) if (e.did === did && e.seq > afterSeq) seqs.add(e.seq);
+    w.omits.set(did, seqs);
+    this.note(`${w.id} colludes with ${did}'s PDS, omitting its commits after relay seq ${afterSeq}`);
+  }
+
   setLag(inst: Installation, hours: number): void {
     if (hours > 0) this.lag.set(inst.id, hours);
     else this.lag.delete(inst.id);
@@ -492,7 +739,7 @@ export class World implements Network {
   // ---- backups -------------------------------------------------------------------
 
   backup(inst: Installation, name = `${inst.id} backup`): void {
-    this.backups.push({ name, from: inst.id, at: this.t, state: inst.exportState() });
+    this.backups.push({ name, from: inst.id, at: this.t, state: inst.exportState(), origin: { at: inst.origin, order: inst.originOrder } });
     this.note(`${inst.id} backed up`);
   }
 
@@ -506,8 +753,11 @@ export class World implements Network {
     const inst = new Installation(this, id, deviceName, from.did, this.rng.derive(`install/${id}/${++this.counter}`), from.clockOffset,
       { sign: from.signKey, enc: from.encKey, deviceId: from.binding.device.deviceId });
     inst.sessionId = this.pdsOf.get(from.did)!.login(from.did, "app", id).id;
+    inst.app = from.app;
+    inst.predecessor = from;
+    inst.originOrder = Math.min(inst.originOrder, this.tick());
     this.installations.set(id, inst);
-    inst.importState(b.state);
+    inst.importState(b.state, b.origin);
     this.note(`${from.id} was lost; ${id} restored ${b.name} from ${b.at.toFixed(0)}h`);
     this.settle();
     return inst;
@@ -528,20 +778,36 @@ export class World implements Network {
 
   setOnline(inst: Installation, online: boolean): void {
     inst.online = online;
+    if (!online && inst.running) {
+      inst.running = false;
+      const r = inst.runs[inst.runs.length - 1];
+      if (r) r.to = this.t;
+    }
     this.note(`${inst.id} went ${online ? "online" : "offline"}`);
     if (online) this.settle();
   }
 
   advance(hours: number): void {
-    this.t += hours;
     this.trace?.push({ op: "wait", h: hours });
-    this.settle();
+    // Under the witness policy running installations check at least hourly
+    // (proposal: Liveness and deadline), so time passes in hourly settles.
+    if (this.relay)
+      for (let left = hours; left > 1e-9; ) {
+        const d = Math.min(1, left);
+        this.t += d;
+        left -= d;
+        this.settle();
+      }
+    else {
+      this.t += hours;
+      this.settle();
+    }
   }
 
   /** Let every online installation sync until nothing changes. */
   settle(maxRounds = 40): void {
     for (let i = 0; i < maxRounds; i++) {
-      let changed = false;
+      let changed = this.pumpRelay();
       for (const inst of this.installations.values()) changed = inst.sync() || changed;
       if (!changed) return;
     }

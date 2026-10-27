@@ -1,8 +1,10 @@
 """Mutation check: break one rule of SpecClient or InviterClient at a time
 and confirm a test in test_nbd_trust.py, test_inviters.py, or test_walks.py
+fails; then break one rule of WitnessClient or its witness (nbd_witness.py)
+at a time and confirm a test in test_witness.py or test_witness_walks.py
 fails.
 
-Run: python3 -I model/mutation_check.py
+Run: python3 -I model/mutation_check.py   (--witness: only the witness mutations)
 MISSED means no test notices that rule being broken.
 """
 
@@ -149,23 +151,109 @@ MUTATIONS = {
         "(credited if mine is None else max(credited, mine[0]), _theirs)"),
 }
 
+# WitnessClient and Witness (nbd_witness.py): the relay-witness rules.
+WITNESS_MUTATIONS = {
+    "accept on PDS-served commit": (
+        "        lr = self._c._latest(x)\n        return lr[1].root if lr else EMPTY",
+        "        c = self._w.pds_serve(self._c.name, x)\n        return c.root if c else EMPTY"),
+    "any-witness trust": (
+        "            if src is not self.witness:\n                continue",
+        "            if False:\n                continue"),
+    "latest-only watching": (
+        "        for _idx, e in w.read(x, start):",
+        "        for _idx, e in ([p for p in w.read(x, start) if p[1].reconstructed][-1:] if own\n"
+        "                        else w.read(x, start)):"),
+    "gap erased on resync": (
+        "            if e.reconstructed:\n                st.obs[x], st.obs_seq[x] = e.root, e.seq",
+        "            if e.reconstructed:\n                if e.kind == \"resync\" and own:\n"
+        "                    st.gaps.clear()\n                st.obs[x], st.obs_seq[x] = e.root, e.seq"),
+    "deadline reset at check completion": (
+        "        self.state.cov_base = self.witness.frontier_age()", "        self.state.cov_base = 0.0"),
+    "restore from now instead of cursor": (
+        "            st.read_from = st.cursor_seq.get(own.account, -1)",
+        "            st.cursors[own.account], st.cursor_seq[own.account] = witness.end(), witness.done_seq\n"
+        "            st.read_from = st.cursor_seq.get(own.account, -1)"),
+    "snapshot skipping for pinned accounts": (
+        "        for _idx, e in w.read(x, start):",
+        "        for _idx, e in ([p for p in w.read(x, start) if p[1].reconstructed][-1:] if not own\n"
+        "                        else w.read(x, start)):"),
+    "gap ack suppresses liveness": (
+        "        return self.running and self.coverage_age() > LIVENESS_LIMIT",
+        "        return self.running and self.coverage_age() > LIVENESS_LIMIT and not any(\n"
+        "            g.acknowledged for g in self.state.gaps)"),
+    "ack covers every gap": (
+        "        gap.acknowledged = True", "        for g in self.state.gaps:\n            g.acknowledged = True"),
+    "backward clock across a restart credits zero": (
+        "        st.cov_base = INF if d is None or d < 0 else st.cov_base + d",
+        "        st.cov_base = INF if d is None else st.cov_base + max(0.0, d)"),
+    "restart credits no downtime": (
+        "        st.cov_base = INF if d is None or d < 0 else st.cov_base + d",
+        "        st.cov_base = INF if d is None or d < 0 else st.cov_base"),
+    "no retention gap at restore": ("        if start < w.base:  # pruned", "        if False:  # pruned"),
+    "no fork alarm": ("            if wc != c and (wc, c) not in self.state.forks:", "            if False:"),
+    "unreported commits decide": (
+        "        return c.rev > self.witness.max_rev(x)", "        return False"),
+    "absence before presence revokes": (
+        "            elif b in st.proven and seq > st.proven[b]:", "            else:"),
+    "fresh enrollment starts at the head": (
+        "                st.cursors[x], st.cursor_seq[x] = w.base, -1",
+        "                st.cursors[x], st.cursor_seq[x] = w.end(), w.done_seq"),
+    "fresh enrollment presents nothing": (
+        "            if fresh:\n                st.presented.add(b)", "            if fresh:\n                pass"),
+    "unreachable witness decides": (
+        "        if not self.witness.reachable:\n            return True",
+        "        if False:\n            return True"),
+    "witness: no inversion check": (
+        "        if e.kind == \"commit\" and cur is not None and e.prev == cur:",
+        "        if e.kind == \"commit\":"),
+    "witness: later snapshot reconstructs an earlier root": (
+        "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
+        "            self._gap(a, e)\n        return True\n\n    def _retry(self)",
+        "        if res:\n            self._record(a, \"commit\", e, e.commit.root)\n        else:\n"
+        "            self._record(a, \"commit\", e, self.world.head[a].root)\n        return True\n\n    def _retry(self)"),
+    "witness: no stream gap": (
+        "            self._stream_gap()  # the relay", "            pass  # the relay"),
+    "witness: frontier from a successful answer": (
+        "        if self.pending is not None and not self._retry():\n            return",
+        "        if self.pending is not None and not self._retry():\n            self.last_live = self.wnow()\n"
+        "            return"),
+}
+
+
+def run(src_name, text, tests):
+    d = tempfile.mkdtemp()
+    for t in tests:
+        shutil.copy(os.path.join(SRC, t), d)
+    if src_name != "nbd_trust.py":
+        shutil.copy(os.path.join(SRC, "nbd_trust.py"), d)
+    with open(os.path.join(d, src_name), "w") as f:
+        f.write(text)
+    r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d],
+                       capture_output=True, text=True)
+    shutil.rmtree(d)
+    return [ln.split(" (")[0].split(": ", 1)[1] for ln in r.stderr.splitlines()
+            if ln.startswith(("FAIL:", "ERROR:"))]
+
+
+def report(name, fails):
+    shown = ", ".join(fails[:6]) + (f", +{len(fails) - 6} more" if len(fails) > 6 else "")
+    print(f"{'CAUGHT' if fails else 'MISSED'} {name}: {shown or '-'}")
+
 
 def main():
+    only_witness = "--witness" in sys.argv
     base = open(os.path.join(SRC, "nbd_trust.py")).read()
     head, spec = base.split(SPEC, 1)
-    for name, (old, new) in MUTATIONS.items():
-        assert old in spec, name
-        d = tempfile.mkdtemp()
-        for t in ("test_nbd_trust.py", "test_inviters.py", "test_walks.py"):
-            shutil.copy(os.path.join(SRC, t), d)
-        with open(os.path.join(d, "nbd_trust.py"), "w") as f:
-            f.write(head + SPEC + spec.replace(old, new, 1))
-        r = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d],
-                           capture_output=True, text=True)
-        fails = [ln.split(" (")[0].split(": ", 1)[1] for ln in r.stderr.splitlines()
-                 if ln.startswith(("FAIL:", "ERROR:"))]
-        print(f"{'CAUGHT' if fails else 'MISSED'} {name}: {', '.join(fails) or '-'}")
-        shutil.rmtree(d)
+    if not only_witness:
+        for name, (old, new) in MUTATIONS.items():
+            assert old in spec, name
+            report(name, run("nbd_trust.py", head + SPEC + spec.replace(old, new, 1),
+                             ("test_nbd_trust.py", "test_inviters.py", "test_walks.py")))
+    wsrc = open(os.path.join(SRC, "nbd_witness.py")).read()
+    for name, (old, new) in WITNESS_MUTATIONS.items():
+        assert wsrc.count(old) == 1, name
+        report(name, run("nbd_witness.py", wsrc.replace(old, new, 1),
+                         ("test_witness.py", "test_witness_walks.py")))
 
 
 if __name__ == "__main__":

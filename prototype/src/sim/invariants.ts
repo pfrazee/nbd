@@ -18,8 +18,9 @@
 
 import type { Installation } from "../protocol/installation";
 import { type AccountView, REENROLL_HOLD } from "../protocol/trust";
-import { type Binding, bindingId, label } from "../protocol/types";
+import { type Binding, bindingId, hasStanding, label } from "../protocol/types";
 import type { World } from "../world/world";
+import { DetectionCheck } from "./detection";
 import { DisclosureCheck, approvalAncestors } from "./disclosure";
 
 const EPS = 1e-9;
@@ -65,6 +66,8 @@ export class InvariantMonitor {
   private firstSeen = new Map<string, number>();
   readonly violations: { at: number; text: string }[] = [];
   private readonly disclosure: DisclosureCheck;
+  /** The Relay-Witnessed Repos goal (witness policy only). */
+  private readonly detection: DetectionCheck | null;
   /** installation ID -> account -> event sequence when it first knew the account. */
   private knownSince = new Map<string, Map<string, number>>();
   /** Invite facts already checked. */
@@ -72,13 +75,17 @@ export class InvariantMonitor {
 
   constructor(private readonly world: World) {
     this.disclosure = new DisclosureCheck(world);
+    this.detection = world.policy === "witness" ? new DetectionCheck(world) : null;
   }
 
+  private stepStart = 0;
+
   before(): void {
+    this.stepStart = this.world.t;
     this.disclosure.begin();
     const spaces = this.spaces();
     for (const i of this.world.installations.values()) this.prev.set(i.id, snap(i, spaces));
-    if (this.world.policy === "inviters") this.noteKnown();
+    if (hasStanding(this.world.policy)) this.noteKnown();
   }
 
   private noteKnown(): void {
@@ -92,7 +99,7 @@ export class InvariantMonitor {
 
   /** Spaces whose standing is tracked: all of them, under the inviters policy. */
   private spaces(): string[] {
-    return this.world.policy === "inviters" ? [...this.world.host.spaces.keys()] : [];
+    return hasStanding(this.world.policy) ? [...this.world.host.spaces.keys()] : [];
   }
 
   after(): string[] {
@@ -100,11 +107,12 @@ export class InvariantMonitor {
     for (const i of this.world.installations.values()) {
       for (const [d, h] of i.trust.state.holds) {
         const k = `${d}:${h.candidate.join(",")}`;
-        if (!this.firstSeen.has(k)) this.firstSeen.set(k, this.world.t);
+        if (!this.firstSeen.has(k)) this.firstSeen.set(k, this.holdStart(h.bindings));
       }
       for (const v of this.check(i)) out.push(`${i.id}: ${v}`);
     }
     for (const v of this.disclosure.check()) out.push(`goal: ${v}`);
+    for (const v of this.detection?.check() ?? []) out.push(`detection goal: ${v}`);
     // Only the device that made a pending invite captures it.
     const facts = this.world.provenance.invites;
     for (const f of facts.slice(this.factsSeen)) {
@@ -123,7 +131,7 @@ export class InvariantMonitor {
           out.push(`${f.inviter}/${f.device.slice(0, 6)}'s invite to ${f.space} authorizes ${d.slice(0, 6)}, which its maker didn't meet as a first contact`);
     }
     this.factsSeen = facts.length;
-    if (this.world.policy === "inviters") this.noteKnown();
+    if (hasStanding(this.world.policy)) this.noteKnown();
     for (const text of out) this.violations.push({ at: this.world.t, text });
     return out;
   }
@@ -164,7 +172,7 @@ export class InvariantMonitor {
       if (old && old.key === k && h.credited < old.credited - EPS) out.push(`hold credit for ${d} fell`);
     }
 
-    if (this.world.policy === "inviters") out.push(...this.checkStanding(i, before));
+    if (hasStanding(this.world.policy)) out.push(...this.checkStanding(i, before));
 
     if (st.revoked.has(bindingId(i.binding)) && !st.alarms.some((a) => a.kind === "own-removed"))
       out.push("own binding revoked without takeover alarm");
@@ -184,7 +192,7 @@ export class InvariantMonitor {
           if (before.revoked.has(id) || forked.has(b.account)) continue;
           const v = st.views.get(b.account);
           const p = v?.present.get(b.device.deviceId);
-          if (!v || v.rev < (st.accepted.get(id)?.rev ?? 0) || (p && bindingId(p) === id))
+          if ((!v || v.rev < (st.accepted.get(id)?.rev ?? 0) || (p && bindingId(p) === id)) && !this.witnessedAbsent(i, b, st.accepted.get(id)?.rev ?? 0))
             out.push(`revoked ${label(b)} without a view newer than its record showing it absent`);
         }
     }
@@ -232,6 +240,27 @@ export class InvariantMonitor {
       }
     }
     return out;
+  }
+
+  /** When a hold first seen now could have started. Under the witness
+   * policy time passes in hourly settles and a lagging witness delivers a
+   * reset mid-step, so a hold may start before the step ends: no earlier
+   * than its candidate's devices were all published. */
+  private holdStart(bindings: Binding[]): number {
+    if (this.world.policy !== "witness") return this.world.t;
+    const pub = this.world.provenance.publishedAt;
+    return Math.max(this.stepStart, ...bindings.map((b) => pub.get(b.device.deviceId) ?? this.world.t));
+  }
+
+  /** Witness policy: an installation processes every witnessed commit, so
+   * a revocation may rest on an intermediate commit it processed this step:
+   * one at least as new as the binding's acceptance, without its record. */
+  private witnessedAbsent(i: Installation, b: Binding, rev: number): boolean {
+    const wit = this.world.witnesses.get(i.app);
+    const cursor = i.mon.cursors.get(b.account);
+    if (!wit || cursor === undefined) return false;
+    return (wit.accounts.get(b.account)?.history ?? []).some((h) => h.kind === "state" && h.seq <= cursor && h.rev >= rev
+      && !h.snap.records.has(`com.example.nbd.device/${b.device.deviceId}`));
   }
 
   private checkStanding(i: Installation, before: Snap | undefined): string[] {

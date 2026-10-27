@@ -25,6 +25,17 @@ begin
  *   -D=REINVITE     rejected: an invite of an account already a member counts.
  *   -D=RETRO        rejected: an invite authorizes bindings first used after
  *                   it.
+ *   -D=WITNESS      proposal-reliable-detection.md (relay-witnessed repos):
+ *                   an honest reference relay and per-application witnesses;
+ *                   clients accept and revoke only on witnessed entries, and
+ *                   owners watch their own account's witnessed history.
+ *                   Combined with one more flag, each restoring a rule the
+ *                   proposal rejects:
+ *     -D=ANYWITNESS   a client accepts on any source's report of publication.
+ *     -D=TWORELAYS    witnesses may tail different relays.
+ *     -D=SKIPGAP      a witness may skip an entry without recording a gap.
+ *     -D=LATESTART    a witness may start following an account at a later
+ *                     snapshot, the interval before it recorded as nothing.
  */
 
 builtins: signing, asymmetric-encryption, hashing
@@ -373,6 +384,155 @@ restriction AcceptOnce:
 restriction RevokeOnce:
   "All c t #i #j. Revoke(c, t) @ i & Revoke(c, t) @ j ==> #i = #j"
 
+/* ---- Relay-witnessed repos (WITNESS) ---------------------------------- */
+
+// proposal-reliable-detection.md. A relayed entry is one record change in
+// an account's repo: a binding (a device record added) or <'deleted', t>.
+// Positions are s('z'), s(s('z')), ...: the account's next event in the
+// relay's one stream, so skipped sequence numbers do not appear. Time, the
+// 24-hour deadline, frontier age, liveness, retention, and restore cursors
+// are abstracted; see README.md.
+//
+// None of these rules touches a fact of the base model, and acceptance and
+// revocation are gated by restrictions on the base model's actions, so
+// every universal lemma of the base model still holds under WITNESS.
+
+#ifdef WITNESS
+// The relay: the adversary, as PDS, chooses what each relay publishes for
+// each account, at which position, and when; but a position, once
+// published, has one value (RelayPositionOnce), so no relay forks. The
+// reference relay is 'ref'.
+rule Relay:
+    [ In(<A, e, n>) ]
+  --[ RelayAt($R, A, e, s(n)) ]->
+    [ !Relayed($R, A, e, s(n)) ]
+
+restriction RelayPositionOnce:
+  "All R A e1 e2 n #i #j. RelayAt(R, A, e1, n) @ i & RelayAt(R, A, e2, n) @ j ==> #i = #j"
+
+// A witness follows one relay for each account from the account's first
+// position, in order: WitCur is its cursor. At each position it either
+// reconstructs the relayed entry (the adversary chose to serve it) or
+// records a gap. A gap needs no relayed entry: a stream gap covers
+// positions the witness never received. Each record names the position
+// before it, so a reader follows the history without skipping.
+rule WitnessInit:
+    [ ]
+  --[ WitnessInit($W, $R, $A) ]->
+    [ WitCur($W, $R, $A, 'z') ]
+
+restriction WitnessInitOnce:
+  "All W R1 R2 A #i #j. WitnessInit(W, R1, A) @ i & WitnessInit(W, R2, A) @ j ==> #i = #j"
+
+rule WitnessReconstruct:
+    [ WitCur(W, R, A, n), !Relayed(R, A, e, s(n)) ]
+  --[ Recon(W, R, A, e, s(n)), Reported(W, A, e) ]->
+    [ WitCur(W, R, A, s(n)), !WRec(W, A, n, s(n), <'recon', e>) ]
+
+rule WitnessGap:
+    [ WitCur(W, R, A, n) ]
+  --[ Gap(W, A, s(n)) ]->
+    [ WitCur(W, R, A, s(n)), !WRec(W, A, n, s(n), 'gap') ]
+
+// Each device trusts exactly one witness (OneWitness), and watches its own
+// account's history through it from the start (fresh enrollment replays
+// the retained history; retention is abstracted). OwnCur is the device's
+// cursor in that history; OwnerAt marks how far it has processed.
+rule UseWitness:
+    [ !Dev(A, sk, ek) ]
+  --[ UsesWitness(pk(sk), $W), OwnerAt(pk(sk), A, 'z') ]->
+    [ OwnCur(pk(sk), $W, A, 'z') ]
+
+restriction OneWitness:
+  "All c W1 W2 #i #j. UsesWitness(c, W1) @ i & UsesWitness(c, W2) @ j ==> #i = #j"
+
+// The owner processes each record in order. OwnerSees is the own-account
+// check: it is an alarm when the entry is a binding no installation of the
+// account created (no Device action), or a deletion of one that did.
+// OwnerGap is the gap warning.
+rule OwnerSeesEntry:
+    [ OwnCur(d, W, A, p), !WRec(W, A, p, q, <'recon', e>) ]
+  --[ OwnerAt(d, A, q), OwnerSees(d, A, e, q) ]->
+    [ OwnCur(d, W, A, q) ]
+
+rule OwnerSeesGap:
+    [ OwnCur(d, W, A, p), !WRec(W, A, p, q, 'gap') ]
+  --[ OwnerAt(d, A, q), OwnerGap(d, A, q) ]->
+    [ OwnCur(d, W, A, q) ]
+#endif
+
+#ifdef WITNESS & not ANYWITNESS
+// Decisions on witnessed state: a client accepts a binding (first use,
+// approval, or re-enrollment completion), starts a re-enrollment hold on a
+// candidate, and treats a binding as deleted (revocation, hold
+// cancellation) only on an entry its own witness reconstructed. Kept as
+// restrictions on the base model's actions, so the base rules are
+// unchanged.
+restriction AcceptOnWitnessed:
+  "All c A t #a. Accept(c, A, t) @ a ==>
+     Ex W R n #u #w. UsesWitness(c, W) @ u & Recon(W, R, A, t, n) @ w & w < a"
+
+restriction HoldOnWitnessed:
+  "All c A t #a. HoldStart(c, A, t) @ a ==>
+     Ex W R n #u #w. UsesWitness(c, W) @ u & Recon(W, R, A, t, n) @ w & w < a"
+
+restriction RevokeOnWitnessed:
+  "All c A pt pet #a. Revoke(c, <A, pt, pet>) @ a ==>
+     Ex W R n #u #w. UsesWitness(c, W) @ u & Recon(W, R, A, <'deleted', <A, pt, pet>>, n) @ w & w < a"
+#endif
+
+#ifdef WITNESS & ANYWITNESS
+// Rejected: any witness. A client takes any source's word that an entry was
+// published, such as a PDS serving validly signed commits it never sent to
+// the relay.
+rule ClaimPublished:
+    [ In(<'published', A, e>) ]
+  --[ Reported($X, A, e) ]->
+    [ ]
+
+restriction AcceptOnReported:
+  "All c A t #a. Accept(c, A, t) @ a ==> Ex X #w. Reported(X, A, t) @ w & w < a"
+
+restriction HoldOnReported:
+  "All c A t #a. HoldStart(c, A, t) @ a ==> Ex X #w. Reported(X, A, t) @ w & w < a"
+
+restriction RevokeOnReported:
+  "All c A pt pet #a. Revoke(c, <A, pt, pet>) @ a ==>
+     Ex X #w. Reported(X, A, <'deleted', <A, pt, pet>>) @ w & w < a"
+#endif
+
+#ifdef WITNESS & not TWORELAYS
+// Every witness tails the reference relay.
+restriction ReferenceRelayOnly:
+  "All W R A e n #i. Recon(W, R, A, e, n) @ i ==> R = 'ref'"
+#endif
+
+#ifdef WITNESS & SKIPGAP
+// Rejected: skipping to a later snapshot. The witness jumps over one
+// position without recording it as a gap.
+rule WitnessSkip:
+    [ WitCur(W, R, A, n), !Relayed(R, A, e, s(s(n))) ]
+  --[ Recon(W, R, A, e, s(s(n))), Reported(W, A, e), Skipped(W, A, s(n)) ]->
+    [ WitCur(W, R, A, s(s(n))), !WRec(W, A, n, s(s(n)), <'recon', e>) ]
+#endif
+
+#ifdef WITNESS & LATESTART
+// The proposal as written: a witness that starts following an account does
+// so at a verified snapshot, which becomes the start of its history, and
+// the interval before it is neither reconstructed nor a gap. (The snapshot's
+// contents are not modeled: the attack needs the binding deleted before
+// the snapshot.)
+rule WitnessStartLate:
+    [ In(n) ]
+  --[ WitnessInit($W, $R, $A) ]->
+    [ WitCur($W, $R, $A, s(n)), !WRec($W, $A, 'z', s(n), 'start') ]
+
+rule OwnerSeesStart:
+    [ OwnCur(d, W, A, p), !WRec(W, A, p, q, 'start') ]
+  --[ OwnerAt(d, A, q) ]->
+    [ OwnCur(d, W, A, q) ]
+#endif
+
 /* ---- Lemmas ----------------------------------------------------------- */
 
 // 1. An honest member's device receives the key from an honest creator,
@@ -697,6 +857,170 @@ lemma inviters_grant_scope:
           & FirstContactHoldDone(iss, <B, pr, per>) @ h)
      | (Ex B pr per #s #h. GainStanding(iss, 'all', t, <B, pr, per>) @ s
           & HoldDone(iss, B, <B, pr, per>) @ h)"
+#endif
+
+/* ---- Lemmas on relay-witnessed repos (WITNESS) ------------------------ */
+
+// Under WITNESS, positions are relay positions, and OwnerAt(d, A, n) says an
+// installation's frontier reached position n. The lemmas below prove what
+// it sees when it reaches n (W7, W8) and that it reaches every position on
+// the way (W6): together, by induction on positions, an installation whose
+// frontier passed n also reached n and saw what W7 and W8 say. That last
+// induction is made here, not in Tamarin: stated as one lemma, its guard
+// (the relay event at n) has its own timepoint, Tamarin's trace induction
+// cannot apply its hypothesis when that event comes last, and the search
+// unrolls positions without end. Whether and when the frontier gets there,
+// the 24-hour deadline, is liveness and is tested in the Python model and
+// the prototype.
+
+#ifdef WITNESS & not ANYWITNESS & not TWORELAYS & not SKIPGAP & not LATESTART
+// W1. A client accepts an honest device of another account by first use on
+// its witness's reconstruction, and an installation of that account sees
+// the same entry, with no alarm (the binding is its own), no gap, and no
+// compromise.
+lemma witness_executable_acceptance:
+  exists-trace
+  "Ex c A pt pet d n #h #f #s. Device(A, pt, pet) @ h
+     & AcceptFirstUse(c, A, <A, pt, pet>) @ f
+     & OwnerSees(d, A, <A, pt, pet>, n) @ s
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)
+     & not (Ex y1 y2 y3 #x2. OwnerGap(y1, y2, y3) @ x2)"
+
+// W2. The alarm: a client accepts an impostor binding, one no installation
+// of the account created, and an installation of the account sees it in its
+// witnessed history.
+lemma witness_executable_owner_alarm:
+  exists-trace
+  "Ex c A pt pet d n #f #s. AcceptFirstUse(c, A, <A, pt, pet>) @ f
+     & OwnerSees(d, A, <A, pt, pet>, n) @ s
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
+
+// W3. The gap warning: the client's witness reconstructs the impostor's
+// entry, the owner's witness records a gap at its position, and the owner
+// sees the gap.
+lemma witness_executable_owner_gap:
+  exists-trace
+  "Ex c A pt pet d n #f #r #g. AcceptFirstUse(c, A, <A, pt, pet>) @ f
+     & RelayAt('ref', A, <A, pt, pet>, n) @ r & OwnerGap(d, A, n) @ g
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
+
+// W4. Every accepted binding was published by the reference relay, and
+// reconstructed by the client's own witness, before the acceptance.
+lemma witness_accepts_only_relayed [reuse]:
+  "All c A t #a. Accept(c, A, t) @ a ==>
+     Ex W n #u #w #r. UsesWitness(c, W) @ u & Recon(W, 'ref', A, t, n) @ w
+       & RelayAt('ref', A, t, n) @ r & r < w & w < a"
+
+// W5. The same for every revocation: the deletion was relayed and
+// reconstructed by the client's witness first.
+lemma witness_revokes_only_relayed [reuse]:
+  "All c A pt pet #i. Revoke(c, <A, pt, pet>) @ i ==>
+     Ex W n #u #w #r. UsesWitness(c, W) @ u & Recon(W, 'ref', A, <'deleted', <A, pt, pet>>, n) @ w
+       & RelayAt('ref', A, <'deleted', <A, pt, pet>>, n) @ r & r < w & w < i"
+
+// W6. An installation's frontier never skips a position: to reach s(q),
+// it first reached q. A direct case split. SKIPGAP and LATESTART break it.
+lemma witness_owner_step [reuse]:
+  "All d A q #o. OwnerAt(d, A, s(q)) @ o ==> Ex #z. OwnerAt(d, A, q) @ z & z < o"
+
+// W7 (main). If an honest client accepts a binding of account A that no
+// installation of A created, the reference relay published it at some
+// position n before the acceptance, and every installation of A whose
+// frontier reaches n saw it there (the alarm) or saw a gap at n (the
+// warning), whatever witness each uses. With W6, the same holds for an
+// installation whose frontier passed n.
+lemma witness_detects_impostor:
+  "All c A pt pet #a. Accept(c, A, <A, pt, pet>) @ a & not (Ex #h. Device(A, pt, pet) @ h) ==>
+     Ex n #r. RelayAt('ref', A, <A, pt, pet>, n) @ r & r < a
+       & (All d #o. OwnerAt(d, A, n) @ o ==>
+            OwnerSees(d, A, <A, pt, pet>, n) @ o | OwnerGap(d, A, n) @ o)"
+
+// W8. A reset hidden from the owner: if an honest client treats a binding
+// of A as deleted, every installation of A whose frontier reaches the
+// deletion's position saw the deletion or a gap there; with W6, also one
+// whose frontier passed it.
+lemma witness_detects_hidden_deletion:
+  "All c A pt pet #i. Revoke(c, <A, pt, pet>) @ i ==>
+     Ex n #r. RelayAt('ref', A, <'deleted', <A, pt, pet>>, n) @ r & r < i
+       & (All d #o. OwnerAt(d, A, n) @ o ==>
+            OwnerSees(d, A, <'deleted', <A, pt, pet>>, n) @ o | OwnerGap(d, A, n) @ o)"
+#endif
+
+#ifdef WITNESS & ANYWITNESS
+// W9. Accepting on any source's report: a client accepts an impostor
+// binding of A by first use when nothing at all was relayed for A, so no
+// installation of A can see it or a gap where it should be.
+lemma anywitness_accepts_unrelayed:
+  exists-trace
+  "Ex c A pt pet #a. AcceptFirstUse(c, A, <A, pt, pet>) @ a
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex R e n #r. RelayAt(R, A, e, n) @ r)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
+#endif
+
+#ifdef WITNESS & TWORELAYS
+// W10. Witnesses on different relays: a client accepts an impostor binding
+// that one relay published at position n, and an installation of the
+// account processes position n, through a witness on another relay, without
+// ever seeing the binding or any gap.
+lemma tworelays_hides_impostor:
+  exists-trace
+  "Ex c A pt pet d R n #a #r #o. AcceptFirstUse(c, A, <A, pt, pet>) @ a
+     & RelayAt(R, A, <A, pt, pet>, n) @ r & OwnerAt(d, A, n) @ o
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex k #z. OwnerSees(d, A, <A, pt, pet>, k) @ z)
+     & not (Ex k #z. OwnerGap(d, A, k) @ z)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
+#endif
+
+#ifdef WITNESS & SKIPGAP
+// W11. A witness that skips to a later snapshot: a client accepts an
+// impostor binding the reference relay published at position n, and an
+// installation of the account passes n without seeing it or any gap.
+lemma skipgap_hides_impostor:
+  exists-trace
+  "Ex c A pt pet d n m #a #r #o. AcceptFirstUse(c, A, <A, pt, pet>) @ a
+     & RelayAt('ref', A, <A, pt, pet>, n) @ r & OwnerAt(d, A, m) @ o & n << m
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex k #z. OwnerSees(d, A, <A, pt, pet>, k) @ z)
+     & not (Ex k #z. OwnerGap(d, A, k) @ z)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
+#endif
+
+#ifdef WITNESS & LATESTART
+// W12. A witness whose history for an account starts at a later snapshot,
+// with nothing recorded before it: the same undetected acceptance.
+lemma latestart_hides_impostor:
+  exists-trace
+  "Ex c A pt pet d n m #a #r #o. AcceptFirstUse(c, A, <A, pt, pet>) @ a
+     & RelayAt('ref', A, <A, pt, pet>, n) @ r & OwnerAt(d, A, m) @ o & n << m
+     & not (Ex #h. Device(A, pt, pet) @ h)
+     & not (Ex k #z. OwnerSees(d, A, <A, pt, pet>, k) @ z)
+     & not (Ex k #z. OwnerGap(d, A, k) @ z)
+     & not (Ex x1 #x2. Compromised(x1) @ x2)
+     & not (Ex y1 y2 y3 y4 #x2. ApprovalAccept(y1, y2, y3, y4) @ x2)
+     & not (Ex y1 y2 y3 #x2. HoldStart(y1, y2, y3) @ x2)
+     & not (Ex y1 y2 #x2. Revoke(y1, y2) @ x2)"
 #endif
 
 end

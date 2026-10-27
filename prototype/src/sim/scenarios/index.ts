@@ -7,6 +7,7 @@ import { bindingId } from "../../protocol/types";
 import type { World } from "../../world/world";
 import { type Ctx, type Scenario, type Step, check } from "../scenario";
 import { inviterScenarios } from "./inviters";
+import { witnessScenarios } from "./witness";
 
 const hasKey = (i: Installation, space: string) => !!i.spaces.get(space)?.key;
 const texts = (i: Installation, space: string) => i.messages(space).flatMap((m) => ("text" in m ? [m.text] : []));
@@ -549,4 +550,4 @@ const s12: Scenario = {
   ],
 };
 
-export const scenarios: Scenario[] = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, ...inviterScenarios];
+export const scenarios: Scenario[] = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, ...inviterScenarios, ...witnessScenarios];

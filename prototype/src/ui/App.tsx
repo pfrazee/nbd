@@ -49,6 +49,7 @@ function Toolbar() {
       )}
       <button onClick={() => sim.load(run.scenario.id)}>Reset</button>
       {sim.world.policy === "baseline" && <span className="muted" title="The rule from before grant standing: any first contact may grant">Policy: baseline</span>}
+      {sim.world.policy === "witness" && <span className="muted" title="Relay-Witnessed Repos (proposal-reliable-detection.md)">Policy: witness</span>}
       <span className="spacer" />
       <span className="clock">{clock(sim.world.t)}</span>
       {[1, 24, 72].map((h) => (

@@ -23,6 +23,9 @@ export function AdversaryPanel() {
   const [backupFrom, setBackupFrom] = useState("");
   const [restoreIdx, setRestoreIdx] = useState("");
   const [takeAcct, setTakeAcct] = useState("");
+  const [wAcct, setWAcct] = useState("");
+  const [wVictim, setWVictim] = useState("");
+  const [wApp, setWApp] = useState("lantern");
 
   const inst = (id: string) => w.installations.get(id)!;
   const instOptions = (filter: (id: string) => boolean = () => true) => (
@@ -86,6 +89,29 @@ export function AdversaryPanel() {
           <button className="link" onClick={() => sim.act(`stop policy ${p.id}`, (w) => { w.adversary.remove(p.id); w.settle(); })}>stop</button>
         </div>
       ))}
+
+      {w.policy === "witness" && (
+        <>
+          <h5>Against the relay (witness policy)</h5>
+          <div className="row" title="The PDS sends the relay, and the victim, a fork with every device replaced by its own; the account's devices are served the real repo">
+            <select value={wAcct} onChange={(e) => setWAcct(e.target.value)}>{acctOptions}</select>
+            <select value={wVictim} onChange={(e) => setWVictim(e.target.value)}>{instOptions((id) => inst(id).did !== wAcct)}</select>
+            <button className="danger" disabled={!wAcct || !wVictim} onClick={() => sim.act(`forked impostor of ${short(wAcct)}`, (w) => w.forkedImpostor(wAcct, [inst(wVictim)], `impostor${w.installations.size}`))}>Fork to relay</button>
+          </div>
+          <div className="row">
+            <button className="danger" disabled={!wAcct} title="Publish a #sync root with an impostor, then replace it before any witness fetches it" onClick={() => sim.act(`#sync root of ${short(wAcct)} replaced`, (w) => w.syncReplaced(wAcct, `impostor${w.installations.size}`))}>Replace #sync root</button>
+            <button className="danger" disabled={!wAcct} title="Publish an impostor in an ordinary commit, served to the account's own devices only once its withholding policy is stopped" onClick={() => sim.act(`brief impostor of ${short(wAcct)}`, (w) => w.flashImpostor(wAcct, `impostor${w.installations.size}`))}>Brief impostor</button>
+          </div>
+          <div className="row">
+            <select value={wApp} onChange={(e) => setWApp(e.target.value)}>
+              {[...w.witnesses.keys()].map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <button onClick={() => sim.act(`${wApp} witness connected toggled`, (w) => w.setWitness(wApp, { connected: !w.witnessOf(wApp).connected }))}>{w.witnessOf(wApp).connected ? "Outage" : "Reconnect"}</button>
+            <button onClick={() => sim.act(`${wApp} witness reachability toggled`, (w) => w.setWitness(wApp, { reachable: !w.witnessOf(wApp).reachable }))}>{w.witnessOf(wApp).reachable ? "Unreachable" : "Reachable"}</button>
+            <button onClick={() => sim.act(`${wApp} witness lag`, (w) => w.setWitness(wApp, { lag: w.witnessOf(wApp).lag ? 0 : 6 }))}>{w.witnessOf(wApp).lag ? "Catch up" : "Lag 6h"}</button>
+          </div>
+        </>
+      )}
 
       <h5>Thief</h5>
       <div className="row">

@@ -5,7 +5,7 @@
 import type { Installation } from "../protocol/installation";
 import { recordsIn } from "../protocol/repo";
 import { REENROLL_HOLD, fmtHour } from "../protocol/trust";
-import { type Binding, COL, bindingId } from "../protocol/types";
+import { type Binding, COL, bindingId, hasStanding } from "../protocol/types";
 import type { World } from "../world/world";
 
 export const short = (did: string) => did.replace("did:plc:", "");
@@ -60,7 +60,7 @@ export function trustStatus(viewer: Installation, b: Binding, spaceName: (uri: s
   if (id === bindingId(viewer.binding)) return { status: "own", detail: "this device" };
   if (st.revoked.has(id)) return { status: "revoked", detail: "removed" };
   const a = st.accepted.get(id);
-  if (a && viewer.trust.policy === "inviters" && b.account !== viewer.did) {
+  if (a && hasStanding(viewer.trust.policy) && b.account !== viewer.did) {
     // Grant standing per joined space (device-enrollment.md#grant-standing).
     const spaces = [...viewer.spaces.keys()].map((s) => {
       const basis = viewer.trust.standingBasis(b, s);

@@ -14,7 +14,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
   const st = inst.trust.state;
   const [newSpace, setNewSpace] = useState("");
   const [linkName, setLinkName] = useState("");
-  const attacker = /^(attacker|sub|pds-device)/.test(inst.name);
+  const attacker = w.provenance.attacker.has(inst.binding.device.deviceId);
   const revoked = st.revoked.has(bindingId(inst.binding));
   const ownDevices = allBindings(w).filter((b) => b.account === inst.did && present(w, b));
   const people = inst.trackedAccounts().filter((d) => d !== inst.did);
@@ -26,6 +26,7 @@ export function NodeCard({ inst }: { inst: Installation }) {
           <strong>{short(inst.did)}</strong> · {inst.name}
           {attacker && <span className="tag bad">attacker</span>}
           {(w.lag.get(inst.id) ?? 0) > 0 && <span className="tag" title="Reads repos this many hours late">{w.lag.get(inst.id)}h late</span>}
+          {w.policy === "witness" && <span className="tag" title="The application whose witness this installation trusts">{inst.app}</span>}
         </div>
         <label className="toggle" title="An offline installation stops syncing">
           <input
@@ -38,6 +39,13 @@ export function NodeCard({ inst }: { inst: Installation }) {
       </header>
       {inst.clockOffset !== 0 && <div className="muted small">Local clock {clock(inst.localNow())}</div>}
 
+      {inst.liveness() && <div className="alarm" title="Witness policy: coverage age over 24 hours; cannot be dismissed">{inst.liveness()} (coverage {Number.isFinite(inst.coverageAge()) ? `${inst.coverageAge().toFixed(1)}h` : "unknown"})</div>}
+      {inst.gapWarnings().map((g) => (
+        <div key={g.key} className="notice gap">
+          Gap in your account's history (relay seq {g.fromSeq}{g.toSeq !== g.fromSeq ? `-${g.toSeq}` : ""}): {g.reason}.{" "}
+          <button onClick={() => sim.act(`${inst.id} acknowledged a gap`, () => inst.acknowledgeGap(g.key))}>Acknowledge</button>
+        </div>
+      ))}
       {st.alarms.map((a, i) => (
         <div key={`a${i}`} className="alarm">{readable(a.text)}</div>
       ))}

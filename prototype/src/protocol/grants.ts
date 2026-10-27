@@ -10,7 +10,7 @@ import {
 import type { Trust } from "./trust";
 import {
   type Binding, type Configuration, type DeviceIdentity, type Evidence, type Membership, type SpaceKeyGrant,
-  asCbor, bindingId, label, sameBinding, withoutProof,
+  asCbor, bindingId, hasStanding, label, sameBinding, withoutProof,
 } from "./types";
 
 export type Result = "OK" | "INVALID" | "INCOMPLETE" | "BLOCKED";
@@ -64,7 +64,7 @@ export function authorizeExchange(
   // Inviters policy: an issuer also needs grant standing for the recipient
   // in this space (device-enrollment.md#grant-standing).
   const evidence = trust.state.accepted.get(bindingId(other))!.evidence;
-  if (role === "issuer" && trust.policy === "inviters") {
+  if (role === "issuer" && hasStanding(trust.policy)) {
     const basis = trust.standingBasis(other, space);
     if (!basis) return fail("INCOMPLETE", `${label(other)} is in a first-contact hold`);
     return ok(`${label(other)} accepted (${evidence}), standing: ${basis}`);

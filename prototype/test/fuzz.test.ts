@@ -8,6 +8,8 @@ describe.each([
   ["lag, forged views, offline, backups", false, "baseline", "a"],
   ["inviters, shared view", true, "inviters", "is"],
   ["inviters, lag, forged views, offline, backups", false, "inviters", "ia"],
+  ["witness, shared view", true, "witness", "ws"],
+  ["witness, malicious PDSes, witness outages, lag, offline, backups", false, "witness", "wa"],
 ] as const)("random walks: %s", (_label, shared, policy, tag) => {
   it(`keeps every invariant over ${WALKS} walks of ${STEPS} steps`, () => {
     for (let s = 0; s < WALKS; s++) {

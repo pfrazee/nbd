@@ -11,6 +11,7 @@ import { type Cbor, ref } from "../protocol/encoding";
 import { type KeyPair, type Rng, sign, signingKeyPair } from "../protocol/crypto";
 import { type RecordPath, type Snapshot, type WriteOp, commitUnsigned, snapshotData } from "../protocol/repo";
 import { COL, type Did } from "../protocol/types";
+import type { Emitted, RelayOp } from "./relay";
 
 export type SessionKind = "app" | "delete-auth" | "password";
 export type Session = { id: string; did: Did; kind: SessionKind; alive: boolean; label: string };
@@ -23,13 +24,16 @@ export class Repo {
   records = new Map<RecordPath, Cbor>();
   history: Snapshot[] = [];
   times: number[] = []; // world time of each commit in history
+  /** Called with each new commit (the PDS sends public-repo commits to the relay). */
+  onCommit: ((snap: Snapshot) => void) | null = null;
 
   constructor(readonly did: Did, readonly name: string, private key: KeyPair, private readonly clock: () => number,
-    init?: { rev: number; records: Map<RecordPath, Cbor> }) {
+    init?: { rev: number; records: Map<RecordPath, Cbor> }, onCommit?: (snap: Snapshot) => void) {
     if (init) {
       this.rev = init.rev;
       this.records = new Map(init.records);
     }
+    this.onCommit = onCommit ?? null;
     this.commit();
   }
 
@@ -44,6 +48,7 @@ export class Repo {
     const snap = this.sign(new Map(this.records), this.rev);
     this.history.push(snap);
     this.times.push(this.clock());
+    this.onCommit?.(snap);
     return snap;
   }
 
@@ -75,11 +80,31 @@ export class Repo {
  * commit, delayed by the observer's network lag. */
 export type ViewHook = (observer: string, repo: Repo) => Snapshot | null;
 
+/** Relay behavior of a malicious PDS for one public repo (witness policy):
+ * `transform` edits what it sends the relay (a fork of what it serves);
+ * `drop` sends nothing; `kind` "sync" sends `#sync` events (commit only)
+ * instead of `#commit`; `badOps` sends operations that fail inversion. */
+export type RelayHook = (did: Did, records: Map<RecordPath, Cbor>) => {
+  records?: Map<RecordPath, Cbor>; drop?: boolean; kind?: "commit" | "sync"; badOps?: boolean;
+} | null;
+/** What a malicious PDS serves a witness fetching a repo: a snapshot, null
+ * to withhold, or undefined for the honest latest commit. */
+export type FetchHook = (witness: string, repo: Repo) => Snapshot | null | undefined;
+
 export class Pds {
   readonly repos = new Map<string, Repo>();
   readonly sessions = new Map<string, Session>();
   private keys = new Map<Did, KeyPair>();
   viewHook: ViewHook | null = null;
+  /** Malicious relay and fetch behaviors, newest first wins. */
+  readonly relayHooks: RelayHook[] = [];
+  readonly fetchHooks: FetchHook[] = [];
+  /** Where public-repo commits go (witness policy only). */
+  relay: { send(e: Emitted): void } | null = null;
+  /** What this PDS last sent the relay per account: its records and root. */
+  private relayed = new Map<Did, { records: Map<RecordPath, Cbor>; data: string } | null>();
+  /** Commits signed for the relay alone (forks), by account and revision. */
+  readonly relayForks = new Map<string, Snapshot>();
   private sessionCounter = 0;
 
   constructor(readonly name: string, private readonly rng: Rng, private readonly clock: () => number) {}
@@ -87,8 +112,51 @@ export class Pds {
   createAccount(did: Did): Uint8Array {
     const key = signingKeyPair(this.rng.derive(`repo-key/${did}`));
     this.keys.set(did, key);
-    this.repos.set(did, new Repo(did, did, key, this.clock));
+    this.repos.set(did, new Repo(did, did, key, this.clock, undefined, (s) => this.emit(did, s)));
     return key.publicKey;
+  }
+
+  /** Send a public-repo commit to the relay, as this PDS chooses to. */
+  private emit(did: Did, snap: Snapshot, kind: "commit" | "sync" = "commit"): void {
+    if (!this.relay) return;
+    const real = new Map(snap.records);
+    let hook: ReturnType<RelayHook> = null;
+    for (let i = this.relayHooks.length - 1; i >= 0 && !hook; i--) hook = this.relayHooks[i](did, real);
+    if (hook?.drop) return;
+    let commit = snap.commit;
+    let records = real;
+    if (hook?.records) {
+      records = hook.records;
+      const forked = this.repos.get(did)!.sign(records, snap.commit.rev);
+      this.relayForks.set(`${did}:${snap.commit.rev}`, forked);
+      commit = forked.commit;
+    }
+    const prev = this.relayed.get(did) ?? null;
+    const ops: RelayOp[] = [];
+    const before = prev?.records ?? new Map<RecordPath, Cbor>();
+    for (const [k, v] of before) if (!records.has(k)) ops.push({ path: k, prev: v, value: null });
+    for (const [k, v] of records) {
+      const old = before.get(k);
+      if (old === undefined) ops.push({ path: k, prev: null, value: v });
+      else if (ref(old) !== ref(v)) ops.push({ path: k, prev: old, value: v });
+    }
+    this.relayed.set(did, { records: new Map(records), data: commit.data });
+    this.relay.send({
+      kind: hook?.kind ?? kind, did, commit, prevData: prev ? prev.data : null,
+      ops: hook?.badOps ? ops.filter((o) => !o.path.startsWith(COL.device + "/")) : ops,
+    });
+  }
+
+  /** What a witness gets when it fetches `did`'s public repo. */
+  serveFetch(witness: string, did: Did): Snapshot | null {
+    const repo = this.repos.get(did);
+    if (!repo) return null;
+    for (let i = this.fetchHooks.length - 1; i >= 0; i--) {
+      const hooked = this.fetchHooks[i](witness, repo);
+      if (hooked !== undefined) return hooked;
+    }
+    // A PDS forking the relay serves witnesses the fork it published.
+    return this.relayForks.get(`${did}:${repo.rev}`) ?? repo.latest();
   }
 
   /** Rotate an account's repo signing key; returns the new public key. */
@@ -103,7 +171,7 @@ export class Pds {
   adopt(did: Did, repos: { name: string; rev: number; records: Map<RecordPath, Cbor> }[]): Uint8Array {
     const key = signingKeyPair(this.rng.derive(`repo-key/${did}/adopted/${this.clock()}`));
     this.keys.set(did, key);
-    for (const r of repos) this.repos.set(r.name, new Repo(did, r.name, key, this.clock, r));
+    for (const r of repos) this.repos.set(r.name, new Repo(did, r.name, key, this.clock, r, r.name === did ? (s) => this.emit(did, s, "sync") : undefined));
     return key.publicKey;
   }
 

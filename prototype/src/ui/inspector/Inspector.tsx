@@ -3,7 +3,7 @@
 
 import { useState } from "react";
 import { recordsIn } from "../../protocol/repo";
-import { type Approval, type Binding, COL, type SpaceKeyGrant, bindingId } from "../../protocol/types";
+import { type Approval, type Binding, COL, type SpaceKeyGrant, bindingId, hasStanding } from "../../protocol/types";
 import { useSim } from "../sim";
 import { allBindings, clock, deviceName, labelName, present, readable, short, trustStatus } from "../views";
 
@@ -53,7 +53,7 @@ function TrustMatrix() {
               {devices.map((b) => {
                 const t = trustStatus(v, b, (u) => w.host.spaceName(u));
                 // Inviters policy: accepted, but not yet granted to in some joined space.
-                const fc = t.status === "accepted" && v.trust.policy === "inviters" && [...v.spaces.keys()].some((s) => !v.trust.standing(b, s));
+                const fc = t.status === "accepted" && hasStanding(v.trust.policy) && [...v.spaces.keys()].some((s) => !v.trust.standing(b, s));
                 return <td key={bindingId(b)} className={fc ? "held" : t.status} title={t.detail}>{fc ? "✓⏳" : SYMBOL[t.status]}</td>;
               })}
             </tr>
@@ -62,7 +62,7 @@ function TrustMatrix() {
       </table>
       <p className="legend small">
         {Object.entries(SYMBOL).map(([k, s]) => <span key={k} className={k}>{s} {k}</span>)}
-        {w.policy === "inviters" && <span className="held">✓⏳ accepted, no grant standing yet in a joined space</span>}
+        {hasStanding(w.policy) && <span className="held">✓⏳ accepted, no grant standing yet in a joined space</span>}
       </p>
     </div>
   );

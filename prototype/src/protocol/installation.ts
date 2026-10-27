@@ -13,8 +13,12 @@ import { type Issuance, move } from "./publish";
 import { type Snapshot, type WriteOp, recordsIn, verifySnapshot } from "./repo";
 import { type TrustState, PENDING_INVITE_TTL, REENROLL_HOLD, Trust, approvalPayload, cloneTrust, emptyTrust, invitePayload } from "./trust";
 import {
+  type CoverageSegment, type GapWarning, type HistoryEntry, LIVENESS_LIMIT, type WitnessApi, type WitnessClientState,
+  cloneWitnessState, emptyWitnessState,
+} from "./witness";
+import {
   type Approval, type Binding, COL, type Configuration, type Did, type Envelope, type Evidence, type Invite, type KeyRequest,
-  type Membership, type Policy, type SpaceKeyGrant, asCbor, bindingId, label, sameBinding, withoutProof,
+  type Membership, type Policy, type SpaceKeyGrant, asCbor, bindingId, hasStanding, label, sameBinding, withoutProof,
 } from "./types";
 
 export interface HostApi {
@@ -46,6 +50,15 @@ export interface Network {
   invitePrepared?(by: Binding, rkey: string, record: Invite, firstMet: boolean, vouched: Binding[]): void;
   /** Ground truth for the checks: an attempt to publish an invite record. */
   invited?(e: InviteEvent): void;
+  /** Witness policy: this installation's trusted witness (its application's,
+   * see Installation.app), or null while it is unreachable. */
+  witness?(observer: string): WitnessApi | null;
+  /** Other witnesses a client could ask, including one a PDS runs. A client
+   * must never trust them (proposal: Trusted witnesses). */
+  otherWitnesses?(observer: string): WitnessApi[];
+  /** Ground truth for the checks: this installation newly accepted a binding
+   * of another account; `seq` is the witnessed commit it relied on, if any. */
+  accepted?(by: Installation, b: Binding, seq: number | null, via: string): void;
 }
 
 /** A signed invite or capture record, saved with its vouch decision before
@@ -81,8 +94,12 @@ type SpaceLocal = {
   sawOtherHolder: boolean;
 };
 
-/** `invites`: the outbox, restored only onto the same device. */
-export type InstallationState = { trust: TrustState; spaces: Map<string, SpaceLocal>; invites?: { device: string; outbox: OutboxInvite[] } };
+/** `invites`: the outbox, restored only onto the same device. `witness`:
+ * the own-account audit cursor and the rest of the witness client state
+ * (witness policy), which backups and transfers carry. */
+export type InstallationState = {
+  trust: TrustState; spaces: Map<string, SpaceLocal>; invites?: { device: string; outbox: OutboxInvite[] }; witness?: WitnessClientState;
+};
 
 export class Installation {
   readonly binding: Binding;
@@ -101,6 +118,29 @@ export class Installation {
   writes = 0;
   imports = 0; // pairing and backup imports, for the invariant monitor
   lastDecisions: string[] = [];
+  /** The application this installation belongs to; it trusts that
+   * application's witness and no other (witness policy). */
+  app = "lantern";
+  /** Witness client state (witness policy). */
+  mon: WitnessClientState = emptyWitnessState();
+  /** Whether it has run since it last stopped: the first sync after a stop
+   * is a restart, across which coverage is carried by wall clock. */
+  running = false;
+  /** Ground truth for the goal check (never transferred): coverage segments,
+   * world time it was created and the world time its lineage of state began
+   * (a restored installation inherits its backup's; a paired one is new),
+   * and the world time of its latest sync. */
+  segments: CoverageSegment[] = [];
+  readonly createdAt: number;
+  origin: number;
+  /** The same as an event sequence position (World.tick), set by the world. */
+  originOrder = Infinity;
+  /** The lost installation this one was restored from, if any. */
+  predecessor: Installation | null = null;
+  lastRun = -Infinity;
+  /** World-time intervals during which it ran (ground truth). */
+  runs: { from: number; to: number }[] = [];
+  private reported = new Set<string>();
 
   constructor(
     private readonly net: Network,
@@ -118,7 +158,12 @@ export class Installation {
     this.binding = { account: did, device: { deviceId, authPubkey: this.signKey.publicKey, encryptPubkey: this.encKey.publicKey } };
     const state = emptyTrust();
     state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own" });
-    this.trust = new Trust(state, this.binding, () => this.localNow(), net.policy);
+    this.trust = new Trust(state, this.binding, () => this.localNow(), net.policy, () => this.net.now());
+    this.createdAt = this.origin = net.now();
+  }
+
+  get witnessed(): boolean {
+    return this.net.policy === "witness";
   }
 
   get did(): Did {
@@ -178,6 +223,10 @@ export class Installation {
   pairFrom(approver: Installation): void {
     this.imports++;
     this.trust.importFrom(cloneTrust(approver.trust.state));
+    // The new device resumes the approver's audit cursors; its coverage is
+    // unknown until its own frontier first advances.
+    for (const [d, c] of approver.mon.cursors) this.mon.cursors.set(d, c);
+    for (const g of approver.mon.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
     // The approver's commit published this device's record.
     const published = approver.trust.state.accepted.get(bindingId(this.binding))?.rev;
     this.trust.state.accepted.set(bindingId(this.binding), { binding: this.binding, evidence: "own", rev: published });
@@ -188,15 +237,32 @@ export class Installation {
 
   exportState(): InstallationState {
     this.trust.tick();
+    if (this.witnessed) this.checkpoint();
     return {
       trust: cloneTrust(this.trust.state), spaces: new Map([...this.spaces].map(([k, s]) => [k, { ...s, issuances: new Map(s.issuances), stopped: [...s.stopped], outbox: [...s.outbox] }])),
       invites: { device: this.binding.device.deviceId, outbox: [...this.inviteOutbox] },
+      witness: cloneWitnessState(this.mon),
     };
   }
 
-  importState(s: InstallationState): void {
+  /** Restore a backup (or another saved state) onto this installation. */
+  importState(s: InstallationState, origin?: { at: number; order: number }): void {
     this.imports++;
     this.trust.importFrom(cloneTrust(s.trust));
+    if (s.witness) {
+      // Resume from the backup's cursors, not from now, and replay since.
+      for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, c);
+      for (const g of s.witness.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
+      this.mon.auditGaps.push(...s.witness.auditGaps.map((g) => ({ ...g })));
+      // Coverage carries across by wall clock from the backup's checkpoint.
+      this.mon.checkpoint = s.witness.checkpoint && { ...s.witness.checkpoint };
+      this.mon.coverage = null;
+      this.running = false;
+    }
+    if (origin !== undefined) {
+      this.origin = Math.min(this.origin, origin.at);
+      this.originOrder = Math.min(this.originOrder, origin.order);
+    }
     if (s.invites?.device === this.binding.device.deviceId) this.inviteOutbox = [...s.invites.outbox];
     for (const [uri, sp] of s.spaces) {
       const mine = this.spaces.get(uri);
@@ -250,6 +316,7 @@ export class Installation {
     st.approvers.clear();
     st.fcHolds.clear();
     this.inviteOutbox = [];
+    this.mon = emptyWitnessState();
     this.lostState = true;
   }
 
@@ -267,7 +334,7 @@ export class Installation {
    * counts only if it admits the account, so none is made for a member.
    * Returns whether the account was admitted now. */
   invite(space: string, account: Did): boolean {
-    if (this.net.policy !== "inviters") {
+    if (!hasStanding(this.net.policy)) {
       this.net.host.setMembership(this.did, space, account, true);
       return true;
     }
@@ -491,15 +558,25 @@ export class Installation {
   sync(): boolean {
     if (!this.online) return false;
     const before = this.fingerprint();
-    if (this.net.policy === "inviters") {
+    const now = this.net.now();
+    if (!this.running) {
+      if (this.witnessed) this.restart();
+      this.runs.push({ from: now, to: now });
+    }
+    this.running = true;
+    this.runs[this.runs.length - 1].to = now;
+    if (hasStanding(this.net.policy)) {
       // Credit time up to now before any observation can revoke.
       this.trust.tick();
       this.flushInvites();
       this.adoptOwnInvites();
     }
     for (const did of this.trackedAccounts()) this.observeAccount(did);
-    if (this.net.policy === "inviters") this.capturePending();
+    if (hasStanding(this.net.policy)) this.capturePending();
     for (const sp of this.spaces.values()) this.syncSpace(sp);
+    this.reportAccepts(null, "transferred or adopted");
+    if (this.witnessed) this.checkpoint();
+    this.lastRun = this.net.now();
     return this.fingerprint() !== before;
   }
 
@@ -518,10 +595,229 @@ export class Installation {
   }
 
   private observeAccount(did: Did): void {
+    if (this.witnessed) return this.followAccount(did);
     const snap = this.net.enumerate(this.id, did);
     const key = this.net.repoKey(did);
     if (!snap || !key || !verifySnapshot(snap, did, key)) return;
     this.trust.observe(did, snap);
+    this.reportAccepts(null, "observed");
+  }
+
+  // ---- witness policy (proposal-reliable-detection.md) ---------------------
+
+  /** Ground truth: report bindings of other accounts accepted since last time. */
+  private reportAccepts(seq: number | null, via: string, account?: Did): void {
+    for (const [id, a] of this.trust.state.accepted) {
+      if (this.reported.has(id) || a.binding.account === this.did || (account && a.binding.account !== account)) continue;
+      if (this.trust.state.revoked.has(id)) continue; // accepted already revoked: never usable
+      this.reported.add(id);
+      this.net.accepted?.(this, a.binding, seq, via);
+    }
+  }
+
+  /** Decisions on witnessed state: apply a commit the trusted witness
+   * reports as published and reconstructed. */
+  private observeWitnessed(did: Did, snap: Snapshot, seq: number, via: string): void {
+    this.reportAccepts(null, "transferred or adopted");
+    this.trust.observe(did, snap);
+    this.reportAccepts(seq, via, did);
+  }
+
+  /** Follow one account's history through the trusted witness: from the
+   * saved cursor, every entry in order, each state applied and each gap
+   * recorded. An account met for the first time starts at its latest
+   * published commit, which must be reconstructed (INCOMPLETE otherwise);
+   * the own account with no cursor replays its whole retained history
+   * (fresh enrollment). */
+  private followAccount(did: Did): void {
+    const w = this.net.witness?.(this.id) ?? null;
+    if (!w) {
+      this.mon.reachable = false;
+      return;
+    }
+    this.mon.reachable = true;
+    const own = did === this.did;
+    // A pinned account's history is followed from its cursor; an account
+    // never pinned (a cursor kept while it had no devices, or copied by
+    // pairing) is met afresh at its latest published commit.
+    let cursor = own || this.trust.knew(did) ? this.mon.cursors.get(did) : undefined;
+    if (cursor === undefined) {
+      if (own) return this.enroll(w);
+      const start = w.latest(this.id, did);
+      if (!start) {
+        this.mon.incomplete.add(did);
+        this.decide(`INCOMPLETE ${did}: its latest published commit is not reconstructed`);
+        return;
+      }
+      this.observeWitnessed(did, start.snap, start.seq, "first contact");
+      this.mon.cursors.set(did, start.seq);
+      this.crossCheck(w, did);
+      return;
+    }
+    let frontierAge = Infinity;
+    let applied = false;
+    for (let more = true; more; ) {
+      const r = w.history(this.id, did, cursor);
+      if (r.truncatedTo !== null && r.truncatedTo > cursor)
+        this.recordGap(did, cursor + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
+      for (const e of own ? this.ownEntries(r.entries) : this.pinnedEntries(r.entries)) {
+        if (e.kind === "state") {
+          this.observeWitnessed(did, e.snap, e.seq, e.via);
+          applied = true;
+        } else this.recordGap(did, e.seq, e.toSeq, e.rev, e.reason);
+      }
+      cursor = r.head;
+      more = r.more;
+      if (!more) frontierAge = r.frontierAge;
+    }
+    this.mon.cursors.set(did, cursor);
+    // Nothing new: re-apply the rules to the witnessed view (holds elapse).
+    if (!applied) this.trust.refresh(did);
+    if (own) this.advance(frontierAge);
+    this.crossCheck(w, did);
+  }
+
+  /** Own account: every reconstructed commit, not only the latest. */
+  private ownEntries(es: HistoryEntry[]): HistoryEntry[] {
+    return es; // own: every entry
+  }
+
+  /** Pinned accounts: every commit in order, each applied or a gap; never a
+   * later snapshot alone. */
+  private pinnedEntries(es: HistoryEntry[]): HistoryEntry[] {
+    return es; // pinned: every entry
+  }
+
+  /** Fresh enrollment: replay the own account's retained history and
+   * present every binding that appeared in it, including deleted ones. */
+  private enroll(w: WitnessApi): void {
+    let cursor: number | null = null;
+    const seen = new Map<string, Binding>();
+    let last: { snap: Snapshot; seq: number } | null = null;
+    let frontierAge = Infinity;
+    for (let more = true; more; ) {
+      const r = w.history(this.id, this.did, cursor);
+      for (const e of r.entries) {
+        if (e.kind === "gap") {
+          this.recordGap(this.did, e.seq, e.toSeq, e.rev, e.reason);
+          continue;
+        }
+        last = { snap: e.snap, seq: e.seq };
+        for (const [k, v] of recordsIn(e.snap, COL.device)) {
+          const b = (v as { value?: Binding }).value;
+          if (b?.device?.deviceId === k && b.account === this.did) seen.set(bindingId(b), b);
+        }
+      }
+      cursor = Math.max(cursor ?? 0, r.head);
+      more = r.more;
+      if (!more) frontierAge = r.frontierAge;
+    }
+    if (!last) return; // nothing reconstructed yet: INCOMPLETE
+    this.observeWitnessed(this.did, last.snap, last.seq, "enrollment");
+    const now = this.trust.state.views.get(this.did)!;
+    for (const [id, b] of seen) {
+      if (sameBinding(b, this.binding) || this.trust.state.approvedByMe.has(id)) continue;
+      if (now.present.get(b.device.deviceId) && sameBinding(now.present.get(b.device.deviceId)!, b)) continue; // current: as starting over or first sync does
+      this.trust.notice(`history:${id}`, "history-binding",
+        `${label(b)} was on your account before this device was set up, and has since been removed. Not yours? Your account was impersonated.`, { about: b });
+    }
+    this.mon.cursors.set(this.did, cursor ?? 0);
+    this.advance(frontierAge);
+  }
+
+  /** Record a gap: the own account's raise their own warning; a pinned
+   * account's are intervals audit reports as unchecked. */
+  private recordGap(did: Did, fromSeq: number, toSeq: number, rev: number | null, reason: string): void {
+    const key = `${did}:${fromSeq}-${toSeq}`;
+    const g = { key, account: did, fromSeq, toSeq, rev, reason, at: this.localNow(), world: this.net.now() };
+    if (did === this.did) {
+      if (!this.mon.gaps.some((x) => x.key === key)) this.mon.gaps.push({ ...g, acked: false });
+    } else if (!this.mon.auditGaps.some((x) => x.key === key)) this.mon.auditGaps.push(g);
+  }
+
+  /** The PDS may still serve records, but a commit it serves is checked
+   * against the witness: a different commit at a witnessed revision is a
+   * fork; one the witness does not yet report is INCOMPLETE. */
+  private crossCheck(w: WitnessApi, did: Did): void {
+    const snap = this.net.enumerate(this.id, did);
+    const key = this.net.repoKey(did);
+    if (!snap || !key || !verifySnapshot(snap, did, key)) return;
+    const rev = snap.commit.rev;
+    const vouch = w.commitAt(this.id, did, rev);
+    if (vouch.status === "reconstructed") {
+      this.mon.incomplete.delete(did);
+      if (vouch.data !== snap.commit.data)
+        this.trust.raise(`fork:${did}:${rev}`, "fork", `${did}'s PDS served a commit at revision ${rev} that differs from the one the relay published.`, did);
+      return;
+    }
+    if (vouch.status === "unknown" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {
+      this.mon.incomplete.add(did);
+      this.decide(`INCOMPLETE ${did}@${rev}: the witness does not report this commit`);
+      return;
+    }
+    this.mon.incomplete.delete(did);
+  }
+
+  /** Coverage age for the own account, in hours. */
+  coverageAge(): number {
+    const c = this.mon.coverage;
+    if (!c) return Infinity;
+    return c.base + Math.max(0, this.net.now() - c.mono);
+  }
+
+  /** Advance the monitoring frontier after processing everything the
+   * witness reported. Only better coverage counts: a quick answer with a
+   * stale frontier changes nothing. */
+  private advance(frontierAge: number): void {
+    const now = this.net.now();
+    if (frontierAge < this.coverageAge()) this.mon.coverage = { base: frontierAge, mono: now };
+    this.segment();
+  }
+
+  /** Ground truth for the goal check: a new segment whenever coverage or
+   * the own cursor changes. */
+  private segment(): void {
+    const now = this.net.now();
+    const cursor = this.mon.cursors.get(this.did) ?? -1;
+    const base = this.coverageAge();
+    const last = this.segments[this.segments.length - 1];
+    if (last && last.cursor === cursor && Math.abs(last.base + (now - last.world) - base) < 1e-9) return;
+    this.segments.push({ world: now, base, cursor });
+  }
+
+  /** Save the coverage checkpoint (wall clock), for restarts and backups. */
+  private checkpoint(): void {
+    this.mon.checkpoint = { wall: this.localNow(), age: this.coverageAge() };
+  }
+
+  /** A restart: carry coverage by the wall-clock interval since the last
+   * checkpoint; if that can't be established, coverage is unknown. */
+  private restart(): void {
+    const cp = this.mon.checkpoint;
+    const d = cp ? this.localNow() - cp.wall : -1;
+    this.mon.coverage = cp && d >= 0 && Number.isFinite(cp.age) ? { base: cp.age + d, mono: this.net.now() } : null;
+    this.segment();
+  }
+
+  /** The liveness warning, or null: shown whenever coverage age exceeds 24
+   * hours, naming what failed. It cannot be dismissed, and acknowledging a
+   * gap does not affect it. */
+  liveness(): string | null {
+    if (!this.witnessed) return null;
+    const age = this.coverageAge();
+    if (age <= LIVENESS_LIMIT) return null;
+    return this.mon.reachable ? "Your app's witness is not live: device changes on your account can't be checked." : "Your app's witness is unreachable: device changes on your account can't be checked.";
+  }
+
+  /** Own-account gap warnings not yet acknowledged. */
+  gapWarnings(): GapWarning[] {
+    return this.mon.gaps.filter((g) => !g.acked);
+  }
+
+  /** Acknowledge one gap warning; it acknowledges only that gap. */
+  acknowledgeGap(key: string): void {
+    const g = this.mon.gaps.find((x) => x.key === key);
+    if (g) g.acked = true;
   }
 
   private refreshHost(sp: SpaceLocal): void {
@@ -727,7 +1023,7 @@ export class Installation {
     const st = this.trust.state;
     const holds = [...st.holds].map(([d, h]) => `${d}:${h.candidate.join(",")}:${h.credited >= REENROLL_HOLD}`).join(";");
     const keys = [...this.spaces.values()].map((s) => `${s.uri}:${!!s.key}:${s.requested}:${[...s.issuances.values()].map((i) => i.state).join("")}:${s.stopped.length}`).join(";");
-    return [st.accepted.size, st.revoked.size, holds, keys, this.writes, st.alarms.length, st.notices.length, this.inviteOutbox.length].join("|");
+    return [st.accepted.size, st.revoked.size, holds, keys, this.writes, st.alarms.length, st.notices.length, this.inviteOutbox.length, this.mon.gaps.length, [...this.mon.cursors.values()].join(",")].join("|");
   }
 }
 

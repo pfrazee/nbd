@@ -16,6 +16,7 @@ THEORY=nbd.spthy
 CAP=${CAP:-1800}
 JOBS=${JOBS:-1}
 ORACLE="--heuristic=o --oraclename=oracle.py"
+WORACLE="--heuristic=o --oraclename=oracle_witness.py"
 RTSOPTS=${RTS:+"+RTS $RTS -RTS"}
 
 # label | lemma | extra tamarin-prover arguments
@@ -46,6 +47,18 @@ LEMMAS=(
   "PREINVITERS|key_leaks_only_via_holders_or_grants|-D=PREINVITERS"
   "PREINVITERS|adversary_grant_targets_justified|-D=PREINVITERS $ORACLE"
   "PREINVITERS|first_contact_substitution|-D=PREINVITERS"
+  "WITNESS|witness_executable_acceptance|-D=WITNESS"
+  "WITNESS|witness_executable_owner_alarm|-D=WITNESS"
+  "WITNESS|witness_executable_owner_gap|-D=WITNESS"
+  "WITNESS|witness_accepts_only_relayed|-D=WITNESS"
+  "WITNESS|witness_revokes_only_relayed|-D=WITNESS"
+  "WITNESS|witness_owner_step|-D=WITNESS"
+  "WITNESS|witness_detects_impostor|-D=WITNESS $WORACLE"
+  "WITNESS|witness_detects_hidden_deletion|-D=WITNESS $WORACLE"
+  "ANYWITNESS|anywitness_accepts_unrelayed|-D=WITNESS -D=ANYWITNESS"
+  "TWORELAYS|tworelays_hides_impostor|-D=WITNESS -D=TWORELAYS"
+  "SKIPGAP|skipgap_hides_impostor|-D=WITNESS -D=SKIPGAP"
+  "LATESTART|latestart_hides_impostor|-D=WITNESS -D=LATESTART"
 )
 
 # Stop a command after $1 seconds (macOS has no timeout(1)).

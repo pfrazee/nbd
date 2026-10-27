@@ -27,7 +27,7 @@ import type { Installation } from "../protocol/installation";
 import { ref } from "../protocol/encoding";
 import { recordsIn } from "../protocol/repo";
 import { REENROLL_HOLD } from "../protocol/trust";
-import { type Binding, COL, type SpaceKeyGrant, asCbor, bindingId } from "../protocol/types";
+import { type Binding, COL, type SpaceKeyGrant, asCbor, bindingId, hasStanding } from "../protocol/types";
 import type { World } from "../world/world";
 
 const EPS = 1e-9;
@@ -99,14 +99,14 @@ export class DisclosureCheck {
     const knew = this.firstKnown.get(issuer.id)?.get(account) ?? Infinity;
     const who = `${issuer.id} granted to attacker device ${account.slice(8)}/${x.slice(0, 6)}`;
 
-    if (w.policy === "inviters") {
+    if (hasStanding(w.policy)) {
       if (this.authorized(issuer, g.space, account, x, knew)) return null; // the inviter's first contact
     } else if (knew > appearedSeq) return null; // first contact
     if (w.t - appeared >= REENROLL_HOLD - EPS) return null; // a hold could have elapsed
     const approvals = p.approvals.filter((a) => a.target === x);
     if (approvals.some((a) => a.compromised && a.standing)) return null; // compromised signer, not a reset
     if (approvals.some((a) => p.attacker.has(a.signer) && this.liveAt(issuer, account, a.signer))) return null; // chain
-    if (w.policy === "inviters") return `${who} in ${g.space} ${(w.t - appeared).toFixed(1)}h after it appeared, with no record authorizing it there`;
+    if (hasStanding(w.policy)) return `${who} in ${g.space} ${(w.t - appeared).toFixed(1)}h after it appeared, with no record authorizing it there`;
     return `${who} ${(w.t - appeared).toFixed(1)}h after it appeared, though it already knew ${account.slice(8)}`;
   }
 

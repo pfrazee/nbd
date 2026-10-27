@@ -59,8 +59,8 @@ With every entry running at once, the whole run takes about as long as its slowe
 - **The moment of the vouch.** The model lets a vouch come any time after the first use, and the invite it names any time before or after it, rather than only together. That only adds behaviors, so the lemmas below still cover the rule. It also covers the distinction between an invite made at first contact and a pending invite captured later, so the model does not separate them.
 - **Several installations of one account.** Each client device stands for its account; invite records carried between an account's installations, and imports, are not modeled.
 - **The single-root rule.** First use accepts whatever binding the adversary offers, the worst case and exactly the documented non-goal.
-- **Repo mechanics:** revisions, rollback refusal, forks, and evidence beyond what the grant header binds.
-- **Publication retries, content encryption and padding, hold notices, verified-only spaces, and auditing and detection.**
+- **Repo mechanics:** revisions, rollback refusal, forks, and evidence beyond what the grant header binds. The [`WITNESS` variant](#relay-witnessed-repos-proposal) adds a relay log and witnesses for the proposal under review.
+- **Publication retries, content encryption and padding, hold notices, verified-only spaces, and auditing and detection** (detection only under `WITNESS`).
 
 ## Lemmas and results
 
@@ -108,6 +108,46 @@ Each variant is the same model built with one flag, and each restores a rule the
 | `-D=PREINVITERS` | `adversary_grant_targets_justified` | 2b for that rule: an issuer grants to an encryption key the adversary created only if it accepted that binding by first use, after a hold, or through an approval by a compromised or adversary signing key. | verified, 38 steps |
 | `-D=PREINVITERS` | `first_contact_substitution` | Under that rule, any member's first-use substitution discloses a space key with no compromise: the exposure grant standing narrows to the inviter. | verified (attack found), 6 steps |
 
+### Relay-witnessed repos (proposal)
+
+`-D=WITNESS` models [Relay-Witnessed Repos](../proposal-reliable-detection.md), a proposal under review, on top of the main model, and answers its Validation section: the relay is an append-only log the adversary writes to but cannot fork, and every binding an honest client accepts either appears in, or leaves a gap in, the history the owner's installations read. The flag adds rules and restrictions only, touching no fact of the base model, so every universal lemma above still holds under it; they are not rerun.
+
+**What it models.**
+
+- **Relays.** The adversary, as every PDS, chooses what each relay publishes for each account, at which position and when (`Relay`). A position, once published, has one value (restriction `RelayPositionOnce`), so a relay never forks. The reference relay is `'ref'`.
+- **Entries.** A relayed entry is one record change in an account's repo: a binding (a device record added) or its deletion, `<'deleted', binding>`. Positions are a counter (`s('z')`, `s(s('z'))`, ...) standing for the account's next event in the relay's one stream, so skipped sequence numbers do not appear.
+- **Witnesses**, any number, all honest. Each follows one relay for each account, from the account's first position, through a cursor (`WitCur`). At each position it reconstructs the relayed entry (`Recon`), if the adversary chose to serve it, or records a gap (`Gap`). A gap needs no relayed entry, so stream gaps and gaps at positions the relay fills later are covered. A witness never reconstructs what was not relayed, and every witness tails the reference relay (restriction `ReferenceRelayOnly`). Each record names the position before it, so a reader follows the history without skipping.
+- **Decisions on witnessed state.** Each device trusts exactly one witness (`UseWitness`, restriction `OneWitness`). Accepting a binding (first use, approval, or re-enrollment completion), starting a re-enrollment hold on a candidate, and treating a binding as deleted (revocation, hold cancellation) each need an entry for it that the client's own witness reconstructed earlier (restrictions `AcceptOnWitnessed`, `HoldOnWitnessed`, `RevokeOnWitnessed`, on the base model's `Accept`, `HoldStart`, and `Revoke` actions).
+- **Watching your own account.** Each device follows its own account's history through its witness, in order, from the first position (`OwnCur`, `OwnerAt`). `OwnerSees` is the own-account check on each reconstructed entry: an alarm when the entry is a binding no installation of the account created (no `Device` action for it), or a deletion. `OwnerGap` is the gap warning.
+
+**What it abstracts away**, tested in the [Python model](../model/README.md) and the [prototype](../prototype/README.md) instead:
+
+- **Time:** the 24-hour deadline, frontier and coverage age, liveness and the 60-second frame test, and the hourly frontier. The lemmas say what an installation sees once its frontier reaches a position, and that it reaches every position on the way, not that it gets there; a frontier is a relay position here, not a moment on a witness's clock.
+- **Retention, restore and pairing cursors,** and backups. Every witness and every installation starts at the account's first position, as fresh enrollment replays the history (`LATESTART` drops this).
+- **Commit structure:** batched operations, inversion, `#sync` fetches, and the PDS replacing a root before serving it, all of which come down to the adversary choosing between reconstruction and a gap. Forks against reported commits and the integrity alarm.
+- **What approval needs witnessed:** the model requires the approved binding's device record in a reconstructed entry, not the approval record as well.
+- **Several installations** still stand for one another as in the main model; `OwnerSees` is the check any installation of the account makes, and the account's recognized devices are exactly those its honest installations created.
+
+| Lemma | Claim | Proposal rule | Result |
+| --- | --- | --- | --- |
+| `witness_executable_acceptance` | A client accepts an honest device of another account by first use, on its witness's reconstruction, and an installation of that account sees the same entry, with no alarm, no gap, and no compromise. | sanity | verified, 16 steps |
+| `witness_executable_owner_alarm` | A client accepts an impostor binding, and an installation of the account sees it in its witnessed history: the alarm. | sanity | verified, 16 steps |
+| `witness_executable_owner_gap` | The client's witness reconstructs the impostor's entry, the owner's records a gap at its position, and the owner sees the gap. | sanity | verified, 16 steps |
+| `witness_accepts_only_relayed` | Every accepted binding was published by the reference relay, and reconstructed by the client's own witness, before the acceptance. | Decisions on witnessed state, trusted witnesses | verified, 4 steps |
+| `witness_revokes_only_relayed` | Every revocation's deletion was relayed and reconstructed by the client's witness first. | Decisions on witnessed state | verified, 4 steps |
+| `witness_owner_step` | An installation's frontier never skips a position: to reach position `s(q)`, it first reached `q`. | Monitoring and history, reconstructed commits | verified, 12 steps |
+| `witness_detects_impostor` | If an honest client accepts a binding of an account that none of its installations created, the reference relay published it at a position before the acceptance, and every installation of the account whose frontier reaches that position saw it there (the alarm) or saw a gap there (the warning), whichever witness each uses. With `witness_owner_step`, the same holds once a frontier has passed the position. | Goal; reference relay, watching your own account | verified, 5 steps |
+| `witness_detects_hidden_deletion` | If an honest client treats a binding of an account as deleted, every installation of the account whose frontier reaches the deletion's position saw the deletion or a gap there, and with `witness_owner_step` once it has passed it: a reset the PDS hides from its user is detected. | Watching your own account (non-goal 2) | verified, 5 steps |
+
+Each further variant is built with `-D=WITNESS` and one more flag, and restores a rule the proposal rejects or leaves open:
+
+| Variant | Lemma | Claim | Result |
+| --- | --- | --- | --- |
+| `-D=ANYWITNESS` | `anywitness_accepts_unrelayed` | If a client took any source's word that an entry was published, it would accept an impostor binding of an account for which nothing at all was relayed, so no installation of the account could see it or a gap where it should be. | verified (attack found), 4 steps |
+| `-D=TWORELAYS` | `tworelays_hides_impostor` | If witnesses could tail different relays, a client would accept an impostor binding one relay published at a position that an installation of the account processes, through a witness on another relay, without ever seeing the binding or any gap. | verified (attack found), 15 steps |
+| `-D=SKIPGAP` | `skipgap_hides_impostor` | If a witness could skip to a later snapshot without recording the interval as a gap, an installation of the account would pass the impostor's position without seeing it or any gap. | verified (attack found), 16 steps |
+| `-D=LATESTART` | `latestart_hides_impostor` | If a witness's history for an account began at a later snapshot with nothing recorded before it, as the proposal now allows for "an account the witness starts following", the same: an installation of the account passes the impostor's position, published and deleted before the snapshot, without seeing it or any gap. | verified (attack found), 16 steps |
+
 ## Notes on the proofs
 
 - **Sessions are unbounded** in every lemma above. To keep searches finite, acceptance is persistent and "never after revocation" is a restriction rather than a consumed fact, and live-binding counts use a free successor function (`z`, `s(z)`, ...) rather than an associative-commutative multiset.
@@ -116,3 +156,8 @@ Each variant is the same model built with one flag, and each restores a rule the
 - **`inviters_standing_scoped` is proved by induction and reused** by `inviters_grant_scope`, the only lemma after it. Standing roots are written as bindings (`<account, pk(sign), pk(enc)>`) in `InheritStanding` and the grant restriction; with an unstructured root, the reused lemma does not apply until Tamarin unrolls the approval chain, and the grant lemma does not finish.
 - **The existence lemmas name their witness** and exclude unneeded events (other approvals, grants, holds, revocations, compromise). The exclusions only prune the search; each trace still shows what its lemma claims.
 - **Tamarin warns** that a counter `n` matched inside `s(n)` is not derivable by the adversary. This is intended: the counter is client state, not a message.
+- **Under `WITNESS`, decisions are gated by restrictions** on the base model's `Accept`, `HoldStart`, and `Revoke` actions, not by new premises, so the base rules, and the sources Tamarin precomputes for them, are unchanged. The relay has no head fact: the adversary names each position, and `RelayPositionOnce` makes it unforgeable. A linear head would make the log sequential too, but only adds a backward chain; with one value per position and witnesses that read positions in order, the two are the same to every reader.
+- **Positions are counters, and "passed `n`" is one induction made outside Tamarin.** The detection lemmas say what an installation sees when its frontier reaches `n`; `witness_owner_step` says a frontier reaches every position on the way, by a direct case split, since witness records carry the position before them. Together they give the claim for a frontier that passed `n`, by induction on positions. Stated in Tamarin as one lemma, "passed `n`" is `n << m` on the counter, and `n` must be guarded by the relay event at `n`; that event has its own timepoint, Tamarin's trace induction cannot apply its hypothesis when the event comes last, and the search unrolls positions without end, with or without an oracle. `witness_owner_step`, `witness_accepts_only_relayed`, and `witness_revokes_only_relayed` are reused by the detection lemmas.
+- **The detection lemmas use [`oracle_witness.py`](oracle_witness.py),** which solves witness records (`!WRec`) first and defers both cursors (`OwnCur`, `WitCur`), which walk back one position at a time, along with adversary knowledge, which leads into the base model's public-key and grant chains. Unlike `oracle.py`, it puts adversary knowledge last.
+- **The `WITNESS` results were run on a laptop,** in Docker with one CPU and a 6 GB heap (`RTS="-N1 -M6g -c"`), one lemma at a time; each took under two minutes except `skipgap_hides_impostor`, about five. Even an existence lemma (`witness_executable_owner_alarm`) ran out of memory in Docker Desktop's default 2 GB VM.
+- **The `WITNESS` lemmas are guarded** to exclude its attack variants, since a reused lemma is assumed, not reproved, in each run, and is false under them.

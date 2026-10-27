@@ -14,7 +14,7 @@
 import { Rng } from "../protocol/crypto";
 import type { Installation } from "../protocol/installation";
 import { commitment } from "../protocol/grants";
-import { type Binding, COL, type Policy, bindingId } from "../protocol/types";
+import { type Binding, COL, type Policy, bindingId, hasStanding } from "../protocol/types";
 import type { InviteOp, TraceBinding, TraceOp } from "../world/world";
 import { World } from "../world/world";
 import { InvariantMonitor } from "./invariants";
@@ -26,7 +26,11 @@ export type Action = (string | number | boolean)[];
  * invite is `{op: "flush"}`, or `{op: "flush", abandoned: true}` if that
  * invite no longer admitted its account and was dropped unsent. */
 export type TraceStepOp = Exclude<TraceOp, { op: "flush" }> | { op: "flush"; abandoned?: true };
-export type TraceStep = { ops: TraceStepOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]>; authorized?: Record<string, TraceBinding[]> };
+export type TraceStep = {
+  ops: TraceStepOp[]; accepted: TraceBinding[]; holds: string[]; tracked?: string[]; standing?: Record<string, TraceBinding[]>; authorized?: Record<string, TraceBinding[]>;
+  /** Witness policy: the viewer's own-account bindings it has alarmed about. */
+  ownAlarms?: TraceBinding[];
+};
 export type Trace = { seed: string; policy?: Policy; spaces?: string[]; viewer: TraceBinding; actions?: Action[]; steps: TraceStep[] };
 
 const ACCOUNTS = ["alice", "bob", "carol"];
@@ -37,6 +41,8 @@ const NO_DEVICE = "erin";
 const SPACE_LABELS = ["A", "B"];
 const WAITS = [1, 24, 48, 71, 72, 100];
 const did = (a: string) => `did:plc:${a}`;
+/** Witness policy: Alice and Bob use Lantern; the rest another app. */
+const appOf = (d: string) => (d === did("alice") || d === did("bob") ? "lantern" : "other");
 
 export class Walk {
   readonly world: World;
@@ -51,10 +57,10 @@ export class Walk {
   constructor(readonly seed: string, readonly shared: boolean, readonly policy: Policy = "inviters") {
     const w = (this.world = new World(seed, { policy }));
     if (shared) w.trace = [];
-    const inviters = policy === "inviters";
+    const inviters = hasStanding(policy);
     this.accounts = inviters ? INVITER_ACCOUNTS : ACCOUNTS;
     const dids = this.accounts.map((a) => w.account(a, a === "alice" ? "pds.example" : `pds.${a}.example`));
-    const phones = dids.filter((d) => d !== did(NO_DEVICE)).map((d) => w.install(d, "phone"));
+    const phones = dids.filter((d) => d !== did(NO_DEVICE)).map((d) => w.install(d, "phone", { app: appOf(d) }));
     this.viewer = phones[0];
     if (inviters) {
       // Alice and Bob share Club; Carol and Dave share Garden. Alice starts
@@ -100,7 +106,15 @@ export class Walk {
       ["takeover", 1], ["steal", 1], ["approve", 2], ["recreate", 2], ["attackerAdd", 1], ["skew", 1],
       ["forget", 1], ["fault", 1], ["rotate", 1],
     ];
-    if (this.policy === "inviters") kinds.push(["invite", 3], ["faultInvite", 2]);
+    if (hasStanding(this.policy)) kinds.push(["invite", 3], ["faultInvite", 2]);
+    if (this.policy === "witness") {
+      // Malicious PDSes against the relay, and witness conditions. The
+      // shared view keeps to public-repo writes (a brief impostor is one).
+      kinds.push(["flash", 2], ["unflash", 2]);
+      if (!this.shared)
+        kinds.push(["wfork", 1], ["unrelayed", 1], ["syncReplaced", 1], ["syncRoot", 1], ["replaceRoot", 1], ["withholdFetch", 1],
+          ["witnessConn", 1], ["witnessReach", 1], ["witnessLag", 1]);
+    }
     if (!this.shared)
       kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
         ["tamper", 1], ["migrate", 1]);
@@ -119,7 +133,7 @@ export class Walk {
         return insts.length ? [kind, pick(insts).id] : ["wait", 1];
       case "join": {
         const s = rng.int(this.spaces.length);
-        const admitted = (i: Installation) => this.policy !== "inviters" || !!w.host.membership(this.spaces[s], i.did)?.eligible;
+        const admitted = (i: Installation) => !hasStanding(this.policy) || !!w.host.membership(this.spaces[s], i.did)?.eligible;
         const out = insts.filter((i) => !i.spaces.has(this.spaces[s]) && admitted(i));
         return out.length ? ["join", pick(out).id, s] : ["post", pick(insts).id, s];
       }
@@ -200,6 +214,32 @@ export class Walk {
         return w.backups.length ? ["restore", rng.int(w.backups.length)] : ["backup", pick(insts).id];
       case "member":
         return ["member", acct, rng.int(2) === 0];
+      case "flash":
+        return ["flash", acct, `f${this.name()}`];
+      case "unflash":
+        return this.flashes.length ? ["unflash", rng.int(this.flashes.length)] : ["wait", 1];
+      case "wfork": {
+        const victims = insts.filter((i) => i.did !== did(acct));
+        return victims.length ? ["wfork", acct, pick(victims).id, `wf${this.name()}`] : ["wait", 1];
+      }
+      case "unrelayed": {
+        const victims = insts.filter((i) => i.did !== did(acct));
+        return victims.length ? ["unrelayed", acct, pick(victims).id, `ur${this.name()}`] : ["wait", 1];
+      }
+      case "syncReplaced":
+        return ["syncReplaced", acct, `sr${this.name()}`];
+      case "syncRoot":
+        return ["syncRoot", acct, pick(["", "witness.lantern", "witness.other"]), `sy${this.name()}`];
+      case "replaceRoot":
+        return ["replaceRoot", acct];
+      case "withholdFetch":
+        return ["withholdFetch", acct, pick(["lantern", "other"])];
+      case "witnessConn":
+        return ["witnessConn", pick(["lantern", "other"]), rng.int(2) === 0];
+      case "witnessReach":
+        return ["witnessReach", pick(["lantern", "other"]), rng.int(2) === 0];
+      case "witnessLag":
+        return ["witnessLag", pick(["lantern", "other"]), pick([0, 1, 6, 30])];
       default:
         return ["wait", pick(WAITS)];
     }
@@ -241,7 +281,22 @@ export class Walk {
     else if (kind === "backup") { const i = inst(a[1]); if (i) w.backup(i); }
     else if (kind === "restore") { const b = w.backups[Number(a[1])]; const f = b && inst(b.from); if (f) w.restore(f, Number(a[1])); }
     else if (kind === "member") { w.host.setMembership(w.host.admin(this.space), this.space, did(String(a[1])), Boolean(a[2])); w.settle(); }
+    else if (kind === "flash") this.flashes.push(w.flashImpostor(did(String(a[1])), String(a[2])).undo);
+    else if (kind === "unflash") { const u = this.flashes.splice(Number(a[1]), 1)[0]; u?.(); }
+    else if (kind === "wfork") { const v = inst(a[2]); if (v) w.forkedImpostor(did(String(a[1])), [v], String(a[3])); }
+    else if (kind === "unrelayed") { const v = inst(a[2]); if (v) w.unrelayedImpostor(did(String(a[1])), [v], String(a[3])); }
+    else if (kind === "syncReplaced") w.syncReplaced(did(String(a[1])), String(a[2]));
+    else if (kind === "syncRoot") w.publishSyncRoot(did(String(a[1])), a[2] ? [String(a[2])] : [], String(a[3]));
+    else if (kind === "replaceRoot") w.replaceSyncRoot(did(String(a[1])));
+    else if (kind === "withholdFetch") this.withheld.push(w.withholdFetch(did(String(a[1])), String(a[2])));
+    else if (kind === "witnessConn") w.setWitness(String(a[1]), { connected: Boolean(a[2]) });
+    else if (kind === "witnessReach") w.setWitness(String(a[1]), { reachable: Boolean(a[2]) });
+    else if (kind === "witnessLag") w.setWitness(String(a[1]), { lag: Number(a[2]) });
   }
+
+  /** Undo functions of brief impostors still published. */
+  private flashes: (() => void)[] = [];
+  private withheld: (() => void)[] = [];
 
   /** Apply one action and return the first problem it reveals. */
   step(a: Action): string | null {
@@ -314,7 +369,7 @@ export class Walk {
     const all = w.allBindings();
     const accepted = all.filter((b: Binding) => this.viewer.trust.isAccepted(b)).map(tb);
     const holds = this.accounts.filter((a) => this.viewer.trust.hold(did(a)));
-    if (this.policy !== "inviters") {
+    if (!hasStanding(this.policy)) {
       this.trace!.steps.push({ ops, accepted, holds });
       return;
     }
@@ -326,6 +381,14 @@ export class Walk {
       const ids = this.viewer.trust.state.authorized.get(s);
       authorized[SPACE_LABELS[n]] = all.filter((b) => ids?.has(bindingId(b))).map(tb);
     });
+    if (this.policy === "witness") {
+      // Own-account watching: the viewer's own bindings it alarmed about as
+      // unrecognised, in any witnessed commit so far.
+      const alarmed = new Set(this.viewer.trust.state.alarms.filter((x) => x.kind === "unapproved-own").map((x) => x.device));
+      const ownAlarms = all.filter((b) => b.account === this.viewer.did && alarmed.has(b.device.deviceId)).map(tb);
+      this.trace!.steps.push({ ops, accepted, holds, tracked, standing, authorized, ownAlarms });
+      return;
+    }
     this.trace!.steps.push({ ops, accepted, holds, tracked, standing, authorized });
   }
 }

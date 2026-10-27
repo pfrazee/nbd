@@ -2,7 +2,8 @@
 // NBD_WRITE_TRACES=1 this writes fresh fixtures; otherwise it checks that
 // each committed fixture still regenerates identically from its seed, so
 // the fixtures cannot drift from the prototype. `traces/` follows the
-// baseline; `traces-inviters/` the inviters policy (README.md#inviters-traces).
+// baseline; `traces-inviters/` the inviters policy (README.md#inviters-traces);
+// `traces-witness/` the witness policy (README.md#witness-traces).
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +22,7 @@ function generate(seed: string, policy: Policy): Trace {
 describe.each([
   ["traces", "trace", "baseline"],
   ["traces-inviters", "inviters", "inviters"],
+  ["traces-witness", "witness", "witness"],
 ] as const)("shared-view traces in %s/", (dir, prefix, policy) => {
   const DIR = join(__dirname, "..", dir);
 

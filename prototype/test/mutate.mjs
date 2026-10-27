@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const TRUST = "src/protocol/trust.ts";
 const CLIENT = "src/protocol/installation.ts";
 const GRANTS = "src/protocol/grants.ts";
+const RELAY = "src/world/relay.ts";
 // name: [from, to] in trust.ts, or [file, from, to].
 const MUTATIONS = {
   "approvals during re-enrollment": ["if (this.live(account).length === 0) return; // re-enrollment: only the hold accepts", "// guard removed"],
@@ -52,11 +53,27 @@ const MUTATIONS = {
   "inviters: capture skips the published check": [CLIENT, "        if (!this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === record.captures)) {", "        if (false) {"],
   "inviters: adoption ignores approval chains": ["      } else if (!this.inLineage(b)) continue;", "      } else if (!st.lineage.has(bindingId(b))) continue;"],
   "inviters: lineage ignores approval chains": ["id && !seen.has(id); id = st.approvers.get(id)) {", "id && !seen.has(id); id = undefined) {"],
+  // The witness policy (proposal-reliable-detection.md), one per rule.
+  "witness: accept on a PDS-served commit": [CLIENT, "    if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {\n      this.mon.incomplete.add(did);", "    if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {\n      this.trust.observe(did, snap);"],
+  "witness: any witness trusted": [CLIENT, "const w = this.net.witness?.(this.id) ?? null;", "const w = [this.net.witness?.(this.id) ?? null, ...(this.net.otherWitnesses?.(this.id) ?? [])].filter((x) => x !== null).sort((a, b) => (b!.latest(this.id, did)?.snap.commit.rev ?? 0) - (a!.latest(this.id, did)?.snap.commit.rev ?? 0))[0] ?? null;"],
+  "witness: latest-only watching": [CLIENT, "return es; // own: every entry", "return [...es.filter((e) => e.kind === \"gap\"), ...es.filter((e) => e.kind === \"state\").slice(-1)];"],
+  "witness: snapshot skipping": [CLIENT, "return es; // pinned: every entry", "return es.filter((e) => e.kind === \"state\").slice(-1);"],
+  "witness: gap erased on resync": [RELAY, "private readonly eraseGapsOnResync = false;", "private readonly eraseGapsOnResync = true;"],
+  "witness: deadline reset at check completion": [CLIENT, "this.mon.coverage = { base: frontierAge, mono: now };", "this.mon.coverage = { base: 0, mono: now };"],
+  "witness: restore from now": [CLIENT, "for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, c);", "for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, d === this.did ? Number.MAX_SAFE_INTEGER : c);"],
+  "witness: ack suppresses liveness": [CLIENT, "if (age <= LIVENESS_LIMIT) return null;", "if (age <= LIVENESS_LIMIT || this.mon.gaps.some((g) => g.acked)) return null;"],
+  "witness: ack suppresses later gaps": [CLIENT, "if (!this.mon.gaps.some((x) => x.key === key)) this.mon.gaps.push", "if (!this.mon.gaps.some((x) => x.key === key || x.acked)) this.mon.gaps.push"],
+  "witness: a gap holds the frontier": [CLIENT, "if (frontierAge < this.coverageAge()) this.mon.coverage", "if (frontierAge < this.coverageAge() && !this.mon.gaps.some((g) => !g.acked)) this.mon.coverage"],
+  "witness: fresh enrollment presents only current bindings": [CLIENT, "      this.trust.notice(`history:${id}`, \"history-binding\",", "      if (false) this.trust.notice(`history:${id}`, \"history-binding\","],
+  "witness: restart ignores downtime": [CLIENT, "{ base: cp.age + d, mono: this.net.now() }", "{ base: cp.age, mono: this.net.now() }"],
+  "witness: backward clock trusted across restart": [CLIENT, "cp && d >= 0 && Number.isFinite(cp.age)", "cp && Number.isFinite(cp.age)"],
+  "witness: stream gaps ignored": [RELAY, "if (this.relay.outdated(this.cursor)) {", "if (false) {"],
+  "witness: result not checked against the commit root": [RELAY, "if (next && snapshotData(next) === e.commit.data && invert(", "if (next && invert("],
 };
 
 const all = process.argv.includes("--all");
 const only = process.argv.slice(2).find((a) => !a.startsWith("--"));
-const originals = new Map([TRUST, CLIENT, GRANTS].map((f) => [f, readFileSync(f, "utf8")]));
+const originals = new Map([TRUST, CLIENT, GRANTS, RELAY].map((f) => [f, readFileSync(f, "utf8")]));
 let missed = 0;
 try {
   for (const [name, spec] of Object.entries(MUTATIONS)) {

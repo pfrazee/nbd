@@ -15,7 +15,7 @@
 import { verify } from "./crypto";
 import { type Snapshot, recordsIn } from "./repo";
 import {
-  type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, bindingId, label, sameBinding, withoutProof,
+  type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, bindingId, hasStanding, label, sameBinding, withoutProof,
 } from "./types";
 
 export const REENROLL_HOLD = 72; // hours
@@ -30,10 +30,12 @@ export type FirstContactHold = { credited: number; checkpoint: number };
  * the device that made it, the only one that may capture it; `done` once
  * the account was first pinned here, captured or not. */
 export type PendingInvite = { space: string; account: Did; issuer: string; credited: number; checkpoint: number; done: boolean };
-export type Alarm = { at: number; kind: string; text: string; subject?: Did };
+/** `world`: world time it was raised (ground truth for the checks only);
+ * `device`: the device ID it concerns, if any. */
+export type Alarm = { at: number; kind: string; text: string; subject?: Did; device?: string; world?: number };
 /** `about`, `by`, `account`, and `until` are structured details for
  * interfaces; `text` is the same notice in words. */
-export type Notice = { at: number; kind: string; text: string; about?: Binding; by?: Binding; account?: Did; until?: number };
+export type Notice = { at: number; kind: string; text: string; about?: Binding; by?: Binding; account?: Did; until?: number; world?: number };
 
 /** What this installation last verified about one account's public repo. */
 export type AccountView = {
@@ -163,6 +165,8 @@ export class Trust {
     private readonly own: Binding,
     private readonly localNow: () => number,
     readonly policy: Policy = "inviters",
+    /** World time, recorded on alarms and notices for the goal checks. */
+    private readonly worldNow: () => number = localNow,
   ) {}
 
   // ---- queries -------------------------------------------------------------
@@ -259,6 +263,18 @@ export class Trust {
     return true;
   }
 
+  /** Re-apply the rules to the current view without a new snapshot: holds
+   * complete as time passes even when nothing new was published (witness
+   * policy, where only new witnessed commits are observed). */
+  refresh(account: Did): void {
+    if (!this.state.views.has(account)) return;
+    this.revoke(account);
+    this.applyApprovals(account);
+    if (account === this.own.account) this.ownAccount(account);
+    else this.firstUse(account);
+    this.reconcileHolds();
+  }
+
   private presentBinding(account: Did, b: Binding): boolean {
     const p = this.state.views.get(account)?.present.get(b.device.deviceId);
     return !!p && sameBinding(p, b);
@@ -297,7 +313,7 @@ export class Trust {
         const tid = bindingId(ap.target);
         if (st.accepted.has(bindingId(ap.signer)) && !st.accepted.has(tid)) {
           st.accepted.set(tid, { binding: ap.target, evidence: `approved by ${label(ap.signer)}` });
-          if (this.policy === "inviters") {
+          if (hasStanding(this.policy)) {
             // The target inherits its signer's standing, and starts its own
             // first-contact hold in case the signer is removed first.
             st.approvers.set(tid, bindingId(ap.signer));
@@ -356,7 +372,7 @@ export class Trust {
     if (!this.knew(account)) {
       if (cand) for (const b of cand) {
         st.accepted.set(bindingId(b), { binding: b, evidence: "first use" });
-        if (this.policy === "inviters") {
+        if (hasStanding(this.policy)) {
           this.startFirstContactHold(b);
           st.lineage.add(bindingId(b));
         }
@@ -397,7 +413,7 @@ export class Trust {
       } else if (!(so && !so.done && so.list!.has(id))) {
         // On a start-over list until the user has removed it; after that, or
         // for anything not on the list, an unaccepted binding alarms.
-        this.alarmOnce(`unapproved:${id}`, "unapproved-own", `A device you don't recognise (${label(b)}) is on your account.`);
+        this.alarmOnce(`unapproved:${id}`, "unapproved-own", `A device you don't recognise (${label(b)}) is on your account.`, undefined, b.device.deviceId);
       }
     }
     for (const [id, b] of st.revoked) {
@@ -519,7 +535,7 @@ export class Trust {
   importFrom(other: TrustState): void {
     const st = this.state;
     const knew = new Set([...st.accepted.values()].map((a) => a.binding.account));
-    if (this.policy === "inviters") this.tick();
+    if (hasStanding(this.policy)) this.tick();
     for (const [id, a] of other.accepted) if (!st.accepted.has(id)) st.accepted.set(id, a);
     for (const [id, b] of other.revoked) st.revoked.set(id, b);
     for (const [id, b] of other.candidatesSeen) st.candidatesSeen.set(id, b);
@@ -534,7 +550,7 @@ export class Trust {
       if (!mine) st.holds.set(did, { ...h, candidate: [...h.candidate], bindings: [...h.bindings], checkpoint: now });
       else if (mine.candidate.join() === h.candidate.join()) mine.credited = Math.max(mine.credited, h.credited);
     }
-    if (this.policy === "inviters") {
+    if (hasStanding(this.policy)) {
       // First-contact holds transfer as credited time, never more than
       // either installation credited.
       for (const [id, h] of other.fcHolds) {
@@ -565,24 +581,24 @@ export class Trust {
 
   // ---- reporting -----------------------------------------------------------
 
-  private alarm(kind: string, text: string, subject?: Did): void {
-    this.state.alarms.push({ at: this.localNow(), kind, text, subject });
+  private alarm(kind: string, text: string, subject?: Did, device?: string): void {
+    this.state.alarms.push({ at: this.localNow(), kind, text, subject, device, world: this.worldNow() });
   }
 
-  private alarmOnce(key: string, kind: string, text: string, subject?: Did): void {
+  private alarmOnce(key: string, kind: string, text: string, subject?: Did, device?: string): void {
     if (this.state.noticed.has(key)) return;
     this.state.noticed.add(key);
-    this.alarm(kind, text, subject);
+    this.alarm(kind, text, subject, device);
   }
 
   notice(key: string, kind: string, text: string, details: Omit<Notice, "at" | "kind" | "text"> = {}): void {
     if (this.state.noticed.has(key)) return;
     this.state.noticed.add(key);
-    this.state.notices.push({ at: this.localNow(), kind, text, ...details });
+    this.state.notices.push({ at: this.localNow(), kind, text, ...details, world: this.worldNow() });
   }
 
-  raise(key: string, kind: string, text: string, subject?: Did): void {
-    this.alarmOnce(key, kind, text, subject);
+  raise(key: string, kind: string, text: string, subject?: Did, device?: string): void {
+    this.alarmOnce(key, kind, text, subject, device);
   }
 }
 
