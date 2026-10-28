@@ -9,7 +9,7 @@ import { InvariantMonitor } from "../src/sim/invariants";
 import { Run } from "../src/sim/scenario";
 import { scenarios } from "../src/sim/scenarios";
 import { type Repo, revAt } from "../src/world/pds";
-import { RELAY_REPLAY_WINDOW, REV_ALLOWANCE, WITNESS_RETENTION } from "../src/world/relay";
+import { FETCH_TIMEOUT, RELAY_REPLAY_WINDOW, REV_ALLOWANCE, WITNESS_RETENTION } from "../src/world/relay";
 import { World } from "../src/world/world";
 import type { Installation } from "../src/protocol/installation";
 import type { HistoryEntry } from "../src/protocol/witness";
@@ -765,6 +765,90 @@ describe("unrelayed commits and revision checks", () => {
     expect(a.history.at(-1)!.kind).toBe("state");
     expect(violations(m)).toEqual([]);
   });
+
+  it("a #sync re-announcing exactly the commit the witness holds as the account's latest is ignored: no alarm, no gap, the state kept (Astra)", () => {
+    // Formerly a gap and an integrity alarm: the sync specification lets a
+    // `#sync` re-announce the current commit without changing its revision,
+    // and an honest relay passes it on.
+    const { w, m, bob, carol, bobDid, repo } = pinned("u9");
+    m.before();
+    const r = repo.latest().commit.rev;
+    const a = w.witnessOf("lantern").accounts.get(bobDid)!;
+    const entries = a.history.length;
+    w.replayRevision(bobDid, r); // the current commit, sent again as a #sync
+    m.after();
+    expect(w.relay!.events.at(-1)).toMatchObject({ kind: "sync", did: bobDid, commit: { rev: r } });
+    expect(a.history.length).toBe(entries);
+    expect(a.integrity).toEqual([]);
+    for (const i of [bob, carol]) expect(kinds(i)).toEqual([]);
+    expect(bob.gapWarnings()).toEqual([]);
+    // The state is kept: the next commit is reconstructed from its operations.
+    w.advance(1);
+    w.install(bobDid, "tablet", { link: bob });
+    expect(a.history.at(-1)).toMatchObject({ kind: "state", via: "commit" });
+    expect(bob.gapWarnings()).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a #sync carrying a different commit at the revision the witness holds still raises the alarm and a gap", () => {
+    const { w, m, bob, carol, bobDid, repo } = pinned("u10");
+    m.before();
+    const r = repo.latest().commit.rev;
+    const own = repo.latest().commit.data;
+    w.uncheckedRelay(bobDid);
+    const pds = w.pdsOf.get(bobDid)!;
+    let once = true;
+    pds.relayHooks.push((d) => (d === bobDid && once ? ((once = false), { kind: "sync" as const }) : null));
+    w.impostorAtRev(bobDid, r);
+    m.after();
+    const e = w.relay!.events.at(-1)!;
+    expect(e).toMatchObject({ kind: "sync", commit: { rev: r } });
+    expect(e.commit.data).not.toBe(own);
+    for (const i of [bob, carol]) expect(kinds(i)).toEqual(["relay-integrity"]);
+    expect(w.witnessOf("lantern").accounts.get(bobDid)!.history.at(-1)).toMatchObject({ kind: "gap", fromRev: r, toRev: r });
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a #sync re-announcing a commit the witness recorded as a gap (its fetch timed out) retries the fetch: no alarm, and the earlier gap stays", () => {
+    // Formerly a FINDING (README finding 29): the witness held no commit at
+    // the revision, so the exemption didn't apply and the rule called the
+    // honest re-announcement non-increasing, an integrity alarm.
+    const { w, m, bob, carol, bobDid, repo } = pinned("u12");
+    m.before();
+    const stop = w.withholdFetch(bobDid, "lantern");
+    const pds = w.pdsOf.get(bobDid)!;
+    let once = true;
+    pds.relayHooks.push((d) => (d === bobDid && once ? ((once = false), { kind: "sync" as const }) : null));
+    w.install(bobDid, "tablet", { link: bob }); // its commit, sent as a #sync, awaits a fetch
+    const x = repo.latest().commit.rev;
+    w.advance(FETCH_TIMEOUT + 1);
+    const a = w.witnessOf("lantern").accounts.get(bobDid)!;
+    const gap = a.history.at(-1)!;
+    expect(gap).toMatchObject({ kind: "gap", rev: x, reason: "the repo was not served within FETCH_TIMEOUT" });
+    stop();
+    w.replayRevision(bobDid, x); // the PDS re-announces it
+    m.after();
+    expect(w.relay!.events.at(-1)).toMatchObject({ kind: "sync", commit: { rev: x } });
+    expect(a.history.at(-1)).toMatchObject({ kind: "state", rev: x, via: "sync" });
+    expect(a.history).toContain(gap); // gaps are permanent
+    expect(a.integrity).toEqual([]);
+    for (const i of [bob, carol]) expect(kinds(i)).toEqual([]);
+    expect(bob.gapWarnings().some((g) => g.reason === "the repo was not served within FETCH_TIMEOUT" && g.toRev === x)).toBe(true);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a #sync re-announcing the commit held, sent while the witness is away past the replay window: the stream gap is still recorded", () => {
+    const { w, bob, carol, bobDid, repo } = pinned("u11");
+    const r = repo.latest().commit.rev;
+    w.setWitness("lantern", { connected: false });
+    w.replayRevision(bobDid, r); // an honest re-announcement, during the outage
+    w.install(carol.did, "tablet", { link: carol }); // the rest of the network moves on
+    w.advance(RELAY_REPLAY_WINDOW + 1);
+    w.setWitness("lantern", { connected: true });
+    const a = w.witnessOf("lantern").accounts.get(bobDid)!;
+    expect(a.history.at(-1)).toMatchObject({ kind: "state", rev: r, via: "resync" });
+    expect(bob.gapWarnings().map((g) => [g.reason, g.fromRev])).toEqual([["stream gap: the relay refused to resume", r + 1]]);
+  });
 });
 
 describe("stream gaps", () => {
@@ -1055,24 +1139,96 @@ describe("where a witness's history starts", () => {
     expect(violations(m)).toEqual([]);
   });
 
-  it("an honest restore onto another application's witness that started following Bob's account before his cursor's commit raises no integrity alarm", () => {
-    const { w, m, bob, bobDid } = world("h7");
-    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
-    step(() => w.advance(1));
-    step(() => w.lateWitness("beacon"));
-    step(() => void w.install(bobDid, "tablet", { link: bob })); // just after beacon started
-    const c = bob.mon.cursors.get(bobDid)!;
-    const g = startGap(w, "beacon", bobDid);
+  /** Beacon starts following the relay, and in the same relay instant Bob
+   * links a tablet, sequenced just after beacon's start; Bob backs up. */
+  const sameInstant = (seed: string) => {
+    const x = world(seed);
+    const step = (fn: () => void) => { x.m.before(); fn(); x.m.after(); };
+    step(() => x.w.advance(1));
+    step(() => x.w.lateWitness("beacon"));
+    step(() => void x.w.install(x.bobDid, "tablet", { link: x.bob }));
+    const c = x.bob.mon.cursors.get(x.bobDid)!;
+    const g = startGap(x.w, "beacon", x.bobDid);
+    const set = x.w.relay!.events.find((e) => e.did === x.bobDid && e.commit.rev === c)!;
+    expect(set.time).toBe(x.w.t); // the instant beacon started following
+    expect(x.bob.mon.cursorSeqs.get(x.bobDid)).toBe(set.seq);
+    expect(set.seq).toBeGreaterThan(g.followedAfter!); // sequenced after beacon's start
     expect(g.resync).toBeLessThan(c); // the cursor is above where beacon's history starts
     expect(g.toRev).toBeGreaterThanOrEqual(c); // and beacon serves it the gap
-    step(() => w.backup(bob));
-    step(() => w.advance(48)); // beacon follows the account a while
+    step(() => x.w.backup(x.bob));
+    step(() => x.w.advance(48)); // beacon follows the account a while
+    return { ...x, step, c, g };
+  };
+
+  it("an honest restore onto another application's witness, with a cursor sequenced just after that witness started, in the same relay instant, raises no integrity alarm", () => {
+    const { w, m, bob, bobDid, step, c } = sameInstant("h7");
     let restored!: Installation;
     step(() => (restored = w.restore(bob, 0, "phone-restored", { app: "beacon" })));
     expect(restored.mon.cursors.get(bobDid)).toBeGreaterThanOrEqual(c);
     expect(restored.startProofs).toEqual([]);
     expect(restored.trust.state.alarms.filter((a) => a.kind === "relay-integrity")).toEqual([]);
+    // Only the gap before beacon's history, which reaches the cursor.
+    expect(restored.gapWarnings().map((x) => x.reason)).toEqual(["before this witness's history of the account starts"]);
     expect(violations(m)).toEqual([]);
+  });
+
+  it("the same restore from a backup whose cursor carries no sequence number: the order can't be established, so a gap from the starting revision through the cursor, a warning and not an alarm", () => {
+    const { w, m, bob, bobDid, step, c, g } = sameInstant("h9");
+    w.backups[0].state.witness!.cursorSeqs.delete(bobDid); // saved before the rule
+    let restored!: Installation;
+    step(() => (restored = w.restore(bob, 0, "phone-restored", { app: "beacon" })));
+    expect(restored.startProofs).toEqual([]);
+    expect(restored.trust.state.alarms.filter((a) => a.kind === "relay-integrity")).toEqual([]);
+    const order = restored.gapWarnings().filter((x) => x.key.includes(":start-order:"));
+    expect(order.map((x) => [x.fromRev, x.toRev])).toEqual([[g.resync, c]]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("a cursor without a sequence number at the starting revision, with the same commit: the check wouldn't fire, so no gap for the unknown order", () => {
+    const { w, m, bob, bobDid, step, repo } = away("h10");
+    const r = repo.latest().commit.rev;
+    step(() => w.setOnline(bob, true));
+    bob.mon.cursorSeqs.delete(bobDid); // a cursor carried without one
+    step(() => w.rebuildWitness("lantern"));
+    expect(startGap(w, "lantern", bobDid).resync).toBe(r);
+    expect(bob.mon.cursors.get(bobDid)).toBe(r);
+    expect(bob.gapWarnings().filter((g) => g.key.includes(":start-order:"))).toEqual([]);
+    expect(bob.trust.state.alarms.filter((a) => a.kind === "relay-integrity")).toEqual([]);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("Bob's cursor set at the revision allowance's edge, an impostor published below it, and his witness rebuilt, all in one relay instant: sequence numbers order them, so Bob alarms (Astra)", () => {
+    // Formerly the cursor's relay time was compared with the time the
+    // witness started following; equal, the cursor counted as after the
+    // start and the check was skipped. The gap before the rebuilt witness's
+    // history ends at REV_ALLOWANCE past that time, which is Bob's cursor R,
+    // so nothing reached it, and nothing warned after 25 hours.
+    const { w, m, bob, bobDid } = world("h8");
+    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
+    const carol = w.install(w.account("carol2"), "phone"); // on Bob's application
+    step(() => w.uncheckedRelay(bobDid));
+    step(() => w.advance(1));
+    const t = w.t;
+    const R = revAt(t + REV_ALLOWANCE); // the highest revision a witness accepts now
+    step(() => w.commitAtRev(bobDid, R));
+    expect(bob.mon.cursors.get(bobDid)).toBe(R);
+    step(() => w.setOnline(bob, false));
+    step(() => w.setWitness("lantern", { connected: false }));
+    let sub!: Installation;
+    step(() => (sub = w.impostorAtRev(bobDid, R - 1)));
+    step(() => w.rebuildWitness("lantern"));
+    step(() => invite(w, carol, bobDid, sub));
+    expect(carol.trust.isAccepted(sub.binding)).toBe(true);
+    expect(w.t).toBe(t);
+    expect(w.relay!.events.filter((e) => e.did === bobDid && e.commit.rev >= R - 1).map((e) => e.time)).toEqual([t, t]);
+    const g = startGap(w, "lantern", bobDid);
+    expect(g).toMatchObject({ resync: R - 1, toRev: R });
+    step(() => w.setOnline(bob, true));
+    step(() => w.advance(25));
+    expect(detectionViolations(w)).toEqual([]); // the goal check: Bob alarmed or warned in time
+    expect(violations(m)).toEqual([]);
+    expect(bob.trust.state.alarms.filter((a) => a.kind === "relay-integrity").length).toBe(1);
+    expect(bob.startProofs).toMatchObject([{ did: bobDid, start: { rev: R - 1 }, cursor: R }]);
   });
 });
 

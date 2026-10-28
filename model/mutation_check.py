@@ -236,7 +236,23 @@ WITNESS_MUTATIONS = {
     "witness: since mismatch reconstructed by fetch": (
         "        if inverts:\n            if not follows:", "        if inverts and follows:\n            if not follows:"),
     "history start checked against any cursor": (
-        "        if st.cursor_seq.get(x, INF) > after:\n            return", "        if False:\n            return"),
+        "        if seq > after:\n            return", "        if False:\n            return"),
+    "history start ordered by relay time": (
+        "        if seq > after:\n            return",
+        "        if self.relay_world.relay[seq - 1].time >= _began:\n            return"),
+    "history start of unknown order trusted": (
+        "            self._gap(x, Gap(start.rev, cur, \"start-order-unknown\"))", "            pass"),
+    "witness: re-announced #sync alarms": (
+        "        if self._reannounced(a, e):\n            return", "        if False:\n            return"),
+    "witness: re-announcement of a gapped commit alarms": (
+        "        if self._regapped(a, e):", "        if False:"),
+    "witness: re-announcement exemption for any commit at the revision": (
+        "held.commit == e.commit\n                and self.state.get(a) == e.commit.root and",
+        "held.commit.rev == e.commit.rev\n                and"),
+    "witness: re-announcement exemption across a stream gap": (
+        "            if known:\n                cur, held =",
+        "            if known and self._reannounced(a, last):\n                continue\n"
+        "            if known:\n                cur, held ="),
     "history starting below the cursor not alarmed": (
         "        below = cur > start.rev", "        below = False"),
     "history starting at the cursor with another commit not alarmed": (

@@ -245,7 +245,7 @@ export class Installation {
     // so it may use another witness); its coverage is unknown until its own
     // frontier first advances.
     for (const [d, c] of approver.mon.cursors) this.mon.cursors.set(d, c);
-    for (const [d, t] of approver.mon.cursorTimes) this.mon.cursorTimes.set(d, t);
+    for (const d of approver.mon.cursors.keys()) this.cursorSeq(d, approver.mon.cursorSeqs.get(d));
     for (const g of approver.mon.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
     // The approver's commit published this device's record. If its
     // acknowledgement was lost, the revision is unknown, but later than any
@@ -277,7 +277,7 @@ export class Installation {
       // They are repo revisions, so the restored installation may use a
       // different witness: what that witness lacks after them is a gap.
       for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, c);
-      for (const [d, t] of s.witness.cursorTimes) this.mon.cursorTimes.set(d, t);
+      for (const d of s.witness.cursors.keys()) this.cursorSeq(d, s.witness.cursorSeqs?.get(d));
       for (const g of s.witness.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
       this.mon.auditGaps.push(...s.witness.auditGaps.map((g) => ({ ...g })));
       // Coverage carries across by wall clock from the backup's checkpoint.
@@ -678,7 +678,7 @@ export class Installation {
       }
       this.observeWitnessed(did, start.snap, "first contact");
       this.mon.cursors.set(did, start.pos);
-      if (start.time !== undefined) this.mon.cursorTimes.set(did, start.time);
+      this.cursorSeq(did, start.commitSeq);
       this.crossCheck(w, did);
       return;
     }
@@ -700,7 +700,7 @@ export class Installation {
           this.startCheck(did, cursor, e);
           this.witnessGap(did, cursor, e);
         }
-        if ((e.pos ?? 0) > cursor && e.time !== undefined) this.mon.cursorTimes.set(did, e.time);
+        if ((e.pos ?? 0) > cursor) this.cursorSeq(did, e.commitSeq);
         cursor = Math.max(cursor, e.pos ?? 0);
       }
       this.integrity(did, r);
@@ -749,7 +749,7 @@ export class Installation {
         this.recordGap(this.did, `${this.did}:retention:${(cursor ?? 0) + 1}-${r.truncatedTo}`, (cursor ?? 0) + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
       for (const e of r.entries) {
         const at = cursor ?? 0;
-        if ((e.pos ?? 0) > at && e.time !== undefined) this.mon.cursorTimes.set(this.did, e.time);
+        if ((e.pos ?? 0) > at) this.cursorSeq(this.did, e.commitSeq);
         cursor = Math.max(at, e.pos ?? 0);
         if (e.kind === "gap") {
           this.witnessGap(this.did, at, e);
@@ -827,16 +827,25 @@ export class Installation {
    * above the starting revision, or at it with a different commit, is an
    * integrity alarm, with the starting commit kept as proof, and a gap from
    * the starting revision through the cursor. A cursor set after the
-   * witness started is past its start by construction. */
+   * witness started is past its start by construction. The order is by
+   * the relay's sequence numbers, kept with the cursor and reported by the
+   * witness: relay times are not unique. Where it can't be established (a
+   * cursor carried without a sequence number), the same interval is a gap,
+   * a warning rather than an alarm. */
   private startCheck(did: Did, cursor: number, e: Extract<HistoryEntry, { kind: "gap" }>): void {
     const s = e.startCommit;
-    if (!e.start || !s || e.followedFrom === undefined) return;
-    const set = this.mon.cursorTimes.get(did) ?? -Infinity;
-    if (!(set < e.followedFrom)) return; // set after the witness started following: past its start
+    if (!e.start || !s) return;
+    const set = this.mon.cursorSeqs.get(did);
+    const known = set !== undefined && e.followedAfter !== undefined;
+    if (known && set > e.followedAfter!) return; // sequenced after the witness started following: past its start
     const view = this.trust.state.views.get(did);
     const below = s.rev < cursor;
     const differs = s.rev === cursor && view?.rev === cursor && view.data !== s.data;
     if (!below && !differs) return;
+    if (!known) {
+      this.recordGap(did, `${did}:start-order:${e.id}:${cursor}`, s.rev, cursor, null, "the witness's history starts at a commit the relay may have sequenced after this device's cursor");
+      return;
+    }
     if (!this.startProofs.some((p) => p.did === did && p.start.rev === s.rev && p.cursor === cursor)) this.startProofs.push({ did, start: s, cursor });
     this.trust.raise(`relay-integrity:start:${did}:${s.rev}:${cursor}`, "relay-integrity",
       `The witness's history of ${did} starts at the relay's commit at revision ${s.rev}, ${below ? `below revision ${cursor}, which the relay published before it` : `a different commit from the one this device holds at that revision`}: revisions must increase.`, did);
@@ -848,6 +857,13 @@ export class Installation {
   private witnessGap(did: Did, cursor: number, e: Extract<HistoryEntry, { kind: "gap" }>): void {
     const from = Math.max(e.fromRev, cursor + 1);
     if (from <= e.toRev) this.recordGap(did, `${did}:${e.id}`, from, e.toRev, e.rev, e.reason);
+  }
+
+  /** Keep, with `did`'s cursor, the relay sequence number of the commit
+   * that set it, or forget it where that is unknown. */
+  private cursorSeq(did: Did, seq: number | undefined): void {
+    if (seq === undefined) this.mon.cursorSeqs.delete(did);
+    else this.mon.cursorSeqs.set(did, seq);
   }
 
   /** Integrity alarms the witness raised for an account's history. */

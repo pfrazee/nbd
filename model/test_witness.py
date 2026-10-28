@@ -1003,6 +1003,85 @@ class Revisions(Base):
         self.assertEqual(self.app1.state["alice"], self.w.head["alice"].root)
         self.assertEqual(len(self.alice.state.gaps), 1)
 
+    def test_reannounced_sync_of_the_held_commit_is_ignored(self):
+        # Astra: the sync specification lets a `#sync` re-announce the
+        # current commit without a new revision. Under the blanket rule it
+        # was an integrity alarm, a gap warning, and lost witness state.
+        self.w.now += 1
+        self.w.post("alice")
+        self.alice.sync()
+        held = self.app1.latest_rec("alice")
+        n = len(self.app1.hist["alice"])
+        self.w.now += 0.5
+        self.w.republish(self.w.head["alice"], kind="sync")
+        self.assertEqual(self.w.relay[-1].kind, "sync")
+        self.alice.sync()
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+        self.assertEqual(self.alice.state.gaps, [])
+        self.assertEqual(self.app1.alarms, [])
+        self.assertEqual(len(self.app1.hist["alice"]), n)
+        self.assertIs(self.app1.latest_rec("alice"), held)
+        self.assertEqual(self.app1.state["alice"], held.root)
+        # Later commits are processed as before: by inversion, with no gap.
+        self.w.now += 0.5
+        a2 = self.w.link(self.a0, B("alice", "a2"))
+        self.legit.add(a2)
+        self.alice.sync()
+        self.assertEqual(self.app1.latest_rec("alice").kind, "commit")
+        self.assertEqual(self.alice.state.gaps, [])
+        self.assertTrue(self.bob.accepted(a2))
+        self.assertEqual(self.integrity_alarms(self.bob), [])
+
+    def test_reannounced_sync_of_a_gapped_commit_retries_the_fetch(self):
+        # A `#sync` whose fetch stalls past FETCH_TIMEOUT is a gap; the PDS,
+        # only slow, re-announces it. Not an integrity alarm: the witness
+        # retries the fetch, reconstructs the commit, and the gap stays.
+        self.w.now += 1
+        self.w.stall("app1", "alice")
+        c = self.w.publish_sync("alice")
+        self.alice.sync()
+        self.w.now += FETCH_TIMEOUT + 0.1
+        self.alice.sync()
+        self.assertEqual(self.app1.hist["alice"][-1].kind, "gap")
+        self.assertIsNone(self.app1.state["alice"])
+        self.w.now += 0.1
+        self.w.republish(self.w.head["alice"], kind="sync")
+        self.alice.sync()  # still stalled: nothing new, no alarm
+        self.assertEqual(self.app1.hist["alice"][-1].kind, "gap")
+        self.w.stall("app1", "alice", on=False)
+        self.w.now += 0.1
+        self.w.republish(self.w.head["alice"], kind="sync")
+        self.alice.sync()
+        self.assertEqual(self.integrity_alarms(self.alice), [])
+        self.assertEqual(self.app1.alarms, [])
+        self.assertEqual(self.app1.latest_rec("alice").commit, c)
+        self.assertEqual(self.app1.latest_rec("alice").kind, "sync")
+        self.assertEqual(self.app1.state["alice"], c.root)
+        self.assertEqual([g.kind for g in self.alice.state.gaps], ["gap"])
+        self.assertTrue(self.alice.gap_covers(c.rev))
+        # Later commits are reconstructed by inversion again.
+        self.w.now += 0.1
+        self.w.post("alice")
+        self.alice.sync()
+        self.assertEqual(self.app1.latest_rec("alice").kind, "commit")
+        self.assertEqual(len(self.alice.state.gaps), 1)
+
+    def test_sync_of_another_commit_at_the_held_revision_alarms(self):
+        # The exemption is for exactly the commit held: another commit at
+        # that revision is non-increasing.
+        self.w.now += 1
+        self.w.post("alice")
+        self.alice.sync()
+        held = self.app1.latest_rec("alice").commit
+        self.w.now += 0.5
+        c = self.graft(rev=held.rev, kind="sync")
+        self.assertNotEqual(c, held)
+        self.alice.sync()
+        self.assertIn(f"revision not increasing alice rev {held.rev}", self.alice.state.alarms)
+        self.assertIn(f"revision not increasing alice rev {held.rev}", [a for _, a, _ in self.app1.alarms])
+        self.assertEqual([g.kind for g in self.alice.gap_warnings()], ["rev-not-increasing"])
+        self.assertEqual(self.goal(), [])
+
     def test_non_increasing_revision_read_from_a_restored_cursor(self):
         # The cursor works only because the witness refuses to move it back.
         self.w.now += 1
@@ -1048,6 +1127,19 @@ class StreamGaps(Base):
         self.assertLessEqual(g.lo, g.hi)
         self.assertTrue(g.covers(imp.rev))
         self.assertEqual(self.alice.state.cursors["alice"], orig.rev)
+        self.assertEqual(self.goal(), [])
+
+    def test_reannounced_sync_after_a_stream_gap_is_still_a_stream_gap(self):
+        # The original comes back as a `#sync` re-announcing the commit the
+        # witness held: across a stream gap the gap rules apply, so it
+        # proves nothing and the stream gap stands.
+        orig, imp = self.replayed_original(
+            lambda: self.w.republish(self.app1.latest_rec("alice").commit, kind="sync"))
+        self.assertEqual(self.w.relay[-1].kind, "sync")
+        self.assertEqual(self.w.relay[-1].commit, orig)
+        (g,) = self.alice.gap_warnings()
+        self.assertEqual(g.kind, "stream-gap")
+        self.assertTrue(g.covers(imp.rev))
         self.assertEqual(self.goal(), [])
 
     def test_lower_revision_after_an_impostor_during_a_stream_gap_is_a_gap(self):
@@ -1167,7 +1259,7 @@ class HistoryStarts(Base):
         self.alice.sync()
         self.assertIn(m2, self.alice.state.own_alarms)
 
-    def started_at_impostor(self, below: bool):
+    def started_at_impostor(self, below: bool, forget_seq: bool = False):
         """The relay's latest commit for Alice is an impostor her PDS
         published below her cursor (or at it), which a relay that passes on
         non-increasing revisions carries; her witness, rebuilt, starts at
@@ -1184,9 +1276,67 @@ class HistoryStarts(Base):
         self.app1.rebuild()
         self.assertEqual(self.app1.latest_rec("alice").commit, imp)
         self.assertTrue(dave.accepted(self.m))
+        if forget_seq:  # a cursor saved before installations kept its sequence number
+            del self.alice.state.cursor_seq["alice"]
         self.alice.start()
         self.hours(25, self.alice)
         return dave, imp
+
+    def test_witness_rebuilt_in_the_instant_of_a_cursor_at_the_allowance_alarms(self):
+        # Astra: Alice's saved revision R is at the boundary, REV_ALLOWANCE
+        # past its relay time; her PDS publishes an impostor at R - 1 and her
+        # witness is rebuilt, all at one relay timestamp. The missing
+        # interval ends at R, so only the starting-commit check sees it, and
+        # relay times cannot say whether her cursor's commit came before the
+        # start: sequence numbers can.
+        dave = WitnessClient(self.w, self.w.add_device(B("dave", "d0")), self.app1)
+        self.w.now += 1
+        self.w.pds_clock["alice"] = REV_ALLOWANCE
+        c = self.w.post("alice")
+        self.assertEqual(c.rev, rev_at(self.w.now + REV_ALLOWANCE))
+        self.alice.sync()
+        self.assertEqual(self.alice.state.cursors["alice"], c.rev)
+        self.alice.stop()
+        imp = self.graft(rev=c.rev - 1)
+        self.app1.rebuild()
+        start, after, began = self.app1.started["alice"]
+        self.assertEqual(start, imp)
+        self.assertEqual({e.time for e in self.w.relay[-2:]}, {began})  # one relay timestamp
+        self.assertLess(self.alice.state.cursor_seq["alice"], after)
+        self.assertIsNone(self.app1.lacks("alice", c.rev))
+        self.assertTrue(dave.accepted(self.m))
+        self.alice.start()
+        self.hours(25, self.alice)
+        self.assertIn(f"revision not increasing alice rev {imp.rev}", self.alice.state.alarms)
+        self.assertTrue(self.alice.gap_covers(imp.rev))
+        self.assertEqual(self.goal(clients=[dave]), [])
+
+    def test_witness_start_against_a_cursor_of_unknown_order_is_a_gap(self):
+        # A cursor saved before installations kept its sequence number
+        # cannot be ordered against the start: a gap from the starting
+        # revision through the cursor, a warning rather than an alarm.
+        dave, imp = self.started_at_impostor(below=True, forget_seq=True)
+        cur = self.alice.state.cursors["alice"]
+        self.assertFalse([a for a in self.alice.state.alarms if a.startswith("revision")])
+        self.assertIn(("start-order-unknown", imp.rev, cur),
+                      {(g.kind, g.lo, g.hi) for g in self.alice.gap_warnings()})
+        self.assertTrue(self.alice.gap_covers(imp.rev))
+        self.assertEqual(self.goal(clients=[dave]), [])
+
+    def test_honest_restore_with_a_cursor_of_unknown_order_only_warns(self):
+        # The cost of the fallback: an honest restore onto a witness that
+        # started following Alice before the backup's cursor warns.
+        app3 = Witness(self.w, "app3", from_now=True)
+        start = app3.started["alice"][0]
+        self.w.now += 1
+        self.w.post("alice")
+        self.alice.sync()
+        backup = self.alice.export_state()
+        del backup.cursor_seq["alice"]
+        restored = WitnessClient.restore(self.w, backup, app3)
+        self.assertFalse([a for a in restored.state.alarms if a.startswith("revision")])
+        self.assertEqual([(g.kind, g.lo, g.hi) for g in restored.gap_warnings()],
+                         [("start-order-unknown", start.rev, backup.cursors["alice"])])
 
     def test_finding_witness_starting_at_a_non_increasing_commit(self):
         # Finding 22. Alice's missing interval runs from her cursor up and

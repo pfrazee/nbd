@@ -106,7 +106,16 @@ const MUTATIONS = {
   "witness: rebuild gap served only after the cursor": [RELAY, "\n      || (h.kind === \"gap\" && !!h.start && h.toRev >= start)", ""],
   "witness: starting commit below the cursor raises no alarm": [CLIENT, "const below = s.rev < cursor;", "const below = false;"],
   "witness: a different starting commit at the cursor raises no alarm": [CLIENT, "const differs = s.rev === cursor && view?.rev === cursor && view.data !== s.data;", "const differs = false;"],
-  "witness: starting-commit check applied to every cursor": [CLIENT, "if (!(set < e.followedFrom)) return; // set after the witness started following", "// applied to every cursor"],
+  "witness: starting-commit check applied to every cursor": [CLIENT, "if (known && set > e.followedAfter!) return; // sequenced after the witness started following", "// applied to every cursor"],
+  // Astra's fourth review: the starting-commit check ordered by relay
+  // sequence numbers, and a #sync re-announcing the current commit.
+  "witness: starting-commit check compares relay times, not sequence numbers": [RELAY, "followedAfter: this.startSeq,", "followedAfter: this.relay.events.filter((x) => x.time < this.startedAt).at(-1)?.seq ?? 0,"],
+  "witness: starting-commit order unknown records a gap where the check wouldn't fire": [CLIENT, "    if (!below && !differs) return;\n    if (!known) {", "    if (!known && !below && !differs) {\n      this.recordGap(did, `${did}:start-order:${e.id}:${cursor}`, s.rev, cursor, null, \"order unknown\");\n      return;\n    }\n    if (!below && !differs) return;\n    if (!known) {"],
+  "witness: starting-commit order unknown records no gap": [CLIENT, "    if (!known) {\n      this.recordGap(", "    if (!known) {\n      if (false) this.recordGap("],
+  "witness rev: a re-announced #sync is not exempt": [RELAY, "if (e.kind === \"sync\" && this.reannounces(a, e)) {", "if (false) {"],
+  "witness rev: re-announcement of a commit recorded as a gap alarms": [RELAY, "return this.reconstructByFetch(e.did, e, \"sync\", e.seq); // retried: the gap stays", "return this.backward(a, e); // retried: the gap stays"],
+  "witness rev: re-announcement exemption for a different commit at the revision": [RELAY, "held.rev === a.lastRev && sameCommit(held, e.commit)", "held.rev === a.lastRev && held.rev === e.commit.rev"],
+  "witness rev: re-announcement exemption across a stream gap": [RELAY, "        for (const [did, a] of this.accounts) {\n          a.state = null;", "        for (const [did, a] of this.accounts) {\n          const same = this.relay.latestCommit(did, to, inAllowance);\n          if (a.state && same && sameCommit(a.state.commit, same.commit)) continue;\n          a.state = null;"],
   "witness rev: integrity alarms only from history after the cursor": [CLIENT, "for (const x of r.integrity)", "for (const x of r.integrity.filter((y) => y.rev > (this.mon.cursors.get(did) ?? 0)))"],
 };
 

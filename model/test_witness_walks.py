@@ -19,7 +19,8 @@ and invite her. Each walk is a seeded sequence of:
   commit inverts to the last relayed one or not, naming it in `since` or
   not; publishing an impostor at
   a revision not above the last; publishing an earlier commit again at its
-  own revision (an impostor, then the original replayed); withholding and
+  own revision, as a `#commit` or a `#sync` (an impostor, then the original
+  replayed; or a `#sync` re-announcing the current commit); withholding and
   stalling fetches per witness;
 - witness outages (longer than the relay's replay window too), witnesses
   rebuilt from scratch (also while the relay's latest commit for Alice is
@@ -49,7 +50,10 @@ Invariants after every step:
 - No false integrity alarm from honest behavior: an unrelayed-commit alarm
   names a commit the relay never published, between two relayed commits
   with no event of the account between them, and never a commit an honest
-  relay dropped (unless the PDS then concealed it); a non-increasing
+  relay dropped (unless the PDS then concealed it, by a commit naming the
+  last relayed one or by putting its repo back to an earlier commit and
+  republishing it, which a `#sync` re-announcement the witness ignores
+  leaves consecutive with the next commit); a non-increasing
   alarm names a relayed commit whose revision is not above an earlier one
   within the allowance; and no witness's latest revision is more than
   `REV_ALLOWANCE` ahead of the relay's time.
@@ -172,9 +176,10 @@ class WitnessWalk:
         if kind == "rebuild":
             return ("rebuild", wname)
         if kind == "replay":
+            via = rng.choice(("commit", "sync"))  # a `#sync` of the current commit re-announces it
             if rng.random() < 0.5:  # the commit a witness last reconstructed, as when it went down
-                return ("replay", wname)
-            return ("replay", rng.randrange(1, 4))
+                return ("replay", wname, via)
+            return ("replay", rng.randrange(1, 4), via)
         if kind in ("send", "recv"):
             return (kind, i)
         if kind == "serve":
@@ -282,14 +287,20 @@ class WitnessWalk:
         elif k == "serve":
             w.serve(act[1], act[2])
         elif k == "replay":
+            again = None
             if isinstance(act[1], str):
                 held = self.wit[act[1]].latest_rec("alice")
-                if held is not None:
-                    w.republish(held.commit)
+                again = held.commit if held is not None else None
             else:
                 mine = [e.commit for e in w.relay if e.commit.account == "alice"]
-                if len(mine) > act[1]:
-                    w.republish(mine[-1 - act[1]])
+                again = mine[-1 - act[1]] if len(mine) > act[1] else None
+            if again is not None:
+                if again != w.head.get("alice"):
+                    # Putting the repo back conceals the commits it made since,
+                    # including any the relay dropped: the next commit follows
+                    # the earlier one, a fork of those.
+                    self.concealed |= {d for d in w.dropped if d.rev > again.rev}
+                w.republish(again, act[2])
         elif k == "send":
             req = self.inst[act[1]].request()
             if req is not None:

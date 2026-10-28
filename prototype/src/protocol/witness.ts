@@ -39,9 +39,11 @@ export type FrontierFault = "fetch" | "clock" | null;
 export type WitnessClientState = {
   /** account -> repo revision up to which its history was processed. */
   cursors: Map<Did, number>;
-  /** account -> the relay time of the commit that set its cursor: whether a
-   * witness's history of the account starts after it. */
-  cursorTimes: Map<Did, number>;
+  /** account -> the reference relay's sequence number for the commit that
+   * set its cursor: whether a witness's history of the account starts after
+   * it. Absent where unknown (a cursor saved before this rule, or moved by an
+   * entry that names no commit), and then the order can't be established. */
+  cursorSeqs: Map<Did, number>;
   coverage: Coverage;
   /** Wall-clock (local) time of the last checkpoint and the coverage age
    * then; persisted so a restart can carry coverage across. */
@@ -59,12 +61,12 @@ export type WitnessClientState = {
 };
 
 export function emptyWitnessState(): WitnessClientState {
-  return { cursors: new Map(), cursorTimes: new Map(), coverage: null, checkpoint: null, gaps: [], auditGaps: [], reachable: true, fault: null, incomplete: new Set() };
+  return { cursors: new Map(), cursorSeqs: new Map(), coverage: null, checkpoint: null, gaps: [], auditGaps: [], reachable: true, fault: null, incomplete: new Set() };
 }
 
 export function cloneWitnessState(s: WitnessClientState): WitnessClientState {
   return {
-    cursors: new Map(s.cursors), cursorTimes: new Map(s.cursorTimes), coverage: s.coverage && { ...s.coverage }, checkpoint: s.checkpoint && { ...s.checkpoint },
+    cursors: new Map(s.cursors), cursorSeqs: new Map(s.cursorSeqs), coverage: s.coverage && { ...s.coverage }, checkpoint: s.checkpoint && { ...s.checkpoint },
     gaps: s.gaps.map((g) => ({ ...g })), auditGaps: s.auditGaps.map((g) => ({ ...g })), reachable: s.reachable, fault: s.fault, incomplete: new Set(s.incomplete),
   };
 }
@@ -91,19 +93,21 @@ export type CoverageSegment = { world: number; base: number; cursor: number };
  * same way: from the account's first revision through REV_ALLOWANCE past the
  * relay time at which it started following, or through `resync`, the
  * starting revision, if higher; its position is `resync`. It carries the
- * starting commit (`startCommit`) and the relay time at which the witness
- * started following the account (`followedFrom`), for the installation's
- * starting-commit check. `time`, where known: the relay time of the commit
- * at the entry's position, which a cursor moved there keeps. `seq` (the relay
+ * starting commit (`startCommit`) and the relay sequence number after which
+ * the witness started following the account (`followedAfter`), for the
+ * installation's starting-commit check: sequence numbers order the relay's
+ * one stream exactly, where relay times are not unique. `time` and
+ * `commitSeq`, where known: the relay time and sequence number of the commit
+ * at the entry's position; a cursor moved there keeps the sequence number. `seq` (the relay
  * event's sequence number; for a stream gap, the first it spans), `at` (the witness's clock when it recorded the
  * entry), and `local` (the order in which it recorded its entries) are the
  * witness's own. `pos`, set on the entries a witness serves, is the
  * position a client keeps as its cursor. */
 export type HistoryEntry =
-  | { seq: number; at: number; local: number; pos?: number; time?: number; kind: "state"; rev: number; snap: Snapshot; via: "commit" | "sync" | "resync" }
+  | { seq: number; at: number; local: number; pos?: number; time?: number; commitSeq?: number; kind: "state"; rev: number; snap: Snapshot; via: "commit" | "sync" | "resync" }
   | {
-    seq: number; at: number; local: number; pos?: number; time?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean;
-    start?: boolean; resync?: number; startCommit?: Commit; followedFrom?: number;
+    seq: number; at: number; local: number; pos?: number; time?: number; commitSeq?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean;
+    start?: boolean; resync?: number; startCommit?: Commit; followedAfter?: number;
   };
 
 export type HistoryResponse = {
@@ -156,5 +160,5 @@ export interface WitnessApi {
   history(observer: string, did: Did, from: number | null, limit?: number, req?: string): HistoryResponse | null;
   commitAt(observer: string, did: Did, rev: number): CommitStatus;
   /** The latest published commit for `did`, if reconstructed, with its position. */
-  latest(observer: string, did: Did): { pos: number; snap: Snapshot; time?: number } | null;
+  latest(observer: string, did: Did): { pos: number; snap: Snapshot; time?: number; commitSeq?: number } | null;
 }
