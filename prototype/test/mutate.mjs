@@ -68,7 +68,7 @@ const MUTATIONS = {
   "witness: restart ignores downtime": [CLIENT, "{ base: cp.age + d, mono: this.net.now() }", "{ base: cp.age, mono: this.net.now() }"],
   "witness: backward clock trusted across restart": [CLIENT, "cp && d >= 0 && Number.isFinite(cp.age)", "cp && Number.isFinite(cp.age)"],
   "witness: stream gaps ignored": [RELAY, "if (this.relay.outdated(this.cursor)) {", "if (false) {"],
-  "witness: result not checked against the commit root": [RELAY, "if (next && snapshotData(next) === e.commit.data && invert(", "if (next && invert("],
+  "witness: result not checked against the commit root": [RELAY, "const inverts = !!next && snapshotData(next) === e.commit.data && invert(", "const inverts = !!next && invert("],
   // Witness progress by relay event time, and cursors as repo revisions.
   "witness: frontier from delivery time, not relay time": [RELAY, "this.frontier = Math.max(this.frontier, this.relay.networkTime(this.id, by), newest);", "this.frontier = Math.max(this.frontier, by, newest);"],
   "witness: a pending fetch doesn't hold the frontier": [RELAY, "return p ? Math.min(this.frontier, p.e.time) : this.frontier;", "return this.frontier;"],
@@ -76,9 +76,11 @@ const MUTATIONS = {
   "witness: witness-local cursors": [RELAY, "return h.kind === \"state\" ? h.rev : h.toRev; // a repo revision", "return h.local;"],
   // PDS-served commits the relay never published, and revision checks.
   "witness rev: alarm on any unreported lower revision": [RELAY, "if (es.some((h) => h.kind === \"gap\" && h !== a.open && h.fromRev <= rev && rev <= h.toRev)) return { status: \"gap\" };", "if (es.some((h) => h.kind === \"state\" && h.rev > rev)) return { status: \"unpublished\", below: 0, above: rev + 1 };"],
-  "witness rev: no alarm between consecutive reconstructions": [RELAY, "return { status: \"unpublished\", below: lo.rev, belowData: lo.snap.commit.data, above: hi.rev };", "return { status: \"unknown\" };"],
+  "witness rev: no alarm between consecutive reconstructions": [RELAY, "return { status: \"unpublished\", below: lo.rev, above: hi.rev };", "return { status: \"unknown\" };"],
   "witness rev: a #sync counts as consecutive": [RELAY, "hi.kind === \"state\" && hi.via === \"commit\" && lo.rev", "hi.kind === \"state\" && lo.rev"],
-  "witness rev: no-change commit not exempt": [CLIENT, "if (vouch.status === \"unpublished\" && snap.commit.data !== vouch.belowData) {", "if (vouch.status === \"unpublished\") {"],
+  "witness rev: consecutiveness ignores since": [RELAY, "if (!follows) this.sinceGap(a, e);", ""],
+  "witness rev: consecutiveness ignores root (since only)": [RELAY, "if (next && inverts) {", "if (next && (inverts || follows)) {"],
+  "witness rev: a since mismatch makes the commit itself a gap": [RELAY, "if (!follows) this.sinceGap(a, e);", "if (!follows) return this.gap(e.did, e, \"its since names another revision\");"],
   "witness rev: a served gap is INCOMPLETE": [CLIENT, "if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {", "if ((vouch.status === \"unknown\" || vouch.status === \"gap\") && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {"],
   "witness rev: dropped commit reconstructed by fetch": [RELAY, "      if (a.state) {\n        // The commit must follow", "      if (a.state && e.prevData === snapshotData(a.state.records)) {\n        // The commit must follow"],
   "witness rev: future revision accepted into history": [RELAY, "if (beyondAllowance(e.commit.rev, e.time)) return this.future(a, e);", ""],
@@ -89,7 +91,7 @@ const MUTATIONS = {
   // and cursors, reference-relay timestamps, and time in transit.
   "witness: stream gap ends at the resync revision": [RELAY, "const toRev = Math.max(revAt(resumedAt + REV_ALLOWANCE), resync);", "const toRev = resync;"],
   "witness: cursor moves to a stream gap's end": [RELAY, "return h.resync; // past a stream gap", "return h.toRev; // past a stream gap"],
-  "witness: stream gap served only after the cursor": [RELAY, "return this.position(h) > start || (h.kind === \"gap\" && h.stream && h.toRev >= start);", "return this.position(h) > start;"],
+  "witness: stream gap served only after the cursor": [RELAY, "\n      || (h.kind === \"gap\" && h.stream && h.toRev >= start)", ""],
   "witness: resync below the revision held raises no alarm": [RELAY, "          if (latest && latest.commit.rev < a.lastRev)\n            a.integrity.push(", "          if (false)\n            a.integrity.push("],
   "witness: relay refreshes time on replay": [RELAY, "return this.timeOnDelivery;", "return true;"],
   "witness: coverage aged from response processing": [CLIENT, "if (frontierAge + Math.max(0, this.net.now() - sent) < this.coverageAge()) this.mon.coverage = { base: frontierAge, mono: sent };", "if (frontierAge < this.coverageAge()) this.mon.coverage = { base: frontierAge, mono: this.net.now() };"],
@@ -97,6 +99,14 @@ const MUTATIONS = {
   "witness: paged answer takes the last page's frontier age": [CLIENT, "if (req.age === null) req.age = r.frontierAge;", "req.age = r.frontierAge;"],
   "witness: a late answer moves coverage back": [CLIENT, "if (frontierAge + Math.max(0, this.net.now() - sent) < this.coverageAge()) this.mon.coverage", "if (true) this.mon.coverage"],
   "witness: an answer from before a restart accepted": [CLIENT, "if (r.req !== undefined && r.req !== req.id) continue; // not this request's answer: discarded", ""],
+  // Astra's third review: where a witness's history starts is bounded like a
+  // stream gap.
+  "witness: rebuild gap ends at the starting revision": [RELAY, "const toRev = Math.max(revAt(this.startedAt + REV_ALLOWANCE), start);", "const toRev = start;"],
+  "witness: cursor moves to the rebuild gap's end": [RELAY, "return h.resync ?? 0; // past where history starts", "return h.toRev; // past where history starts"],
+  "witness: rebuild gap served only after the cursor": [RELAY, "\n      || (h.kind === \"gap\" && !!h.start && h.toRev >= start)", ""],
+  "witness: starting commit below the cursor raises no alarm": [CLIENT, "const below = s.rev < cursor;", "const below = false;"],
+  "witness: a different starting commit at the cursor raises no alarm": [CLIENT, "const differs = s.rev === cursor && view?.rev === cursor && view.data !== s.data;", "const differs = false;"],
+  "witness: starting-commit check applied to every cursor": [CLIENT, "if (!(set < e.followedFrom)) return; // set after the witness started following", "// applied to every cursor"],
   "witness rev: integrity alarms only from history after the cursor": [CLIENT, "for (const x of r.integrity)", "for (const x of r.integrity.filter((y) => y.rev > (this.mon.cursors.get(did) ?? 0)))"],
 };
 

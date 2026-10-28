@@ -188,7 +188,7 @@ WITNESS_MUTATIONS = {
         "        st.cov_base = INF if d is None or d < 0 else st.cov_base + d",
         "        st.cov_base = INF if d is None or d < 0 else st.cov_base"),
     "no gap for history the witness lacks": (
-        "        if lack > cur and (self.FRESH_HISTORY_GAP or not fresh):",
+        "        if lacks is not None and (self.FRESH_HISTORY_GAP or not fresh):",
         "        if False:"),
     "no fork alarm": ("            if wc != c and (wc, c) not in self.state.forks:", "            if False:"),
     "alarm on any unreported lower revision": (
@@ -196,12 +196,10 @@ WITNESS_MUTATIONS = {
         "        around = (c, c) if c.rev < self.witness.max_rev(x) else None"),
     "no alarm between consecutive reconstructions": (
         "        around = self.witness.unrelayed_between(x, c.rev)", "        around = None"),
-    "unchanged unrelayed commit alarms": (
-        "    EXEMPT_UNCHANGED = True", "    EXEMPT_UNCHANGED = False"),
-    "unchanged exemption compares the later commit": (
-        "c.root == around[0].root", "c.root == around[1].root"),
+    "witness: consecutiveness ignores since": (
+        "    CONSECUTIVE = \"since\"", "    CONSECUTIVE = \"inverted\""),
     "a #sync brackets an unrelayed commit": (
-        "    CONSECUTIVE = \"inverted\"", "    CONSECUTIVE = \"any\""),
+        "    CONSECUTIVE = \"since\"", "    CONSECUTIVE = \"any\""),
     "served unplaced commit waits": (
         "        if self.witness.reports_unplaced(x, c):\n            return False", ""),
     "witness: future revision accepted into history": (
@@ -232,9 +230,26 @@ WITNESS_MUTATIONS = {
     "cursor as a witness-local index": (
         "        return [(e, e.pos) for e in w.read(x, cur)]",
         "        return [(e, e.idx) for e in w.read(x, -1) if e.idx > cur]"),
-    "witness: no inversion check": (
-        "        if e.kind == \"commit\" and cur is not None and e.prev == cur:",
-        "        if e.kind == \"commit\":"),
+    "witness: consecutiveness ignores root (since only)": (
+        "        inverts = e.kind == \"commit\" and cur is not None and e.prev == cur",
+        "        inverts = e.kind == \"commit\" and cur is not None"),
+    "witness: since mismatch reconstructed by fetch": (
+        "        if inverts:\n            if not follows:", "        if inverts and follows:\n            if not follows:"),
+    "history start checked against any cursor": (
+        "        if st.cursor_seq.get(x, INF) > after:\n            return", "        if False:\n            return"),
+    "history starting below the cursor not alarmed": (
+        "        below = cur > start.rev", "        below = False"),
+    "history starting at the cursor with another commit not alarmed": (
+        "        differs = cur == start.rev and", "        differs = False and"),
+    "witness: rebuild gap bounded by the starting revision": (
+        "        self.missing[a] = max(r, bound)", "        self.missing[a] = r - (1 if self.state[a] else 0)"),
+    "witness: cursor moves to the rebuild gap's end": (
+        "            self._gap(x, Gap(lo, hi, kind), merge=True)",
+        "            self._gap(x, Gap(lo, hi, kind), merge=True)\n            st.cursors[x] = max(st.cursors[x], hi)"),
+    "witness: rebuild gap not served at the starting revision": (
+        "        if hi <= after:\n            return None",
+        "        if hi <= after or (kind == \"before history\" and after >= self.started[account][0].rev):\n"
+        "            return None"),
     "witness: later snapshot reconstructs an earlier root": (
         "        if res:\n            self._record(a, \"sync\", e, e.commit.root)\n        else:\n"
         "            self._gap(a, e)\n\n    def _drain(self)",

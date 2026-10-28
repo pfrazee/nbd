@@ -6,7 +6,7 @@
 // its own account's historical gaps (each an acknowledgeable warning), and
 // gaps in pinned accounts' histories, reported in audit.
 
-import type { Snapshot } from "./repo";
+import type { Commit, Snapshot } from "./repo";
 import type { Did } from "./types";
 
 /** The liveness deadline, in hours of coverage age. */
@@ -39,6 +39,9 @@ export type FrontierFault = "fetch" | "clock" | null;
 export type WitnessClientState = {
   /** account -> repo revision up to which its history was processed. */
   cursors: Map<Did, number>;
+  /** account -> the relay time of the commit that set its cursor: whether a
+   * witness's history of the account starts after it. */
+  cursorTimes: Map<Did, number>;
   coverage: Coverage;
   /** Wall-clock (local) time of the last checkpoint and the coverage age
    * then; persisted so a restart can carry coverage across. */
@@ -56,12 +59,12 @@ export type WitnessClientState = {
 };
 
 export function emptyWitnessState(): WitnessClientState {
-  return { cursors: new Map(), coverage: null, checkpoint: null, gaps: [], auditGaps: [], reachable: true, fault: null, incomplete: new Set() };
+  return { cursors: new Map(), cursorTimes: new Map(), coverage: null, checkpoint: null, gaps: [], auditGaps: [], reachable: true, fault: null, incomplete: new Set() };
 }
 
 export function cloneWitnessState(s: WitnessClientState): WitnessClientState {
   return {
-    cursors: new Map(s.cursors), coverage: s.coverage && { ...s.coverage }, checkpoint: s.checkpoint && { ...s.checkpoint },
+    cursors: new Map(s.cursors), cursorTimes: new Map(s.cursorTimes), coverage: s.coverage && { ...s.coverage }, checkpoint: s.checkpoint && { ...s.checkpoint },
     gaps: s.gaps.map((g) => ({ ...g })), auditGaps: s.auditGaps.map((g) => ({ ...g })), reachable: s.reachable, fault: s.fault, incomplete: new Set(s.incomplete),
   };
 }
@@ -82,14 +85,26 @@ export type CoverageSegment = { world: number; base: number; cursor: number };
  * at, if that is higher: the relay may have carried any revision up to
  * there. Its position, where a cursor moves past it, is `resync`, so a
  * commit relayed afterward with a revision inside the interval is still
- * read; it is served to any cursor its interval reaches. `seq` (the relay
+ * read; it is served to any cursor its interval reaches. The gap before
+ * the witness's history of an account starts (`start`: it started following
+ * late, was rebuilt, or met the account after a stream gap) is bounded the
+ * same way: from the account's first revision through REV_ALLOWANCE past the
+ * relay time at which it started following, or through `resync`, the
+ * starting revision, if higher; its position is `resync`. It carries the
+ * starting commit (`startCommit`) and the relay time at which the witness
+ * started following the account (`followedFrom`), for the installation's
+ * starting-commit check. `time`, where known: the relay time of the commit
+ * at the entry's position, which a cursor moved there keeps. `seq` (the relay
  * event's sequence number; for a stream gap, the first it spans), `at` (the witness's clock when it recorded the
  * entry), and `local` (the order in which it recorded its entries) are the
  * witness's own. `pos`, set on the entries a witness serves, is the
  * position a client keeps as its cursor. */
 export type HistoryEntry =
-  | { seq: number; at: number; local: number; pos?: number; kind: "state"; rev: number; snap: Snapshot; via: "commit" | "sync" | "resync" }
-  | { seq: number; at: number; local: number; pos?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean; resync?: number };
+  | { seq: number; at: number; local: number; pos?: number; time?: number; kind: "state"; rev: number; snap: Snapshot; via: "commit" | "sync" | "resync" }
+  | {
+    seq: number; at: number; local: number; pos?: number; time?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean;
+    start?: boolean; resync?: number; startCommit?: Commit; followedFrom?: number;
+  };
 
 export type HistoryResponse = {
   /** The request this answers, echoed. */
@@ -121,13 +136,13 @@ export type IntegrityReport = { id: string; seq: number; rev: number; after: num
 /** What a witness knows of an account's commit at a revision: reconstructed
  * (with its root); inside a recorded gap, including a commit it did not
  * accept for its revision; strictly between two commits it reconstructed
- * consecutively, the later from a `#commit` whose operations inverted to the
- * earlier, with no gap between them (`unpublished`: the relay published
- * nothing there in order; `belowData` is the earlier commit's root); or
- * nothing (`unknown`). */
+ * consecutively, the later from a `#commit` whose `since` names the
+ * earlier's revision and whose operations inverted to the earlier's root,
+ * with no gap between them (`unpublished`: the relay published nothing there
+ * in order); or nothing (`unknown`). */
 export type CommitStatus =
   | { status: "reconstructed"; data: string } | { status: "gap" }
-  | { status: "unpublished"; below: number; belowData: string; above: number } | { status: "unknown" };
+  | { status: "unpublished"; below: number; above: number } | { status: "unknown" };
 
 /** What a client asks its trusted witness. Every answer carries the
  * frontier age (in `history`); `latest` is a starting point for an account
@@ -141,5 +156,5 @@ export interface WitnessApi {
   history(observer: string, did: Did, from: number | null, limit?: number, req?: string): HistoryResponse | null;
   commitAt(observer: string, did: Did, rev: number): CommitStatus;
   /** The latest published commit for `did`, if reconstructed, with its position. */
-  latest(observer: string, did: Did): { pos: number; snap: Snapshot } | null;
+  latest(observer: string, did: Did): { pos: number; snap: Snapshot; time?: number } | null;
 }

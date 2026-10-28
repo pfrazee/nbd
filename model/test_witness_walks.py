@@ -6,19 +6,24 @@ and invite her. Each walk is a seeded sequence of:
 
 - honest links and removals of Alice's devices, and honest writes to
   other collections, which change the repo root; honest writes the relay
-  drops (a rate limit), and honest writes whose revision is far ahead of
-  the relay's time (a PDS clock wrong once);
+  drops (a rate limit), including a device added and deleted again, both
+  dropped, so the next commit inverts to the root before them; and honest
+  writes whose revision is far ahead of the relay's time (a PDS clock wrong
+  once);
 - a malicious PDS adding and deleting impostor devices (rooted over her
   devices, approved by a removed device's key, or bare), through `#commit`,
   `#sync` served to some witnesses, or never relayed; resetting her
   account; recreating removed records; replacing `#sync` roots; forking
   what it serves one client, at a new or a witnessed revision; serving one
   client a commit it never relayed (or one the relay dropped) after a later
-  commit inverts to the last relayed one or not; publishing an impostor at
+  commit inverts to the last relayed one or not, naming it in `since` or
+  not; publishing an impostor at
   a revision not above the last; publishing an earlier commit again at its
   own revision (an impostor, then the original replayed); withholding and
   stalling fetches per witness;
-- witness outages (longer than the relay's replay window too), relay
+- witness outages (longer than the relay's replay window too), witnesses
+  rebuilt from scratch (also while the relay's latest commit for Alice is
+  one first published at a non-increasing revision; finding 22), relay
   outages, unreachable witnesses, witness clocks slow or fast against the
   relay within `CLOCK_SKEW` (and fast beyond it), elapsed time, and
   installation wall-clock jumps;
@@ -133,9 +138,9 @@ class WitnessWalk:
                  "withhold", "stall", "fork", "unfork", "wdown", "wup", "relay", "unreach",
                  "wait", "jump", "stop", "start", "export", "restore", "ack", "tick", "query", "invite"]
         kinds += ["post", "wclock", "drop", "futurerev", "oldrev", "conceal", "serve", "replay",
-                  "send", "recv"]
+                  "send", "recv", "rebuild"]
         weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3, 1,
-                   2, 1, 1, 1, 2, 2, 2, 3]
+                   2, 1, 1, 1, 2, 2, 2, 3, 1]
         if self.LAG:
             kinds += ["lag", "fresh", "longwait"]
             weights += [2, 1, 1]
@@ -156,12 +161,16 @@ class WitnessWalk:
             nb = B("alice", f"a{len(self.made)}")
             what = ("link", rng.choice(legit_present), nb) if legit_present and rng.random() < 0.5 else ("post",)
             if kind == "drop":
+                if legit_present and rng.random() < 0.3:
+                    what = ("flap", rng.choice(legit_present), nb)  # added and deleted, both dropped
                 return ("drop", what)
             return ("futurerev", rng.choice((0.5, 6.0, 30.0)), what)
         if kind == "oldrev":
             return ("oldrev", B("alice", f"m{len(self.imps)}"), rng.choice((0, 1, 1000)))
         if kind == "conceal":
-            return ("conceal",)
+            return ("conceal", rng.random() < 0.3)  # True: `since` names the true previous commit
+        if kind == "rebuild":
+            return ("rebuild", wname)
         if kind == "replay":
             if rng.random() < 0.5:  # the commit a witness last reconstructed, as when it went down
                 return ("replay", wname)
@@ -269,7 +278,7 @@ class WitnessWalk:
         elif k == "conceal":
             last = w.relay_head("alice")
             self.concealed |= {d for d in w.dropped if last is None or d.rev > last.commit.rev}
-            w.pds_write("alice", prev="relayed")
+            w.pds_write("alice", prev="relayed", since=w.head["alice"].rev if act[1] else None)
         elif k == "serve":
             w.serve(act[1], act[2])
         elif k == "replay":
@@ -331,6 +340,8 @@ class WitnessWalk:
             self.wit[act[1]].set_up(False)
         elif k == "wup":
             self.wit[act[1]].set_up(True)
+        elif k == "rebuild":
+            self.wit[act[1]].rebuild()
         elif k == "relay":
             w.set_relay(act[1])
         elif k == "unreach":
@@ -398,6 +409,13 @@ class WitnessWalk:
             self.made.append(what[2])
             self.legit.add(what[2])
             w.pds_write("alice", add=[what[2]], approve=[(what[1], what[2])], rev=rev)
+        elif what[0] == "flap":
+            _, signer, nb = what
+            self.made.append(nb)
+            self.legit.add(nb)
+            w.pds_write("alice", add=[nb], approve=[(signer, nb)])
+            w.drop_next.add("alice")  # only from "drop": the relay drops the delete too
+            w.pds_write("alice", delete=[nb], unapprove=[(signer, nb)])
         else:
             w.other["alice"] = w.other.get("alice", 0) + 1
             w.commit("alice", rev=rev)

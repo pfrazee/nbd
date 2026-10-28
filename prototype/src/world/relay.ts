@@ -43,10 +43,11 @@ export type RelayOp = { path: RecordPath; prev: Cbor | null; value: Cbor | null 
 /** A repository event as the relay publishes it. `time`: when the relay
  * sequenced it (on the relay's clock), the same for every subscriber
  * whenever it is delivered (unless Relay.timeOnDelivery); `prevData`: the previous tree root (null for an
- * account's first commit); `ops`: the operations, with the previous value of
- * each path, for inversion. */
+ * account's first commit); `since`: the revision of the commit before it,
+ * as the PDS states it (not signed: a PDS can misstate it); `ops`: the
+ * operations, with the previous value of each path, for inversion. */
 export type RelayEvent = {
-  seq: number; time: number; kind: "commit" | "sync"; did: Did; commit: Commit; prevData: string | null; ops: RelayOp[];
+  seq: number; time: number; kind: "commit" | "sync"; did: Did; commit: Commit; prevData: string | null; since: number | null; ops: RelayOp[];
   /** The repo key the relay verified the commit against on ingest. */
   key: Uint8Array;
 };
@@ -237,8 +238,13 @@ export class Witness implements WitnessApi {
   /** The relay time of the newest event it has processed in order. */
   frontier: number;
   /** Whether it holds every account's history from the relay's start: false
-   * once it starts late or a stream gap breaks its history. */
+   * once it starts late (or is rebuilt) or a stream gap breaks its history. */
   private complete: boolean;
+  /** Where its history of an account it has not met yet starts: the relay
+   * time and sequence number at which it started following the relay, or
+   * last resumed after a stream gap. */
+  private startedAt: number;
+  private startSeq: number;
   private resume = false;
   private local = 0;
   readonly accounts = new Map<Did, Account>();
@@ -254,9 +260,12 @@ export class Witness implements WitnessApi {
     private readonly worldNow: () => number,
     opts: { late?: boolean } = {},
   ) {
-    // A late witness starts following the relay now, holding no history.
+    // A late (or rebuilt) witness starts following the relay now, holding no
+    // history.
     this.complete = !opts.late;
     if (opts.late) this.cursor = relay.headSeq();
+    this.startedAt = relay.now();
+    this.startSeq = this.cursor;
     this.frontier = relay.networkTime(id, relay.now());
   }
 
@@ -290,14 +299,35 @@ export class Witness implements WitnessApi {
     return Math.max(0, this.now() - this.accountFrontier(did));
   }
 
-  private account(did: Did, first?: RelayEvent): Account {
+  /** The account's state, created when first met. `startAt`: the commit a
+   * witness lacking history starts it at, if known (null: none); otherwise
+   * the relay's latest published commit for it when the witness started
+   * following. */
+  private account(did: Did, startAt?: RelayEvent | null): Account {
     let a = this.accounts.get(did);
     if (!a) {
       this.accounts.set(did, (a = { state: null, history: [], pending: null, open: null, lastRev: 0, prunedThrough: 0, integrity: [] }));
-      // An account first met by a witness that lacks history: the interval
-      // before its first commit here is a gap in that history.
-      if (!this.complete && first && first.commit.rev > 1)
-        this.push(a, { seq: first.seq, at: this.now(), local: 0, kind: "gap", id: `${this.id}:start:${did}`, rev: null, fromRev: 1, toRev: first.commit.rev - 1, reason: "before this witness's history of the account starts", stream: false });
+      // An account first met by a witness that lacks history (it started
+      // late, was rebuilt, or broke its stream): what it lacks is a gap in
+      // that history. Like a stream gap's, the interval can't end at the
+      // starting revision: a PDS may have published an impostor and then
+      // replayed an earlier revision before the witness started. It runs
+      // from the account's first event through REV_ALLOWANCE past the relay
+      // time the witness started following at, or through the starting
+      // revision if higher; a cursor moves past it only to the starting
+      // revision.
+      if (!this.complete) {
+        const s = startAt === undefined ? this.relay.latestCommit(did, this.startSeq, inAllowance) : startAt;
+        const start = s?.commit.rev ?? 0;
+        const toRev = Math.max(revAt(this.startedAt + REV_ALLOWANCE), start);
+        // With the starting commit, and the relay time it started following
+        // at: an installation whose cursor a commit sequenced before then set
+        // checks the starting commit against it.
+        this.push(a, {
+          seq: this.startSeq, at: this.now(), local: 0, time: s?.time, kind: "gap", id: `${this.id}:start:${this.startSeq}:${did}`, rev: null, fromRev: 1, toRev,
+          reason: "before this witness's history of the account starts", stream: false, start: true, resync: start, startCommit: s?.commit, followedFrom: this.startedAt,
+        });
+      }
     }
     return a;
   }
@@ -309,7 +339,7 @@ export class Witness implements WitnessApi {
     const a = this.accounts.get(did);
     if (a || this.complete) return a ?? this.account(did);
     const latest = this.relay.latestCommit(did, this.cursor, inAllowance);
-    const b = this.account(did, latest ?? undefined);
+    const b = this.account(did, latest);
     if (latest) this.reconstructByFetch(did, latest, "resync", latest.seq);
     return b;
   }
@@ -333,6 +363,8 @@ export class Witness implements WitnessApi {
         this.streamGaps.push(g);
         this.complete = false;
         this.cursor = to;
+        this.startedAt = resumedAt;
+        this.startSeq = to;
         for (const [did, a] of this.accounts) {
           a.state = null;
           a.pending = null;
@@ -344,7 +376,7 @@ export class Witness implements WitnessApi {
           // moves past the gap only to the revision it resumes at.
           const resync = latest?.commit.rev ?? a.lastRev;
           const toRev = Math.max(revAt(resumedAt + REV_ALLOWANCE), resync);
-          this.push(a, { seq: g.seq, at: g.at, local: 0, kind: "gap", id: `${this.id}:stream:${g.seq}`, rev: null, fromRev: a.lastRev + 1, toRev, reason: "stream gap: the relay refused to resume", stream: true, resync });
+          this.push(a, { seq: g.seq, at: g.at, local: 0, time: latest?.time, kind: "gap", id: `${this.id}:stream:${g.seq}`, rev: null, fromRev: a.lastRev + 1, toRev, reason: "stream gap: the relay refused to resume", stream: true, resync });
           // Resynchronized below the revision it held: the relay published a
           // non-increasing revision meanwhile.
           if (latest && latest.commit.rev < a.lastRev)
@@ -374,9 +406,7 @@ export class Witness implements WitnessApi {
   }
 
   private process(e: RelayEvent): void {
-    // A first event beyond REV_ALLOWANCE says nothing about where the
-    // witness's history starts; the gap it opens covers that.
-    const a = this.account(e.did, inAllowance(e) ? e : undefined);
+    const a = this.account(e.did);
     if (a.pending) {
       a.pending.queue.push(e); // in order, behind the commit awaiting a fetch
       return;
@@ -392,13 +422,19 @@ export class Witness implements WitnessApi {
     if (e.kind === "commit") {
       if (a.state) {
         // The commit must follow the state held: its previous root is that
-        // state's, and its operations take that root to its own. A commit
-        // the relay dropped in between fails here (unless it changed
-        // nothing), so it lies in a gap.
+        // state's, and its operations take that root to its own; otherwise
+        // it is a gap. A commit the relay dropped in between fails here by
+        // its root, unless it changed nothing or a later one cancelled it
+        // out; its `since` then names a revision other than the state's,
+        // which records a gap before it, though the commit itself is
+        // reconstructed from its operations.
+        const follows = e.since === a.state.commit.rev;
         const prev = new Map(a.state.records);
         const next = snapshotData(prev) === e.prevData ? applyOps(prev, e.ops) : null;
-        if (next && snapshotData(next) === e.commit.data && invert(next, e.ops, e.prevData)) {
-          this.record(e.did, { seq: e.seq, at: this.now(), local: 0, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: next }, via: "commit" });
+        const inverts = !!next && snapshotData(next) === e.commit.data && invert(next, e.ops, e.prevData);
+        if (next && inverts) {
+          if (!follows) this.sinceGap(a, e);
+          this.record(e.did, { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: next }, via: "commit" });
         } else this.gap(e.did, e, "operations fail inversion");
         return;
       }
@@ -406,7 +442,7 @@ export class Witness implements WitnessApi {
         // The account's first commit: from the empty repo.
         const next = applyOps(new Map(), e.ops);
         if (next && snapshotData(next) === e.commit.data && invert(next, e.ops, null)) {
-          this.record(e.did, { seq: e.seq, at: this.now(), local: 0, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: next }, via: "commit" });
+          this.record(e.did, { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: next }, via: "commit" });
         } else this.gap(e.did, e, "operations fail inversion");
         return;
       }
@@ -423,7 +459,7 @@ export class Witness implements WitnessApi {
   private future(a: Account, e: RelayEvent): void {
     a.state = null;
     if (a.open) return;
-    const gap: Gap = { seq: e.seq, at: this.now(), local: 0, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev: a.lastRev + 1, toRev: Infinity, reason: "its revision is more than REV_ALLOWANCE ahead of its relay time", stream: false };
+    const gap: Gap = { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev: a.lastRev + 1, toRev: Infinity, reason: "its revision is more than REV_ALLOWANCE ahead of its relay time", stream: false };
     this.push(a, gap);
     a.open = gap;
   }
@@ -434,7 +470,7 @@ export class Witness implements WitnessApi {
    * the history, with every answer. */
   private backward(a: Account, e: RelayEvent): void {
     a.state = null;
-    this.push(a, { seq: e.seq, at: this.now(), local: 0, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev: e.commit.rev, toRev: e.commit.rev, reason: "its revision is not above the account's previous one", stream: false });
+    this.push(a, { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev: e.commit.rev, toRev: e.commit.rev, reason: "its revision is not above the account's previous one", stream: false });
     a.integrity.push({ id: `${this.id}:order:${e.seq}`, seq: e.seq, rev: e.commit.rev, after: a.lastRev, reason: `the relay published revision ${e.commit.rev} after revision ${a.lastRev}` });
   }
 
@@ -456,7 +492,7 @@ export class Witness implements WitnessApi {
         const a = this.account(did);
         a.history = a.history.filter((h) => h.kind !== "gap");
       }
-      this.record(did, { seq, at: this.now(), local: 0, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: new Map(s.records) }, via });
+      this.record(did, { seq, at: this.now(), local: 0, time: e.time, kind: "state", rev: e.commit.rev, snap: { commit: e.commit, records: new Map(s.records) }, via });
     } else this.gap(did, e, `the repo served was not at revision ${e.commit.rev}'s root`);
   }
 
@@ -504,7 +540,15 @@ export class Witness implements WitnessApi {
     a.state = null;
     const fromRev = Math.min(a.lastRev + 1, e.commit.rev);
     a.lastRev = Math.max(a.lastRev, e.commit.rev);
-    this.push(a, { seq: e.seq, at: this.now(), local: 0, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev, toRev: e.commit.rev, reason, stream: false });
+    this.push(a, { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "gap", id: `${this.id}:${e.seq}`, rev: e.commit.rev, fromRev, toRev: e.commit.rev, reason, stream: false });
+  }
+
+  /** A `#commit` whose `since` names a revision other than the last one
+   * recorded: commits the relay did not publish in order (dropped by an
+   * honest relay, perhaps, even ones that change nothing or cancel out) may
+   * lie between, a gap before it. */
+  private sinceGap(a: Account, e: RelayEvent): void {
+    this.push(a, { seq: e.seq, at: this.now(), local: 0, time: e.time, kind: "gap", id: `${this.id}:since:${e.seq}`, rev: null, fromRev: a.lastRev + 1, toRev: e.commit.rev - 1, reason: `its since names revision ${e.since}, not the previous revision ${a.lastRev}`, stream: false });
   }
 
   /** Drop entries older than WITNESS_RETENTION, remembering the newest
@@ -527,6 +571,7 @@ export class Witness implements WitnessApi {
    * covers), the same at every witness. */
   private position(h: HistoryEntry): number {
     if (h.kind === "gap" && h.stream && h.resync !== undefined) return h.resync; // past a stream gap, only to where it resumed
+    if (h.kind === "gap" && h.start) return h.resync ?? 0; // past where history starts, only to the starting revision
     return h.kind === "state" ? h.rev : h.toRev; // a repo revision
   }
 
@@ -543,11 +588,14 @@ export class Witness implements WitnessApi {
   }
 
   /** Whether an entry is served to a cursor at `start`: one after it, or a
-   * stream gap whose interval reaches it. A stream gap resumed at the
-   * revision the cursor holds lies at that cursor, not after it, yet covers
-   * what the relay published since the client last read. */
+   * stream gap or the gap before the witness's history starts whose interval
+   * reaches it. Such a gap resumed or started at the revision the cursor
+   * holds lies at that cursor, not after it, yet covers what the relay may
+   * have published since the client last read. */
   private served(h: HistoryEntry, start: number): boolean {
-    return this.position(h) > start || (h.kind === "gap" && h.stream && h.toRev >= start);
+    return this.position(h) > start
+      || (h.kind === "gap" && h.stream && h.toRev >= start)
+      || (h.kind === "gap" && !!h.start && h.toRev >= start);
   }
 
   commitAt(_observer: string, did: Did, rev: number): CommitStatus {
@@ -561,23 +609,25 @@ export class Witness implements WitnessApi {
     // Inside a recorded gap: part of what the witness reports it could not check.
     if (es.some((h) => h.kind === "gap" && h !== a.open && h.fromRev <= rev && rev <= h.toRev)) return { status: "gap" };
     // Strictly between two commits reconstructed consecutively, the later
-    // one from operations that invert to the earlier one's root, with no gap
-    // recorded between them: the relay published nothing there.
+    // a #commit whose since names the earlier's revision and whose
+    // operations invert to the earlier's root (process() records such a
+    // commit "via commit", and any other as a gap), with no gap recorded
+    // between them: the relay published nothing there.
     for (let i = 0; i + 1 < es.length; i++) {
       const lo = es[i], hi = es[i + 1];
       if (lo.kind === "state" && hi.kind === "state" && hi.via === "commit" && lo.rev < rev && rev < hi.rev)
-        return { status: "unpublished", below: lo.rev, belowData: lo.snap.commit.data, above: hi.rev };
+        return { status: "unpublished", below: lo.rev, above: hi.rev };
     }
     return { status: "unknown" };
   }
 
-  latest(_observer: string, did: Did): { pos: number; snap: Snapshot } | null {
+  latest(_observer: string, did: Did): { pos: number; snap: Snapshot; time?: number } | null {
     const a = this.meet(did);
     const last = a.history[a.history.length - 1];
     // The latest published commit must itself be reconstructed, with nothing
     // after it awaiting a fetch or an unresolved stream gap.
     if (!last || last.kind !== "state" || !a.state || a.pending || a.open) return null;
-    return { pos: this.position(last), snap: last.snap };
+    return { pos: this.position(last), snap: last.snap, time: last.time };
   }
 
   /** Every device ID in any state this witness reconstructed for `did`

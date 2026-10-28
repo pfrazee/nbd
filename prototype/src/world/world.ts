@@ -147,6 +147,25 @@ export class World implements Network {
     return w;
   }
 
+  /** Application `app`'s witness loses its state and is rebuilt: it starts
+   * following the relay again now, holding no history from before, which it
+   * reports as a gap. Its operating conditions carry over; its subscription
+   * is open. */
+  rebuildWitness(app: string): Witness {
+    if (!this.relay) throw new Error("world: no relay outside the witness policy");
+    const old = this.witnessOf(app);
+    this.relay.ingest();
+    const w = new Witness(old.id, app, this.relay, (id, did) => this.pdsOf.get(did)?.serveFetch(id, did) ?? null, () => this.t, { late: true });
+    w.clockOffset = old.clockOffset;
+    w.reachable = old.reachable;
+    w.lag = old.lag;
+    w.pageSize = old.pageSize;
+    this.witnesses.set(app, w);
+    this.note(`${w.id} is rebuilt, following the relay again from seq ${w.cursor}`);
+    this.settle();
+    return w;
+  }
+
   witness(observer: string): WitnessApi | null {
     const inst = this.installations.get(observer);
     if (!inst || !this.relay) return null;
@@ -741,6 +760,23 @@ export class World implements Network {
       this.settle();
     };
     return { sub, undo };
+  }
+
+  /** The PDS replaces every device of `did` with an impostor in one commit
+   * at revision `rev`, which it chooses (published only by a relay that
+   * doesn't check revisions), hidden from the account's own devices. */
+  impostorAtRev(did: Did, rev: number, deviceName = "impostor"): Installation {
+    const pds = this.pdsOf.get(did)!;
+    const repo = pds.repo(did);
+    const own = [...this.installations.values()].filter((i) => i.did === did).map((i) => i.id);
+    this.adversary.add({ kind: "withhold", did, observers: own, rev: repo.rev, describe: `${pds.name} hides ${did}'s impostor from its own devices` });
+    const sub = this.pdsDevice(did, deviceName);
+    for (const k of [...repo.records.keys()]) if (k.startsWith(COL.device + "/")) repo.records.delete(k);
+    const op = sub.deviceRecord() as { rkey: string; value: Cbor };
+    repo.records.set(`${COL.device}/${op.rkey}`, op.value);
+    this.note(`${pds.name} replaces ${did}'s devices with ${sub.id} at revision ${rev}, hidden from its own devices`);
+    this.commitAtRev(did, rev);
+    return sub;
   }
 
   /** The PDS serves `observers` its commit of `did` at revision `rev`

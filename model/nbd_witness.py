@@ -7,8 +7,10 @@ variant replaces it with what the proposal relies on:
 - `RelayWorld`: the PDS's commits, a reference relay that publishes one
   ordered log of them, delivered identically to every subscriber, and a
   malicious PDS that can serve one client a commit the relay never saw
-  (`fork`, `serve`), commit without relaying (`pds_write(relay=False)`) or
-  at a chosen revision (`pds_write(rev=...)`), publish a
+  (`fork`, `serve`), commit without relaying (`pds_write(relay=False)`),
+  at a chosen revision (`pds_write(rev=...)`), or naming a chosen
+  predecessor in a `#commit`'s unsigned `since` (`pds_write(since=...)`;
+  an honest PDS names its true previous revision), publish a
   `#sync` root and serve its contents only to some witnesses or replace it
   before they fetch (`publish_sync`, `replace_sync`), and withhold or stall
   fetches per witness. Revisions are timestamps the PDS chooses (`rev_at`);
@@ -21,7 +23,11 @@ variant replaces it with what the proposal relies on:
   records stream gaps when the relay refuses to resume, reports per account
   its frontier age (its own clock minus the relay time of the newest event
   it processed in order, held at a commit awaiting a fetch), and keeps
-  `WITNESS_RETENTION` of history, served by repo revision.
+  `WITNESS_RETENTION` of history, served by repo revision. A witness can
+  start following accounts later (`from_now`) or be rebuilt (`rebuild`);
+  the interval it then lacks is bounded as a stream gap's is, and an
+  installation whose cursor's commit was relayed before it started checks
+  the starting commit against its cursor.
 - `WitnessClient`: InviterClient deciding only on commits its own witness
   reports as published and reconstructed, processing every witnessed commit
   of each pinned account in order, watching its own account's whole history
@@ -96,8 +102,9 @@ class Commit:
 
 @dataclass(frozen=True)
 class Event:
-    """A relay event. `prev` is the root a `#commit`'s operations invert to;
-    a `#sync` carries only the commit."""
+    """A relay event. `prev` is the root a `#commit`'s operations invert to
+    and `since` the revision it names as its predecessor (not signed, so a
+    PDS can misstate it); a `#sync` carries only the commit."""
 
     seq: int
     kind: str  # "commit" | "sync"
@@ -106,6 +113,7 @@ class Event:
     time: float  # relay time: when the (honest) relay sequenced it, not when any witness got it
     hidden_from: FrozenSet[str] = frozenset()  # witnesses a dishonest relay never delivers it to
     claim: Optional[float] = None  # a time the PDS put on it, which only a non-reference relay passes on
+    since: Optional[int] = None  # a `#commit`'s stated previous revision
 
 
 class RelayWorld(World):
@@ -206,12 +214,15 @@ class RelayWorld(World):
 
     def commit(self, account: str, relay: bool = True, kind: str = "commit",
                prev=None, serve_to: Optional[FrozenSet[str]] = None,
-               rev: Optional[int] = None, claim: Optional[float] = None) -> Commit:
+               rev: Optional[int] = None, claim: Optional[float] = None,
+               since: Optional[int] = None) -> Commit:
         """Commit the account's current records. An honest `#commit` inverts
-        to the PDS's previous commit; prev="relayed" inverts to the last
-        relayed one instead, hiding that an unrelayed commit came between.
-        An explicit `rev` is written as given and leaves the PDS's own
-        revision clock where it was (a clock wrong once, or a lie)."""
+        to the PDS's previous commit and its `since` names that commit's
+        revision; prev="relayed" inverts to the last relayed one instead,
+        and names its revision, hiding that an unrelayed commit came between.
+        An explicit `since` is stated as given (a lie, unless it is the
+        truth). An explicit `rev` is written as given and leaves the PDS's
+        own revision clock where it was (a clock wrong once, or a lie)."""
         old = self.head.get(account)
         if rev is None:
             rev = self.revs[account] = self.next_rev(account)
@@ -225,19 +236,27 @@ class RelayWorld(World):
             if prev == "relayed":
                 last = self.relay_head(account)
                 prev = last.commit.root if last else EMPTY
+                if since is None and last is not None:
+                    since = last.commit.rev
             elif prev is None:
                 prev = old.root if old else EMPTY
-            self._emit(kind, c, prev if kind == "commit" else None, claim)
+            if since is None and old is not None:
+                since = old.rev
+            if kind == "commit":
+                self._emit(kind, c, prev, claim, since)
+            else:
+                self._emit(kind, c, None, claim)
             if kind == "sync" and serve_to is not None:
                 self.sync_served[(account, c.root)] = serve_to
         return c
 
-    def _emit(self, kind: str, c: Commit, prev: Optional[Root], claim: Optional[float] = None) -> Event:
+    def _emit(self, kind: str, c: Commit, prev: Optional[Root], claim: Optional[float] = None,
+              since: Optional[int] = None) -> Event:
         self._seq += 1
         hidden = frozenset(wn for wn, accts in self.relay_hides.items() if c.account in accts)
         if claim is None:
             claim = self.now + self.pds_clock.get(c.account, 0.0)  # the PDS's own clock
-        e = Event(self._seq, kind, c, prev, self.now, hidden, claim)
+        e = Event(self._seq, kind, c, prev, self.now, hidden, claim, since)
         self.relay.append(e)
         return e
 
@@ -255,7 +274,7 @@ class RelayWorld(World):
     def pds_write(self, account: str, add=(), delete=(), approve=(), unapprove=(),
                   relay: bool = True, kind: str = "commit", prev=None,
                   serve_to: Optional[FrozenSet[str]] = None, rev: Optional[int] = None,
-                  claim: Optional[float] = None) -> Commit:
+                  claim: Optional[float] = None, since: Optional[int] = None) -> Commit:
         for b in add:
             self.devices.setdefault(account, set()).add(b)
         for b in delete:
@@ -265,7 +284,7 @@ class RelayWorld(World):
         for s, t in unapprove:
             self.approvals.get(account, set()).discard(Approval(s, t))
         return self.commit(account, relay=relay, kind=kind, prev=prev, serve_to=serve_to, rev=rev,
-                           claim=claim)
+                           claim=claim, since=since)
 
     def republish(self, c: Commit, kind: str = "commit") -> Commit:
         """Publish an earlier commit again, at its own revision: the PDS puts
@@ -275,7 +294,10 @@ class RelayWorld(World):
         self.devices[a], self.approvals[a], self.other[a] = set(c.devices), set(c.approvals), c.other
         old = self.head.get(a)
         self.head[a] = c
-        self._emit(kind, c, (old.root if old else EMPTY) if kind == "commit" else None)
+        if kind == "commit":
+            self._emit(kind, c, old.root if old else EMPTY, since=old.rev if old else None)
+        else:
+            self._emit(kind, c, None)
         return c
 
     def publish_sync(self, account: str, serve_to: Optional[FrozenSet[str]] = None, **writes) -> Commit:
@@ -403,6 +425,7 @@ class Entry:
     wtime: float  # witness-clock time the witness handled it
     alarm: Optional[str] = None  # an integrity alarm the witness raised here
     cursor: Optional[int] = None  # the cursor after it, where not `hi`
+    seq: int = 0  # the relay sequence number of its event, giving relay order
 
     @property
     def reconstructed(self) -> bool:
@@ -440,14 +463,26 @@ class Witness:
     account's next commit is reconstructed as one after a gap is.
 
     CONSECUTIVE: which two reconstructions bracket a commit the relay never
-    published. "inverted" (the model's reading): the later one is a
-    `#commit` whose operations inverted to the earlier one. "any" (the
-    proposal's text): any two with no gap recorded between them, under which
-    a `#sync` after a commit an honest relay dropped is a false alarm."""
+    published. "since" (the proposal): the later one is a `#commit` whose
+    `since` names the earlier one's revision and whose operations inverted
+    to the earlier one's root; a `#commit` that inverts but names another
+    revision records a gap before it but is itself reconstructed by its
+    operations (finding 20). "inverted" (an earlier
+    text): inversion alone, under which commits an honest relay dropped that
+    change nothing or cancel out are a false alarm. "any" (the text before
+    that): any two with no gap recorded between them, under which a `#sync`
+    after a commit an honest relay dropped is a false alarm (finding 12).
+
+    Where its history of an account starts (`from_now`, `rebuild`, or an
+    account first met at a stream gap), the revisions it lacks run through
+    REV_ALLOWANCE past the relay time at which it started following the
+    account, or through the starting revision if that is higher, as a
+    stream gap's interval does (finding 21); `lacks` serves that interval to
+    every installation whose cursor it reaches."""
 
     FETCH_TIMEOUT = FETCH_TIMEOUT
     PENDING = "account"
-    CONSECUTIVE = "inverted"
+    CONSECUTIVE = "since"
 
     def __init__(self, world: RelayWorld, name: str, clock_offset: float = 0.0,
                  from_now: bool = False):
@@ -463,6 +498,7 @@ class Witness:
         self.latest: Dict[str, Entry] = {}
         self.last_rev: Dict[str, int] = {}  # revision processed through, per account
         self.missing: Dict[str, int] = {}  # revisions <= this were never in its history
+        self.started: Dict[str, Tuple[Commit, int]] = {}  # (starting commit, relay seq it started after)
         self.pruned_rev: Dict[str, int] = {}  # revisions <= this are past retention
         self.blocked: Dict[str, List[Tuple[Event, Optional[float]]]] = {}  # awaiting a fetch, then queued
         self.unplaced: Dict[str, List[Commit]] = {}  # relayed, not accepted into history for its revision
@@ -473,14 +509,41 @@ class Witness:
         self.interrupted = False
         self.up_since = world.now  # real time the subscription last (re)opened
         world.witnesses.append(self)
-        if from_now:  # start following every account at a verified repo
-            self.pos = len(world.relay)
-            for a in sorted(world.head):
-                last = self._head_event(a)
-                if last is not None:
-                    ok = self._fetch_into(a, last, "start")
-                    self.missing[a] = last.commit.rev - (1 if ok else 0)
-                    self.last_rev[a] = last.commit.rev
+        if from_now:
+            self._start_all()
+
+    def _start_all(self) -> None:
+        """Start following every account now, each at the relay's latest
+        commit for it, by a verified fetch, skipping the relay's log."""
+        w = self.world
+        self.pos = len(w.relay)
+        bound = rev_at(w.stamp(None, w.now, self) + REV_ALLOWANCE)
+        for a in sorted(w.head):
+            last = self._head_event(a)
+            if last is not None:
+                self._start(a, last, bound)
+
+    def _start(self, a: str, last: Event, bound: int) -> None:
+        """Start the account's history at the relay's latest commit for it.
+        That revision cannot bound what came before (a PDS can publish an
+        impostor and then replay an earlier revision), so the revisions it
+        lacks run through `bound`, REV_ALLOWANCE past the relay time at which
+        it started following, or through the starting revision if higher."""
+        r = last.commit.rev
+        self.state[a] = None
+        self._fetch_into(a, last, "start")
+        self.commits.setdefault(a, {})[r] = last.commit
+        self.started[a] = (last.commit, len(self.world.relay))  # every event so far came before
+        self.missing[a] = max(r, bound)
+        self.last_rev[a] = max(self.last_rev.get(a, 0), r)
+
+    def rebuild(self) -> None:
+        """Lose every account's history, as a witness rebuilt from scratch,
+        and start following each again from the relay's latest commit."""
+        self.hist, self.state, self.commits, self.latest = {}, {}, {}, {}
+        self.last_rev, self.missing, self.started, self.pruned_rev = {}, {}, {}, {}
+        self.blocked, self.unplaced, self.alarms = {}, {}, []
+        self._start_all()
 
     def wnow(self) -> float:
         return self.world.now + self.clock_offset
@@ -534,9 +597,9 @@ class Witness:
 
     def _append(self, a: str, kind: str, lo: int, hi: int, commit: Optional[Commit],
                 root: Optional[Root], rtime: float, wtime: float, alarm: Optional[str] = None,
-                cursor: Optional[int] = None) -> Entry:
+                cursor: Optional[int] = None, seq: int = 0) -> Entry:
         self.count += 1
-        e = Entry(self.count, a, kind, lo, hi, commit, root, rtime, wtime, alarm, cursor)
+        e = Entry(self.count, a, kind, lo, hi, commit, root, rtime, wtime, alarm, cursor, seq)
         self.hist.setdefault(a, []).append(e)
         self.archive.append(e)
         return e
@@ -544,19 +607,26 @@ class Witness:
     def _record(self, a: str, kind: str, ev: Event, root: Root) -> None:
         c = ev.commit
         self.commits.setdefault(a, {})[c.rev] = c
-        self.latest[a] = self._append(a, kind, c.rev, c.rev, c, root, self._t(ev), self._when(ev))
+        self.latest[a] = self._append(a, kind, c.rev, c.rev, c, root, self._t(ev), self._when(ev),
+                                      seq=ev.seq)
         self.state[a] = root
         self.last_rev[a] = max(self.last_rev.get(a, 0), c.rev)
 
     def _gap(self, a: str, ev: Event) -> None:
         c = ev.commit
         self.commits.setdefault(a, {})[c.rev] = c
-        self._append(a, "gap", self.last_rev.get(a, 0) + 1, c.rev, c, None, self._t(ev), self._when(ev))
+        self._append(a, "gap", self.last_rev.get(a, 0) + 1, c.rev, c, None, self._t(ev), self._when(ev),
+                     seq=ev.seq)
         self.state[a] = None
         self.last_rev[a] = max(self.last_rev.get(a, 0), c.rev)
 
     def _future(self, ev: Event) -> bool:
         return ev.commit.rev > rev_at(self._t(ev) + REV_ALLOWANCE)
+
+    def _held_rev(self, a: str) -> Optional[int]:
+        """The revision of the account's latest reconstruction."""
+        e = self.latest.get(a)
+        return e.commit.rev if e else None
 
     def _unplaced(self, a: str, ev: Event, kind: str, alarm: Optional[str]) -> None:
         """A relayed commit not accepted into the history for its revision: a
@@ -564,7 +634,7 @@ class Witness:
         its cursor positions."""
         c, last = ev.commit, self.last_rev.get(a, 0)
         self.unplaced.setdefault(a, []).append(c)
-        self._append(a, kind, last + 1, last, c, None, self._t(ev), self._when(ev), alarm)
+        self._append(a, kind, last + 1, last, c, None, self._t(ev), self._when(ev), alarm, seq=ev.seq)
         self.state[a] = None
         if alarm:
             self.alarms.append((a, alarm, c))
@@ -596,7 +666,11 @@ class Witness:
             self._unplaced(a, e, "rev-not-increasing", f"revision not increasing {a} rev {e.commit.rev}")
             return
         cur = self.state.get(a, EMPTY)
-        if e.kind == "commit" and cur is not None and e.prev == cur:
+        inverts = e.kind == "commit" and cur is not None and e.prev == cur
+        follows = self.CONSECUTIVE != "since" or e.since == self._held_rev(a)
+        if inverts:
+            if not follows:
+                self._gap(a, e)  # `since` names another revision: a gap before it
             self._record(a, "commit", e, e.commit.root)  # operations invert to the previous root
             return
         if e.kind == "commit":
@@ -654,16 +728,18 @@ class Witness:
                 cur, held = self.last_rev.get(a, 0), self.commits.get(a, {}).get(r)
                 self._append(a, "stream-gap", cur + 1, max(cur + 1, r, bound), None, None,
                              self._t(last), self.wnow(), cursor=max(cur, r))
+                self.hist[a][-1].seq = last.seq
                 if r == cur and self.state[a] is not None and held == last.commit:
                     continue  # it already holds that root; the gap stands
                 if r < cur or (r == cur and held != last.commit):
                     self._unplaced(a, last, "rev-not-increasing", f"revision not increasing {a} rev {r}")
                     continue
-            self.state[a] = None
-            ok = self._fetch_into(a, last, "resync")
-            self.commits.setdefault(a, {})[r] = last.commit
             if not known:
-                self.missing[a] = r - (1 if ok else 0)
+                self._start(a, last, bound)  # it starts following the account here
+                continue
+            self.state[a] = None
+            self._fetch_into(a, last, "resync")
+            self.commits.setdefault(a, {})[r] = last.commit
             self.last_rev[a] = max(self.last_rev.get(a, 0), r)
 
     def _prune(self) -> None:
@@ -694,11 +770,17 @@ class Witness:
     def skew_fault(self, account: str) -> bool:
         return self.skewed or self.frontier(account) > self.wnow() + CLOCK_SKEW
 
-    def lacks(self, account: str) -> Tuple[int, str]:
-        """The account's revisions this witness does not have: every revision
-        up to the first, older than its retention or before its history."""
+    def lacks(self, account: str, after: int) -> Optional[Tuple[int, int, str]]:
+        """The account's revisions after cursor `after` that this witness
+        does not have, older than its retention or before its history, as
+        (lo, hi, kind); None if it has them all. Before its history, that
+        reaches past the revision the history starts at, so it is served to
+        an installation already at that revision too."""
         p, m = self.pruned_rev.get(account, 0), self.missing.get(account, 0)
-        return (p, "retention") if p >= m else (m, "before history")
+        hi, kind = (p, "retention") if p >= m else (m, "before history")
+        if hi <= after:
+            return None
+        return (after + 1, hi, kind)
 
     def latest_rec(self, account: str) -> Optional[Entry]:
         return self.latest.get(account)
@@ -766,7 +848,9 @@ class Gap:
     at: Optional[int] = None  # a commit not accepted into the history: its revision
 
     def covers(self, rev: int) -> bool:
-        return self.lo <= rev <= self.hi
+        """Its interval, or the revision of the commit it was recorded at
+        without accepting it into the history (which it names)."""
+        return self.lo <= rev <= self.hi or self.at == rev
 
     def key(self) -> tuple:
         return (self.lo, self.hi, self.kind, self.at)
@@ -776,6 +860,7 @@ class Gap:
 class WitnessState(InviterState):
     own: Optional[Binding] = None
     cursors: Dict[str, int] = field(default_factory=dict)  # account -> repo revision processed through
+    cursor_seq: Dict[str, int] = field(default_factory=dict)  # relay seq of the event that set the cursor
     obs: Dict[str, Root] = field(default_factory=dict)  # pinned account -> collections applied
     obs_rev: Dict[str, int] = field(default_factory=dict)
     proven: Dict[Binding, int] = field(default_factory=dict)  # binding -> revision first seen present
@@ -804,7 +889,8 @@ class Answer:
     that moment. Later pages are served from the same answer."""
 
     after: int
-    lacks: Tuple[int, str]
+    lacks: Optional[Tuple[int, int, str]]
+    start: Optional[Tuple[Commit, int]]  # where the witness's history of the account starts
     entries: List[Tuple[Entry, int]]
     frontier_age: float
 
@@ -869,7 +955,6 @@ class WitnessClient(InviterClient):
     FRESH_HISTORY_GAP = True  # finding 2's fix: history the witness lacks is a gap at enrollment too
     PAGE_SIZE: Optional[int] = None  # history entries per page of an answer; None: one page
     MONO_COUNTS_SUSPEND = True  # finding 3: a monotonic clock that stops in suspend
-    EXEMPT_UNCHANGED = True  # finding 13's fix: an unrelayed commit with the earlier one's data is no alarm
 
     def __init__(self, world: RelayWorld, own: Binding, witness: Witness,
                  clock_offset: float = 0.0, transfer: Optional[WitnessState] = None):
@@ -976,7 +1061,8 @@ class WitnessClient(InviterClient):
             return None
         own, w = self.own.account, self.witness
         cur, fresh = self._start_cursor(own)
-        ans = Answer(cur, w.lacks(own), self._resume(w, own, cur), w.frontier_age(own))
+        ans = Answer(cur, w.lacks(own, cur), w.started.get(own), self._resume(w, own, cur),
+                     w.frontier_age(own))
         return Request(ans, self._epoch, self.mono(), self.mono(), fresh)
 
     def deliver(self, req: Request) -> bool:
@@ -989,7 +1075,9 @@ class WitnessClient(InviterClient):
             return True
         ans, n = req.answer, req.page
         pages = ans.pages(self.PAGE_SIZE)
-        self._follow_account(self.own.account, ans.after, ans.lacks if n == 0 else (0, ""), pages[n], req.fresh)
+        if n == 0:
+            self._check_start(self.own.account, ans.after, ans.start)
+        self._follow_account(self.own.account, ans.after, ans.lacks if n == 0 else None, pages[n], req.fresh)
         req.page += 1
         if req.page < len(pages):
             req.sent = self.mono()  # the next page's request
@@ -1095,9 +1183,11 @@ class WitnessClient(InviterClient):
         """A commit the PDS serves that the witness does not report yet
         means wait; one that differs from the witnessed commit at its
         revision is a fork, and one whose revision falls strictly between
-        two commits the witness reconstructed consecutively is a commit the
-        PDS never relayed (unless its data equals the earlier one's). Anywhere else (inside a recorded gap, or above
-        the witness's latest revision) it raises nothing."""
+        two commits the witness reconstructed consecutively (the later a
+        `#commit` whose `since` named the earlier and whose operations
+        inverted to it) is a commit the PDS never relayed in order. Anywhere
+        else (inside a recorded gap, or above the witness's latest revision)
+        it raises nothing."""
         if not self.witness.reachable:
             return True
         c = self.relay_world.pds_serve(self.name, x)
@@ -1112,8 +1202,6 @@ class WitnessClient(InviterClient):
         if self.witness.reports_unplaced(x, c):
             return False  # published, and reported as a gap
         around = self.witness.unrelayed_between(x, c.rev)
-        if around is not None and self.EXEMPT_UNCHANGED and c.root == around[0].root:
-            return False  # a commit that changes nothing hides nothing
         if around is not None:
             proof = (around[0], c, around[1])
             if proof not in self.state.unrelayed:
@@ -1168,11 +1256,13 @@ class WitnessClient(InviterClient):
         st.cursors[x] = 0
         return st.cursors[x], True
 
-    def _follow_account(self, x: str, after: Optional[int] = None, lacks: Optional[Tuple[int, str]] = None,
+    def _follow_account(self, x: str, after: Optional[int] = None,
+                        lacks: Optional[Tuple[int, int, str]] = None,
                         entries: Optional[List[Tuple[Entry, int]]] = None, fresh: bool = False) -> None:
         """Process the account's history after its cursor: read from the
         witness now (pinned accounts), or a page of an answer (the own
-        account; `after` is the cursor the answer was computed from)."""
+        account; `after` is the cursor the answer was computed from, and
+        `lacks` what the witness said it lacks after it, on the first page)."""
         st, w = self.state, self.witness
         own = x == self.own.account
         if x not in st.cursors:
@@ -1180,11 +1270,12 @@ class WitnessClient(InviterClient):
             if x not in st.cursors:
                 return
         cur = st.cursors[x] if after is None else after
-        lack, kind = w.lacks(x) if lacks is None else lacks  # revisions after the cursor it lacks
-        if lack > cur and (self.FRESH_HISTORY_GAP or not fresh):
-            self._gap(x, Gap(cur + 1, lack, kind))
         if entries is None:
+            lacks = w.lacks(x, cur)  # revisions after the cursor it lacks
             entries = self._resume(w, x, cur)
+        if lacks is not None and (self.FRESH_HISTORY_GAP or not fresh):
+            lo, hi, kind = lacks
+            self._gap(x, Gap(lo, hi, kind), merge=True)  # the cursor moves only with the history read
         for e, pos in entries:
             if e.reconstructed:
                 st.obs[x], st.obs_rev[x] = e.root, e.hi
@@ -1198,15 +1289,46 @@ class WitnessClient(InviterClient):
                 self._gap(x, Gap(e.lo, e.hi, e.kind, at=e.commit.rev if e.lo > e.hi and e.commit else None))
                 if e.alarm and e.alarm not in st.alarms:
                     st.alarms.append(e.alarm)  # an integrity alarm the witness raised
+            if pos > st.cursors[x]:
+                st.cursor_seq[x] = e.seq
             st.cursors[x] = max(st.cursors[x], pos)
+
+    def _check_start(self, x: str, cur: int, start: Optional[Tuple[Commit, int]]) -> None:
+        """A witness starts following an account at the relay's latest commit
+        for it. If the commit at this installation's cursor was relayed
+        before then, an honest start is at or above the cursor, with the same
+        commit at the cursor's revision: a start below it, or at it with a
+        different commit, was first published at a non-increasing revision,
+        which a witness that was not following cannot tell. An integrity
+        alarm, with the starting commit as proof, and a gap there (finding
+        22). A cursor set by a commit relayed after the start says nothing:
+        the witness followed it."""
+        st = self.state
+        if start is None:
+            return
+        start, after = start
+        if st.cursor_seq.get(x, INF) > after:
+            return  # the cursor's commit was relayed after the witness started
+        below = cur > start.rev
+        differs = cur == start.rev and st.obs_rev.get(x) == cur and st.obs[x] != start.root
+        if below or differs:
+            msg = f"revision not increasing {x} rev {start.rev}"
+            if msg not in st.alarms:
+                st.alarms.append(msg)
+            self._gap(x, Gap(start.rev, start.rev, "start-not-increasing", at=start.rev))
 
     def _resume(self, w: Witness, x: str, cur: int) -> List[Tuple[Entry, int]]:
         """The witness's history of x after cursor `cur`, each entry with the
         cursor after it: the account's repo revision, the same at every witness."""
         return [(e, e.pos) for e in w.read(x, cur)]
 
-    def _gap(self, x: str, g: Gap) -> None:
+    def _gap(self, x: str, g: Gap, merge: bool = False) -> None:
+        """Record a gap once. With `merge` (an interval the witness lacks,
+        served again while the cursor stays inside it), one already inside
+        a recorded gap of its kind is not recorded again."""
         gaps = self.state.gaps if x == self.own.account else self.state.audit_gaps.setdefault(x, [])
+        if merge and any(h.kind == g.kind and h.lo <= g.lo and g.hi <= h.hi for h in gaps):
+            return
         if not any(h.key() == g.key() for h in gaps):
             gaps.append(g)
 
@@ -1259,6 +1381,18 @@ def detected(o: WitnessClient, b: Binding, rev: int) -> bool:
     return b in st.own_alarms or b in st.notices or b in st.presented or o.gap_covers(rev)
 
 
+def _first_relayed(w: RelayWorld, b: Binding, rev: int) -> float:
+    """The relay sequence number at which a commit of b's account at `rev`
+    naming b was first relayed; 0 if never, so the goal's first part still
+    applies to it."""
+    for e in w.relay:
+        c = e.commit
+        if c.account == b.account and c.rev == rev and (
+                b in c.devices or any(b in (a.signer, a.target) for a in c.approvals)):
+            return e.seq
+    return 0
+
+
 def goal_violations(account: str, installations: List[WitnessClient],
                     clients: List[WitnessClient], legit: Set[Binding], now: float,
                     slack: float = 0.0) -> List[str]:
@@ -1266,7 +1400,10 @@ def goal_violations(account: str, installations: List[WitnessClient],
     none of the account's installations generated, transferred, or approved
     (`legit`) must appear in, or leave a gap in, the history each of the
     account's installations read (positions are repo revisions, so histories
-    read from different witnesses compare); and every installation running
+    read from different witnesses compare, except a commit first relayed
+    after the one that set the installation's cursor, which it has not
+    read yet however low its revision: a non-increasing one); and every
+    installation running
     more than 24 hours (plus `slack`) after the acceptance must have alarmed
     (or noticed, or presented it at enrollment), recorded a gap covering it,
     or show the liveness warning. ("More than": coverage age must exceed 24
@@ -1283,7 +1420,8 @@ def goal_violations(account: str, installations: List[WitnessClient],
                 st = o.state
                 cur = st.cursors.get(account)
                 if (cur is not None and st.read_from is not None and st.read_from < rev <= cur
-                        and b not in st.seen_own and not o.gap_covers(rev)):
+                        and b not in st.seen_own and not o.gap_covers(rev)
+                        and _first_relayed(o.relay_world, b, rev) <= st.cursor_seq.get(account, INF)):
                     out.append(f"{b}, accepted by {c.name} at rev {rev}, is neither in nor a gap "
                                f"in the history {o.name} read")
                 if o.running and now - t > LIVENESS_LIMIT + slack + EPS \

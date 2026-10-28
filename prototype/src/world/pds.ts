@@ -98,9 +98,11 @@ export type ViewHook = (observer: string, repo: Repo) => Snapshot | null;
 /** Relay behavior of a malicious PDS for one public repo (witness policy):
  * `transform` edits what it sends the relay (a fork of what it serves);
  * `drop` sends nothing; `kind` "sync" sends `#sync` events (commit only)
- * instead of `#commit`; `badOps` sends operations that fail inversion. */
+ * instead of `#commit`; `badOps` sends operations that fail inversion;
+ * `since` misstates the previous revision a `#commit` names (it is not
+ * signed, so the PDS can write anything there). */
 export type RelayHook = (did: Did, records: Map<RecordPath, Cbor>) => {
-  records?: Map<RecordPath, Cbor>; drop?: boolean; kind?: "commit" | "sync"; badOps?: boolean;
+  records?: Map<RecordPath, Cbor>; drop?: boolean; kind?: "commit" | "sync"; badOps?: boolean; since?: number | null;
 } | null;
 /** What a malicious PDS serves a witness fetching a repo: a snapshot, null
  * to withhold, or undefined for the honest latest commit. */
@@ -116,8 +118,11 @@ export class Pds {
   readonly fetchHooks: FetchHook[] = [];
   /** Where public-repo commits go (witness policy only). */
   relay: { send(e: Emitted): void } | null = null;
-  /** What this PDS last sent the relay per account: its records and root. */
-  private relayed = new Map<Did, { records: Map<RecordPath, Cbor>; data: string } | null>();
+  /** What this PDS last sent the relay per account: its records, root, and
+   * revision, which the next `#commit` names as `since`. An honest PDS sends
+   * every commit, so that is its true previous revision; one hiding a commit
+   * names the last it sent, so that its commits look consecutive. */
+  private relayed = new Map<Did, { records: Map<RecordPath, Cbor>; data: string; rev: number } | null>();
   /** Commits signed for the relay alone (forks), by account and revision. */
   readonly relayForks = new Map<string, Snapshot>();
   private sessionCounter = 0;
@@ -160,9 +165,10 @@ export class Pds {
       if (old === undefined) ops.push({ path: k, prev: null, value: v });
       else if (ref(old) !== ref(v)) ops.push({ path: k, prev: old, value: v });
     }
-    this.relayed.set(did, { records: new Map(records), data: commit.data });
+    this.relayed.set(did, { records: new Map(records), data: commit.data, rev: commit.rev });
     this.relay.send({
       kind: hook?.kind ?? kind, did, commit, prevData: prev ? prev.data : null,
+      since: hook && "since" in hook ? (hook.since ?? null) : prev ? prev.rev : null,
       ops: hook?.badOps ? ops.filter((o) => !o.path.startsWith(COL.device + "/")) : ops,
     });
   }

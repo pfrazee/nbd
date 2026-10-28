@@ -147,6 +147,9 @@ export class Installation {
    * their proof: the served commit, and the revisions of the two commits the
    * witness reconstructed consecutively around it. */
   readonly unrelayedProofs: { did: Did; served: Snapshot["commit"]; below: number; above: number }[] = [];
+  /** Proof of a starting-commit integrity alarm: the commit a witness's
+   * history of `did` started at, below (or at) the cursor `cursor`. */
+  readonly startProofs: { did: Did; start: Snapshot["commit"]; cursor: number }[] = [];
   lastRun = -Infinity;
   /** World-time intervals during which it ran (ground truth). */
   runs: { from: number; to: number }[] = [];
@@ -242,6 +245,7 @@ export class Installation {
     // so it may use another witness); its coverage is unknown until its own
     // frontier first advances.
     for (const [d, c] of approver.mon.cursors) this.mon.cursors.set(d, c);
+    for (const [d, t] of approver.mon.cursorTimes) this.mon.cursorTimes.set(d, t);
     for (const g of approver.mon.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
     // The approver's commit published this device's record. If its
     // acknowledgement was lost, the revision is unknown, but later than any
@@ -273,6 +277,7 @@ export class Installation {
       // They are repo revisions, so the restored installation may use a
       // different witness: what that witness lacks after them is a gap.
       for (const [d, c] of s.witness.cursors) this.mon.cursors.set(d, c);
+      for (const [d, t] of s.witness.cursorTimes) this.mon.cursorTimes.set(d, t);
       for (const g of s.witness.gaps) if (!this.mon.gaps.some((x) => x.key === g.key)) this.mon.gaps.push({ ...g });
       this.mon.auditGaps.push(...s.witness.auditGaps.map((g) => ({ ...g })));
       // Coverage carries across by wall clock from the backup's checkpoint.
@@ -673,6 +678,7 @@ export class Installation {
       }
       this.observeWitnessed(did, start.snap, "first contact");
       this.mon.cursors.set(did, start.pos);
+      if (start.time !== undefined) this.mon.cursorTimes.set(did, start.time);
       this.crossCheck(w, did);
       return;
     }
@@ -690,7 +696,11 @@ export class Installation {
         if (e.kind === "state") {
           this.observeWitnessed(did, e.snap, e.via);
           applied = true;
-        } else this.witnessGap(did, cursor, e);
+        } else {
+          this.startCheck(did, cursor, e);
+          this.witnessGap(did, cursor, e);
+        }
+        if ((e.pos ?? 0) > cursor && e.time !== undefined) this.mon.cursorTimes.set(did, e.time);
         cursor = Math.max(cursor, e.pos ?? 0);
       }
       this.integrity(did, r);
@@ -739,6 +749,7 @@ export class Installation {
         this.recordGap(this.did, `${this.did}:retention:${(cursor ?? 0) + 1}-${r.truncatedTo}`, (cursor ?? 0) + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
       for (const e of r.entries) {
         const at = cursor ?? 0;
+        if ((e.pos ?? 0) > at && e.time !== undefined) this.mon.cursorTimes.set(this.did, e.time);
         cursor = Math.max(at, e.pos ?? 0);
         if (e.kind === "gap") {
           this.witnessGap(this.did, at, e);
@@ -809,6 +820,29 @@ export class Installation {
     } else if (!this.mon.auditGaps.some((x) => x.key === key)) this.mon.auditGaps.push(g);
   }
 
+  /** Where a witness's history of an account starts. Its starting commit
+   * may be one first published at a non-increasing revision, which a
+   * witness not following the account then cannot tell. A cursor set by a
+   * commit the relay sequenced before the witness started following, and
+   * above the starting revision, or at it with a different commit, is an
+   * integrity alarm, with the starting commit kept as proof, and a gap from
+   * the starting revision through the cursor. A cursor set after the
+   * witness started is past its start by construction. */
+  private startCheck(did: Did, cursor: number, e: Extract<HistoryEntry, { kind: "gap" }>): void {
+    const s = e.startCommit;
+    if (!e.start || !s || e.followedFrom === undefined) return;
+    const set = this.mon.cursorTimes.get(did) ?? -Infinity;
+    if (!(set < e.followedFrom)) return; // set after the witness started following: past its start
+    const view = this.trust.state.views.get(did);
+    const below = s.rev < cursor;
+    const differs = s.rev === cursor && view?.rev === cursor && view.data !== s.data;
+    if (!below && !differs) return;
+    if (!this.startProofs.some((p) => p.did === did && p.start.rev === s.rev && p.cursor === cursor)) this.startProofs.push({ did, start: s, cursor });
+    this.trust.raise(`relay-integrity:start:${did}:${s.rev}:${cursor}`, "relay-integrity",
+      `The witness's history of ${did} starts at the relay's commit at revision ${s.rev}, ${below ? `below revision ${cursor}, which the relay published before it` : `a different commit from the one this device holds at that revision`}: revisions must increase.`, did);
+    this.recordGap(did, `${did}:start-check:${e.id}:${cursor}`, s.rev, cursor, s.rev, "the witness's history starts at a commit published at a non-increasing revision");
+  }
+
   /** A gap the witness reports, for the part after `cursor`: history from
    * before the cursor was already checked (with another witness, perhaps). */
   private witnessGap(did: Did, cursor: number, e: Extract<HistoryEntry, { kind: "gap" }>): void {
@@ -825,8 +859,9 @@ export class Installation {
   /** The PDS may still serve records, but a commit it serves is checked
    * against the witness: a different commit at a witnessed revision is a
    * fork, and so is one strictly between two commits the witness
-   * reconstructed consecutively, which the relay never published in order,
-   * unless it changes nothing (its root is the earlier commit's); one inside
+   * reconstructed consecutively (the later a `#commit` whose `since` names
+   * the earlier's revision and whose operations invert to its root), which
+   * the relay never published in order; one inside
    * a recorded gap is what the witness could not check, neither an alarm nor
    * INCOMPLETE; one above the witness's latest is INCOMPLETE. */
   private crossCheck(w: WitnessApi, did: Did): void {
@@ -841,10 +876,10 @@ export class Installation {
         this.trust.raise(`fork:${did}:${rev}`, "fork", `${did}'s PDS served a commit at revision ${rev} that differs from the one the relay published.`, did);
       return;
     }
-    if (vouch.status === "unpublished" && snap.commit.data !== vouch.belowData) {
+    if (vouch.status === "unpublished") {
       this.mon.incomplete.delete(did);
       if (!this.unrelayedProofs.some((p) => p.did === did && p.served.rev === rev)) this.unrelayedProofs.push({ did, served: snap.commit, below: vouch.below, above: vouch.above });
-      this.trust.raise(`unrelayed:${did}:${rev}`, "unrelayed-commit", `${did}'s PDS served a commit at revision ${rev} that the relay never published: it lies between two commits the relay published one after the other, and changes records.`, did);
+      this.trust.raise(`unrelayed:${did}:${rev}`, "unrelayed-commit", `${did}'s PDS served a commit at revision ${rev} that the relay never published: it lies between two commits the relay published one after the other.`, did);
       return;
     }
     if (vouch.status === "unknown" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {
