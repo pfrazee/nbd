@@ -8,8 +8,8 @@ import { detectionViolations } from "../src/sim/detection";
 import { InvariantMonitor } from "../src/sim/invariants";
 import { Run } from "../src/sim/scenario";
 import { scenarios } from "../src/sim/scenarios";
-import { revAt } from "../src/world/pds";
-import { RELAY_REPLAY_WINDOW, WITNESS_RETENTION } from "../src/world/relay";
+import { type Repo, revAt } from "../src/world/pds";
+import { RELAY_REPLAY_WINDOW, REV_ALLOWANCE, WITNESS_RETENTION } from "../src/world/relay";
 import { World } from "../src/world/world";
 import type { Installation } from "../src/protocol/installation";
 
@@ -691,6 +691,285 @@ describe("unrelayed commits and revision checks", () => {
     w.advance(1);
     w.install(bobDid, "laptop", { link: bob });
     expect(a.history.at(-1)!.kind).toBe("state");
+    expect(violations(m)).toEqual([]);
+  });
+});
+
+describe("stream gaps", () => {
+  /** Bob's phone offline, so that only a gap can warn him, and his witness
+   * disconnected; the relay stops checking his revisions. */
+  const away = (seed: string) => {
+    const x = world(seed);
+    const step = (fn: () => void) => { x.m.before(); fn(); x.m.after(); };
+    step(() => x.w.setOnline(x.bob, false));
+    step(() => x.w.setWitness("lantern", { connected: false }));
+    step(() => x.w.uncheckedRelay(x.bobDid));
+    return { ...x, step, lantern: x.w.witnessOf("lantern"), repo: x.w.pdsOf.get(x.bobDid)!.repo(x.bobDid) };
+  };
+  const revWith = (repo: Repo, x: Installation) =>
+    repo.history.find((s) => s.records.has(`com.example.nbd.device/${x.binding.device.deviceId}`))!.commit.rev;
+
+  it("an impostor published and the original revision replayed while the witness is away past the replay window: resynchronized at the revision it held, still a gap covering the impostor, and Bob warns (Astra)", () => {
+    // Formerly exempt: a witness resynchronized at the revision it already
+    // held recorded no gap. A relay that passes on non-increasing revisions
+    // lets the PDS publish an impostor and then the original revision again.
+    const { w, m, bob, carol, bobDid, step, lantern, repo } = away("s1");
+    const r = repo.latest().commit.rev;
+    expect(lantern.accounts.get(bobDid)!.lastRev).toBe(r);
+    const f = w.flashImpostor(bobDid);
+    step(() => invite(w, carol, bobDid, f.sub));
+    expect(carol.trust.isAccepted(f.sub.binding)).toBe(true);
+    const ri = revWith(repo, f.sub);
+    step(() => w.replayRevision(bobDid, r));
+    step(() => w.advance(RELAY_REPLAY_WINDOW + 1));
+    step(() => w.setWitness("lantern", { connected: true }));
+    const a = lantern.accounts.get(bobDid)!;
+    expect(a.history.at(-1)).toMatchObject({ kind: "state", rev: r, via: "resync" });
+    const g = a.history.find((h) => h.kind === "gap" && h.stream)!;
+    expect(g).toMatchObject({ fromRev: r + 1, toRev: revAt(w.t + REV_ALLOWANCE), resync: r });
+    step(() => w.setOnline(bob, true));
+    expect(bob.gapWarnings().map((x) => x.reason)).toEqual(["stream gap: the relay refused to resume"]);
+    const warned = bob.gapWarnings()[0];
+    expect(warned.fromRev <= ri && ri <= warned.toRev).toBe(true);
+    expect(bob.mon.cursors.get(bobDid)).toBe(r);
+    expect(about(bob, f.sub)).toEqual([]); // the witness never saw the impostor
+    expect(violations(m)).toEqual([]);
+    expect(detectionViolations(w)).toEqual([]);
+    // A device linked later reads the history afresh: the gap, once.
+    const tablet = w.install(bobDid, "tablet", { link: bob });
+    w.advance(2);
+    expect(tablet.mon.gaps.length).toBe(1);
+    expect(bob.gapWarnings().length).toBe(1);
+  });
+
+  it("an impostor Bob's PDS published, then any commit below it: resynchronized below the impostor's revision, the gap still covers it", () => {
+    // The minimal case for the interval: original r0, impostor r2 that Carol
+    // accepts, then a commit at r0 < r < r2, all during an outage past the
+    // replay window. Ending the gap at the revision resynchronized at, r,
+    // would leave r2 outside it.
+    const { w, m, bob, carol, bobDid, step, lantern, repo } = away("s2");
+    const r0 = repo.latest().commit.rev;
+    const honest = new Map(repo.records);
+    step(() => w.advance(1));
+    const f = w.flashImpostor(bobDid);
+    step(() => invite(w, carol, bobDid, f.sub));
+    const r2 = revWith(repo, f.sub);
+    repo.records = honest;
+    const r = r2 - 1;
+    expect(r).toBeGreaterThan(r0);
+    step(() => w.commitAtRev(bobDid, r));
+    step(() => w.advance(RELAY_REPLAY_WINDOW + 1));
+    step(() => w.setWitness("lantern", { connected: true }));
+    expect(lantern.accounts.get(bobDid)!.history.at(-1)).toMatchObject({ kind: "state", rev: r, via: "resync" });
+    step(() => w.setOnline(bob, true));
+    const g = bob.gapWarnings()[0];
+    expect(g.fromRev).toBe(r0 + 1);
+    expect(g.toRev).toBeGreaterThan(r2);
+    expect(bob.mon.cursors.get(bobDid)).toBe(r);
+    expect(violations(m)).toEqual([]);
+    expect(detectionViolations(w)).toEqual([]);
+  });
+
+  it("a commit relayed after the resume with a revision inside the gap's interval is still read: a cursor moves past a stream gap only to where it resumed", () => {
+    const { w, m, bob, carol, bobDid, step, lantern, repo } = away("s3");
+    const r = repo.latest().commit.rev;
+    step(() => w.setOnline(bob, true));
+    step(() => w.install(carol.did, "tablet", { link: carol })); // the rest of the network moves on
+    step(() => w.advance(RELAY_REPLAY_WINDOW + 1));
+    step(() => w.setWitness("lantern", { connected: true }));
+    const g = lantern.accounts.get(bobDid)!.history.find((h) => h.kind === "gap" && h.stream) as { toRev: number };
+    expect(bob.mon.cursors.get(bobDid)).toBe(r);
+    const f = w.flashImpostor(bobDid);
+    const ri = revWith(repo, f.sub);
+    expect(ri).toBeLessThanOrEqual(g.toRev); // inside the stream gap's interval
+    expect(about(bob, f.sub).length).toBe(1);
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("an earlier revision replayed: resynchronized below the revision held, a gap and an integrity alarm", () => {
+    const { w, m, bob, carol, bobDid, step, lantern, repo } = away("s4");
+    const r0 = repo.latest().commit.rev;
+    step(() => w.setWitness("lantern", { connected: true }));
+    step(() => w.setOnline(bob, true));
+    step(() => w.advance(1));
+    step(() => w.install(bobDid, "tablet", { link: bob }));
+    const r = repo.latest().commit.rev;
+    expect(r).toBeGreaterThan(r0);
+    step(() => w.setOnline(bob, false));
+    step(() => w.setWitness("lantern", { connected: false }));
+    const f = w.flashImpostor(bobDid);
+    step(() => invite(w, carol, bobDid, f.sub));
+    const ri = revWith(repo, f.sub);
+    step(() => w.replayRevision(bobDid, r0));
+    step(() => w.advance(RELAY_REPLAY_WINDOW + 1));
+    step(() => w.setWitness("lantern", { connected: true }));
+    expect(lantern.accounts.get(bobDid)!.lastRev).toBe(r);
+    step(() => w.setOnline(bob, true));
+    const g = bob.gapWarnings()[0];
+    expect(g.fromRev).toBe(r + 1);
+    expect(g.toRev).toBeGreaterThan(ri);
+    expect(bob.trust.state.alarms.some((a) => a.kind === "relay-integrity")).toBe(true);
+    expect(violations(m)).toEqual([]);
+    expect(detectionViolations(w)).toEqual([]);
+  });
+
+  it("an honest relay's stream gap is reported even for an account resynchronized at the revision held", () => {
+    const { w, bob, carol, bobDid } = world("s5");
+    const r = w.pdsOf.get(bobDid)!.repo(bobDid).latest().commit.rev;
+    w.setWitness("lantern", { connected: false });
+    w.install(carol.did, "tablet", { link: carol }); // the rest of the network moves on
+    w.advance(RELAY_REPLAY_WINDOW + 1);
+    w.setWitness("lantern", { connected: true });
+    expect(bob.gapWarnings().map((g) => [g.fromRev, g.toRev])).toEqual([[r + 1, revAt(w.t + REV_ALLOWANCE)]]);
+    expect(bob.liveness()).toBeNull();
+  });
+});
+
+describe("reference relay timestamps", () => {
+  /** Bob's witness offline for 30 hours, then catching up through a relay
+   * that sends it its backlog 28 hours late. */
+  const outage = (seed: string, refresh: boolean) => {
+    const x = world(seed);
+    if (refresh) x.w.relayTimeOnDelivery();
+    x.w.setWitness("lantern", { connected: false });
+    x.w.advance(1);
+    x.w.install(x.bobDid, "tablet", { link: x.bob });
+    x.w.advance(29);
+    x.w.relayDelay("lantern", 28);
+    x.w.setWitness("lantern", { connected: true });
+    return x;
+  };
+
+  it("a replayed event keeps the time the relay first sequenced it: a witness catching up after an outage has an old frontier", () => {
+    const { w, bobDid } = outage("t1", false);
+    const lantern = w.witnessOf("lantern");
+    const sequenced = w.relay!.events.find((e) => e.did === bobDid && e.time > 0.5)!;
+    const replayed = w.relay!.delivered(lantern.id, 0).find((e) => e.seq === sequenced.seq)!;
+    expect(replayed.time).toBe(sequenced.time);
+    expect(lantern.cursor).toBeGreaterThanOrEqual(sequenced.seq); // replayed and processed
+    expect(lantern.frontierAge(bobDid)).toBeCloseTo(28);
+  });
+
+  it("not the reference relay: one that stamps events with the time it sends them makes the backlog look current, and Bob misses the deadline", () => {
+    // Documented non-reference behavior (Relay.timeOnDelivery): the sync
+    // specification allows it of an honest relay, and the proposal forbids
+    // it of the reference relay. The same backlog as above, and the f1
+    // backlog, read as current.
+    const { w, bobDid } = outage("t2", true);
+    const lantern = w.witnessOf("lantern");
+    const sequenced = w.relay!.events.find((e) => e.did === bobDid && e.time > 0.5)!;
+    expect(w.relay!.delivered(lantern.id, 0).find((e) => e.seq === sequenced.seq)!.time).toBeGreaterThan(sequenced.time + 28);
+    expect(lantern.frontierAge(bobDid)).toBeCloseTo(0);
+
+    const x = world("t3");
+    x.w.relayTimeOnDelivery();
+    x.w.relayDelay("lantern", 30);
+    const imp = x.w.forkedImpostor(x.bobDid, [x.carol]);
+    invite(x.w, x.carol, x.bobDid, imp);
+    x.w.advance(25);
+    expect(x.carol.trust.isAccepted(imp.binding)).toBe(true);
+    expect(about(x.bob, imp)).toEqual([]);
+    expect(x.bob.liveness()).toBeNull();
+    expect(detectionViolations(x.w).some((v) => v.text.includes(x.bob.id))).toBe(true);
+  });
+});
+
+describe("time in transit", () => {
+  it("an answer computed before an attack and delivered 20 hours later doesn't refresh coverage: Bob warns within 24h of the acceptance", () => {
+    const { w, m, bob, carol, bobDid } = world("x1");
+    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
+    step(() => w.witnessTransit(bob, 20)); // the request goes out now; its answer is computed now
+    const t0 = w.t;
+    step(() => w.advance(1));
+    let x!: Installation;
+    step(() => {
+      x = w.forkedImpostor(bobDid, [carol]);
+      invite(w, carol, bobDid, x);
+    });
+    expect(carol.trust.isAccepted(x.binding)).toBe(true);
+    step(() => w.advance(19)); // the answer from t0 arrives, from before the attack
+    expect(w.t).toBeCloseTo(t0 + 20);
+    expect(about(bob, x)).toEqual([]);
+    expect(bob.coverageAge()).toBeCloseTo(20);
+    step(() => w.advance(4.5));
+    expect(bob.liveness()).toMatch(/behind the relay/);
+    expect(violations(m)).toEqual([]);
+    step(() => w.advance(17));
+    expect(about(bob, x).length).toBe(1); // the next answer, asked for an hour later at most
+    expect(violations(m)).toEqual([]);
+  });
+
+  it("an answer in several pages ages from the first page's request", () => {
+    const { w, bob, bobDid } = world("x2");
+    const repo = w.pdsOf.get(bobDid)!.repo(bobDid);
+    w.setOnline(bob, false);
+    for (let n = 0; n < 3; n++) {
+      w.advance(1);
+      repo.commit();
+    }
+    w.advance(10);
+    w.setWitness("lantern", { pageSize: 1 });
+    w.witnessTransit(bob, 2);
+    const cursor = bob.mon.cursors.get(bobDid)!;
+    w.setOnline(bob, true); // the first page's request
+    const t0 = w.t;
+    w.advance(5);
+    expect(bob.mon.cursors.get(bobDid)!).toBeGreaterThan(cursor); // two pages in
+    expect(bob.coverageAge()).toBeGreaterThan(13);
+    w.advance(1); // the third and last page arrives, asked for at t0 + 4
+    expect(w.t).toBeCloseTo(t0 + 6);
+    expect(bob.mon.cursors.get(bobDid)).toBe(repo.latest().commit.rev);
+    expect(bob.coverageAge()).toBeCloseTo(6);
+  });
+});
+
+describe("time in transit: paged answers, late answers, restarts", () => {
+  it("a paged answer carries one frontier age, computed when the first page's request arrived", () => {
+    const { w, bob, bobDid } = world("x3");
+    const repo = w.pdsOf.get(bobDid)!.repo(bobDid);
+    w.setOnline(bob, false);
+    w.setWitness("lantern", { pageSize: 1, lag: 10 });
+    for (let n = 0; n < 3; n++) {
+      w.advance(1);
+      repo.commit();
+    }
+    w.advance(10);
+    w.witnessTransit(bob, 2);
+    w.setOnline(bob, true); // the first page's request: frontier age 10
+    expect(w.witnessOf("lantern").frontierAge(bobDid)).toBeCloseTo(10);
+    w.setWitness("lantern", { lag: 0 }); // caught up before the later pages
+    w.advance(6);
+    expect(bob.mon.cursors.get(bobDid)).toBe(repo.latest().commit.rev);
+    expect(bob.coverageAge()).toBeCloseTo(16);
+  });
+
+  it("a late answer whose frontier is older than the coverage held doesn't move coverage back", () => {
+    const { w, bob } = world("x5");
+    w.witnessTransit(bob, 2); // a request now, answered with frontier age 0
+    w.setWitness("lantern", { clockOffset: 10 }); // the next answer's frontier age is 10
+    w.advance(2);
+    expect(bob.coverageAge()).toBeCloseTo(2);
+    w.advance(2); // that answer arrives: 10 + 2 is older than the coverage held
+    expect(bob.coverageAge()).toBeCloseTo(4);
+  });
+
+  it("an answer to a request sent before a restart is discarded: Bob warns within 24h of an acceptance it predates", () => {
+    const { w, m, bob, carol, bobDid } = world("x4");
+    const step = (fn: () => void) => { m.before(); fn(); m.after(); };
+    step(() => w.witnessTransit(bob, 20)); // a request now, answered from before the attack
+    step(() => w.advance(0.5));
+    step(() => w.setOnline(bob, false));
+    step(() => w.advance(0.5));
+    let x!: Installation;
+    step(() => {
+      x = w.forkedImpostor(bobDid, [carol]);
+      invite(w, carol, bobDid, x);
+    });
+    step(() => w.advance(19));
+    step(() => w.setOnline(bob, true)); // a restart, as the old answer arrives
+    expect(bob.coverageAge()).toBeGreaterThan(19);
+    step(() => w.advance(4.5));
+    expect(bob.liveness()).toMatch(/behind the relay/);
     expect(violations(m)).toEqual([]);
   });
 });

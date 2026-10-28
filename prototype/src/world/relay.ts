@@ -9,8 +9,9 @@
 // The relay is honest unless a scenario says otherwise: it verifies commit
 // signatures on ingest, refuses revisions that go backward or lie more than
 // REV_ALLOWANCE ahead of its clock, may drop commits (a rate limit), stamps each
-// event with the time it sequenced it, and delivers the same events to every
-// subscriber, though possibly late to a slow one. It serves no repos (a
+// event with the time it first sequenced it and keeps that time for every
+// subscriber and on every replay (proposal: Reference relay), and delivers the
+// same events to every subscriber, though possibly late to a slow one. It serves no repos (a
 // non-archival relay), so `#sync` events are reconstructed by fetching from
 // the PDS.
 
@@ -41,7 +42,7 @@ export const beyondAllowance = (rev: number, time: number): boolean => rev > rev
 export type RelayOp = { path: RecordPath; prev: Cbor | null; value: Cbor | null };
 /** A repository event as the relay publishes it. `time`: when the relay
  * sequenced it (on the relay's clock), the same for every subscriber
- * whenever it is delivered; `prevData`: the previous tree root (null for an
+ * whenever it is delivered (unless Relay.timeOnDelivery); `prevData`: the previous tree root (null for an
  * account's first commit); `ops`: the operations, with the previous value of
  * each path, for inversion. */
 export type RelayEvent = {
@@ -73,6 +74,16 @@ export class Relay {
   /** Ground truth: every commit a PDS sent, as `did:rev`, whether or not
    * the relay published it. */
   readonly received = new Set<string>();
+  /** Not the reference relay: it stamps each event with the time it sends
+   * it to the subscriber, not the time it first sequenced it, so a replay
+   * after a resume, or a slow subscriber's backlog, carries fresh times. The
+   * sync specification lets an honest relay replace an upstream time; NBD
+   * forbids its reference relay to (proposal: Reference relay), since a
+   * witness's frontier is read off these times. */
+  timeOnDelivery = false;
+  /** When each subscriber last resumed from a cursor: the relay replays
+   * what it missed from then. */
+  private resumedAt = new Map<string, number>();
 
   constructor(private readonly keyOf: (did: Did) => Uint8Array | null, private readonly clock: () => number) {}
 
@@ -115,18 +126,44 @@ export class Relay {
     return this.deliveryDelay.get(subscriber) ?? 0;
   }
 
-  /** The relay time up to which the stream has reached `subscriber`. The
-   * firehose carries the whole network, and this simulation's accounts are a
-   * sliver of it: the rest of the network's events, never idle, are
-   * delivered up to here too. */
-  deliveredThrough(subscriber: string): number {
-    return this.clock() - this.delayOf(subscriber);
+  now(): number {
+    return this.clock();
   }
 
-  /** Events after `cursor` that `subscriber` has been delivered by now. */
-  delivered(subscriber: string, cursor: number): RelayEvent[] {
-    const by = this.deliveredThrough(subscriber);
-    return this.events.filter((e) => e.seq > cursor && e.time <= by && !this.hideFrom.get(e.did)?.has(subscriber));
+  /** A subscriber resumes from its cursor (or restarts after a refusal):
+   * what it missed is replayed from now. */
+  resume(subscriber: string): void {
+    this.resumedAt.set(subscriber, this.clock());
+  }
+
+  /** Whether events carry the time they are sent rather than the time they
+   * were sequenced (Relay.timeOnDelivery). */
+  private refreshes(): boolean {
+    return this.timeOnDelivery;
+  }
+
+  /** The `time` on `e` as `subscriber` receives it, sent by relay time
+   * `by`: the reference relay's is when it first sequenced the event. */
+  private stamp(e: RelayEvent, subscriber: string, by: number): number {
+    if (!this.refreshes()) return e.time;
+    return Math.min(by, Math.max(e.time + this.delayOf(subscriber), this.resumedAt.get(subscriber) ?? -Infinity));
+  }
+
+  /** Events after `cursor` sent to `subscriber` by relay time `by` (an
+   * event sequenced at `time` is sent at `time + delay`), with the time on
+   * each as the subscriber receives it. */
+  delivered(subscriber: string, cursor: number, by = this.clock()): RelayEvent[] {
+    return this.events
+      .filter((e) => e.seq > cursor && e.time + this.delayOf(subscriber) <= by && !this.hideFrom.get(e.did)?.has(subscriber))
+      .map((e) => ({ ...e, time: this.stamp(e, subscriber, by) }));
+  }
+
+  /** The time on the newest event of the rest of the network sent to
+   * `subscriber` by relay time `by`. The firehose carries the whole
+   * network, and this simulation's accounts are a sliver of it: the rest,
+   * never idle, is sent up to `by` too, sequenced `delay` earlier. */
+  networkTime(subscriber: string, by: number): number {
+    return this.refreshes() ? by : by - this.delayOf(subscriber);
   }
 
   /** Whether resuming after `cursor` is refused as outdated: some event
@@ -166,8 +203,9 @@ type State = Extract<HistoryEntry, { kind: "state" }>;
 type Account = {
   state: Snapshot | null; history: HistoryEntry[];
   pending: Pending | null;
-  /** A stream gap whose end is not known yet: closed by the account's next
-   * reconstructed commit or gap, and not served until then. */
+  /** A gap opened by a commit beyond REV_ALLOWANCE, whose end is not known
+   * yet: closed by the account's next reconstructed commit or gap, and not
+   * served until then. */
   open: Gap | null;
   /** The newest revision this witness recorded, and the newest it pruned. */
   lastRev: number; prunedThrough: number;
@@ -188,6 +226,8 @@ export class Witness implements WitnessApi {
   /** Hours behind: it processes only events delivered at least this long
    * ago, so its frontier age is at least this. */
   lag = 0;
+  /** Entries per page of a history answer. */
+  pageSize = PAGE;
   /** A dishonest witness, colluding with a PDS: it leaves these relay
    * sequence numbers out of an account's history, reporting neither the
    * commits nor gaps. Out of the proposal's reach. */
@@ -217,7 +257,7 @@ export class Witness implements WitnessApi {
     // A late witness starts following the relay now, holding no history.
     this.complete = !opts.late;
     if (opts.late) this.cursor = relay.headSeq();
-    this.frontier = relay.deliveredThrough(id);
+    this.frontier = relay.networkTime(id, relay.now());
   }
 
   now(): number {
@@ -280,11 +320,16 @@ export class Witness implements WitnessApi {
     let n = 0;
     if (this.resume) {
       this.resume = false;
+      this.relay.resume(this.id);
       if (this.relay.outdated(this.cursor)) {
         // The relay refuses the resume: a stream gap for every account, then
         // each known account is resynchronized at its latest published commit.
+        // Even one resynchronized at the revision it already held: a relay
+        // that passes on non-increasing revisions may have published an
+        // impostor and then that revision again meanwhile.
         const to = this.relay.restartCursor();
         const g = { seq: this.cursor + 1, toSeq: to, at: this.now() };
+        const resumedAt = this.relay.now();
         this.streamGaps.push(g);
         this.complete = false;
         this.cursor = to;
@@ -292,27 +337,38 @@ export class Witness implements WitnessApi {
           a.state = null;
           a.pending = null;
           a.open = null;
-          const gap: Gap = { seq: g.seq, at: g.at, local: 0, kind: "gap", id: `${this.id}:stream:${g.seq}`, rev: null, fromRev: a.lastRev + 1, toRev: Infinity, reason: "stream gap: the relay refused to resume", stream: true };
-          this.push(a, gap);
-          a.open = gap;
           const latest = this.relay.latestCommit(did, to, inAllowance);
+          // The relay may have carried any revision the witness would have
+          // accepted meanwhile, whatever revision it resumes the account at:
+          // up to REV_ALLOWANCE past the relay time it resumed at. A cursor
+          // moves past the gap only to the revision it resumes at.
+          const resync = latest?.commit.rev ?? a.lastRev;
+          const toRev = Math.max(revAt(resumedAt + REV_ALLOWANCE), resync);
+          this.push(a, { seq: g.seq, at: g.at, local: 0, kind: "gap", id: `${this.id}:stream:${g.seq}`, rev: null, fromRev: a.lastRev + 1, toRev, reason: "stream gap: the relay refused to resume", stream: true, resync });
+          // Resynchronized below the revision it held: the relay published a
+          // non-increasing revision meanwhile.
+          if (latest && latest.commit.rev < a.lastRev)
+            a.integrity.push({ id: `${this.id}:order:${latest.seq}`, seq: latest.seq, rev: latest.commit.rev, after: a.lastRev, reason: `after a stream gap the relay's latest commit is at revision ${latest.commit.rev}, below revision ${a.lastRev}` });
           if (latest) this.reconstructByFetch(did, latest, "resync", to);
         }
       }
     }
     // Retry fetches still outstanding; past FETCH_TIMEOUT each is a gap.
     for (const [did, a] of this.accounts) if (a.pending && this.retry(did, a)) n++;
-    // Delivered at least `lag` ago: sequenced at least delay + lag ago.
-    const through = this.relay.deliveredThrough(this.id) - this.lag;
-    for (const e of this.relay.delivered(this.id, this.cursor)) {
-      if (e.time > through) break;
+    // Sent to it at least `lag` ago.
+    const by = this.relay.now() - this.lag;
+    let newest = -Infinity;
+    for (const e of this.relay.delivered(this.id, this.cursor, by)) {
       this.process(e);
       this.cursor = e.seq;
+      newest = Math.max(newest, e.time);
       n++;
     }
-    // The stream is one ordered sequence, never idle: everything sequenced
-    // up to `through` has been processed, so that relay time is the frontier.
-    this.frontier = Math.max(this.frontier, through);
+    // The stream is one ordered sequence, never idle: the frontier is the
+    // relay time on the newest event processed, the rest of the network's
+    // included. From the reference relay that is when the event was
+    // sequenced, however late it arrived.
+    this.frontier = Math.max(this.frontier, this.relay.networkTime(this.id, by), newest);
     this.prune();
     return n;
   }
@@ -422,12 +478,10 @@ export class Witness implements WitnessApi {
     a.history.push(entry);
   }
 
-  /** Close an open stream gap at revision `rev`, the first the witness
-   * holds an entry for after the break. Revisions increase but are not
-   * consecutive (atproto revisions are timestamps), so the witness can't know
-   * what lay between its last revision before the break and this one: the
-   * gap runs through `rev`. If the latest revision is unchanged, nothing
-   * was published meanwhile and the gap is empty for this account. */
+  /** Close the open gap a commit beyond REV_ALLOWANCE began at revision
+   * `rev`, the next the witness records. Revisions increase but are not
+   * consecutive (atproto revisions are timestamps): the gap runs through
+   * `rev`. */
   private close(a: Account, rev: number): void {
     if (a.open) a.open.toRev = rev;
     a.open = null;
@@ -472,19 +526,28 @@ export class Witness implements WitnessApi {
    * their cursor: the account's repo revision (the last an interval
    * covers), the same at every witness. */
   private position(h: HistoryEntry): number {
+    if (h.kind === "gap" && h.stream && h.resync !== undefined) return h.resync; // past a stream gap, only to where it resumed
     return h.kind === "state" ? h.rev : h.toRev; // a repo revision
   }
 
-  history(_observer: string, did: Did, from: number | null, limit = PAGE): HistoryResponse {
+  history(_observer: string, did: Did, from: number | null, limit = this.pageSize, req?: string): HistoryResponse {
     const a = this.meet(did);
     const start = from ?? 0;
     const all = a.history
-      .filter((h) => h !== a.open && (h.kind === "state" || h.fromRev <= h.toRev) && this.position(h) > start && !this.omits.get(did)?.has(h.seq))
+      .filter((h) => h !== a.open && (h.kind === "state" || h.fromRev <= h.toRev) && this.served(h, start) && !this.omits.get(did)?.has(h.seq))
       .sort((x, y) => x.local - y.local);
     const entries = all.slice(0, limit).map((h) => ({ ...h, pos: this.position(h) }));
     const fault: FrontierFault = this.clockFault(did) ? "clock" : a.pending ? "fetch" : null;
     const integrity = a.integrity.filter((x) => !this.omits.get(did)?.has(x.seq));
-    return { entries, more: all.length > limit, frontierAge: this.frontierAge(did), fault, truncatedTo: a.prunedThrough > start ? a.prunedThrough : null, integrity };
+    return { req, entries, more: all.length > limit, frontierAge: this.frontierAge(did), fault, truncatedTo: a.prunedThrough > start ? a.prunedThrough : null, integrity };
+  }
+
+  /** Whether an entry is served to a cursor at `start`: one after it, or a
+   * stream gap whose interval reaches it. A stream gap resumed at the
+   * revision the cursor holds lies at that cursor, not after it, yet covers
+   * what the relay published since the client last read. */
+  private served(h: HistoryEntry, start: number): boolean {
+    return this.position(h) > start || (h.kind === "gap" && h.stream && h.toRev >= start);
   }
 
   commitAt(_observer: string, did: Did, rev: number): CommitStatus {

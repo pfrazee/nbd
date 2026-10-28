@@ -22,7 +22,11 @@ export type GapRecord = {
 
 export type GapWarning = GapRecord & { acked: boolean };
 
-/** Coverage age is `base` plus monotonic time since `mono`, within one run.
+/** Coverage age is `base` plus monotonic time since `mono`, within one run:
+ * `base` is the frontier age the witness reported (for an answer in several
+ * pages, the one computed when the first page's request arrived), and
+ * `mono` when the installation sent the request that produced that answer
+ * (the first page's), so time in transit counts.
  * Across a restart it is the age at the last checkpoint plus the wall-clock
  * interval since; an interval that can't be established makes it unknown
  * (null), which counts as exceeding any limit until the frontier advances. */
@@ -72,15 +76,24 @@ export type CoverageSegment = { world: number; base: number; cursor: number };
  * revisions `fromRev`..`toRev` the witness could not check: a published
  * commit it could not reconstruct (`fromRev` = `toRev` = `rev`), a break in
  * its subscription (`stream`), or history from before it began following
- * the account. `seq` (the relay event's sequence number), `at` (the
- * witness's clock when it recorded the entry), and `local` (the order in
- * which it recorded its entries) are the witness's own. `pos`, set on the
- * entries a witness serves, is the position a client keeps as its cursor. */
+ * the account. A stream gap runs from just after the account's last
+ * revision through REV_ALLOWANCE past the relay time at which the witness
+ * resumed, or through `resync`, the revision it resynchronized the account
+ * at, if that is higher: the relay may have carried any revision up to
+ * there. Its position, where a cursor moves past it, is `resync`, so a
+ * commit relayed afterward with a revision inside the interval is still
+ * read; it is served to any cursor its interval reaches. `seq` (the relay
+ * event's sequence number; for a stream gap, the first it spans), `at` (the witness's clock when it recorded the
+ * entry), and `local` (the order in which it recorded its entries) are the
+ * witness's own. `pos`, set on the entries a witness serves, is the
+ * position a client keeps as its cursor. */
 export type HistoryEntry =
   | { seq: number; at: number; local: number; pos?: number; kind: "state"; rev: number; snap: Snapshot; via: "commit" | "sync" | "resync" }
-  | { seq: number; at: number; local: number; pos?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean };
+  | { seq: number; at: number; local: number; pos?: number; kind: "gap"; id: string; rev: number | null; fromRev: number; toRev: number; reason: string; stream: boolean; resync?: number };
 
 export type HistoryResponse = {
+  /** The request this answers, echoed. */
+  req?: string;
   entries: HistoryEntry[];
   /** More entries follow: a partial answer, which must not advance a frontier. */
   more: boolean;
@@ -122,7 +135,10 @@ export type CommitStatus =
  * history: its repo revisions. */
 export interface WitnessApi {
   readonly id: string;
-  history(observer: string, did: Did, from: number | null, limit?: number): HistoryResponse;
+  /** Null while no answer has arrived: the request (`req`, echoed in its
+   * answer) has been sent, and the client asks again until one does. An
+   * answer that arrives may be to an earlier request. */
+  history(observer: string, did: Did, from: number | null, limit?: number, req?: string): HistoryResponse | null;
   commitAt(observer: string, did: Did, rev: number): CommitStatus;
   /** The latest published commit for `did`, if reconstructed, with its position. */
   latest(observer: string, did: Did): { pos: number; snap: Snapshot } | null;

@@ -15,15 +15,17 @@ and invite her. Each walk is a seeded sequence of:
   what it serves one client, at a new or a witnessed revision; serving one
   client a commit it never relayed (or one the relay dropped) after a later
   commit inverts to the last relayed one or not; publishing an impostor at
-  a revision not above the last; withholding and stalling fetches per
-  witness;
+  a revision not above the last; publishing an earlier commit again at its
+  own revision (an impostor, then the original replayed); withholding and
+  stalling fetches per witness;
 - witness outages (longer than the relay's replay window too), relay
   outages, unreachable witnesses, witness clocks slow or fast against the
   relay within `CLOCK_SKEW` (and fast beyond it), elapsed time, and
   installation wall-clock jumps;
 - installations stopping and starting, exporting backups, being wiped and
   restored from a stale backup onto either application's witness,
-  acknowledging gap warnings, and ticking;
+  acknowledging gap warnings, and ticking; sending a request whose answer
+  (in pages) arrives later, page by page;
 - Bob and Carol querying Alice's devices and inviting her.
 
 Invariants after every step:
@@ -33,7 +35,8 @@ Invariants after every step:
   and every running installation has alarmed, noticed, presented, recorded
   a covering gap, or shows the liveness warning 24 hours after acceptance.
 - Every acceptance rests on a commit the client's own witness reconstructed
-  at that revision, whose commit is the one the relay published there.
+  at that revision, whose commit the relay published there (one of two,
+  after a stream gap resynchronized at a reused revision; finding 16).
 - Acceptance, revocation, own alarms, and gaps never shrink; acknowledging
   marks a gap, never removes it.
 - A fork alarm names two different commits at one revision, one of them
@@ -112,12 +115,14 @@ class WitnessWalk:
         self.fresh = 0
         self.hidden: List = []  # commits the PDS made and never relayed, on purpose
         self.concealed: set = set()  # dropped commits a later commit then concealed
+        self.pending: Dict[int, tuple] = {}  # installation -> (client, request) awaiting its response
 
     def client_cls(self):
         suspending = self.CLOCKS
 
         class C(WitnessClient):
             MONO_COUNTS_SUSPEND = not suspending  # finding 3's condition
+            PAGE_SIZE = 2  # answers come in pages
         return C
 
     # ---- actions -------------------------------------------------------------
@@ -127,9 +132,10 @@ class WitnessWalk:
         kinds = ["link", "remove", "imp", "imp_del", "resurrect", "reset", "replace_sync",
                  "withhold", "stall", "fork", "unfork", "wdown", "wup", "relay", "unreach",
                  "wait", "jump", "stop", "start", "export", "restore", "ack", "tick", "query", "invite"]
-        kinds += ["post", "wclock", "drop", "futurerev", "oldrev", "conceal", "serve"]
+        kinds += ["post", "wclock", "drop", "futurerev", "oldrev", "conceal", "serve", "replay",
+                  "send", "recv"]
         weights = [3, 2, 4, 3, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1, 1, 6, 1, 1, 2, 2, 1, 1, 6, 8, 2, 3, 1,
-                   2, 1, 1, 1, 2]
+                   2, 1, 1, 1, 2, 2, 2, 3]
         if self.LAG:
             kinds += ["lag", "fresh", "longwait"]
             weights += [2, 1, 1]
@@ -156,6 +162,12 @@ class WitnessWalk:
             return ("oldrev", B("alice", f"m{len(self.imps)}"), rng.choice((0, 1, 1000)))
         if kind == "conceal":
             return ("conceal",)
+        if kind == "replay":
+            if rng.random() < 0.5:  # the commit a witness last reconstructed, as when it went down
+                return ("replay", wname)
+            return ("replay", rng.randrange(1, 4))
+        if kind in ("send", "recv"):
+            return (kind, i)
         if kind == "serve":
             pool = self.hidden + [d for d in w.dropped if d.account == "alice"]
             if pool:
@@ -260,6 +272,23 @@ class WitnessWalk:
             w.pds_write("alice", prev="relayed")
         elif k == "serve":
             w.serve(act[1], act[2])
+        elif k == "replay":
+            if isinstance(act[1], str):
+                held = self.wit[act[1]].latest_rec("alice")
+                if held is not None:
+                    w.republish(held.commit)
+            else:
+                mine = [e.commit for e in w.relay if e.commit.account == "alice"]
+                if len(mine) > act[1]:
+                    w.republish(mine[-1 - act[1]])
+        elif k == "send":
+            req = self.inst[act[1]].request()
+            if req is not None:
+                self.pending[act[1]] = (self.inst[act[1]], req)
+        elif k == "recv":
+            c, req = self.pending.get(act[1], (None, None))
+            if c is self.inst[act[1]] and c.deliver(req):
+                del self.pending[act[1]]
         elif k == "imp":
             m, how, signer, via = act[1:]
             self.imps.append(m)
@@ -390,10 +419,14 @@ class WitnessWalk:
         w = self.w
         for v in goal_violations("alice", self.inst, self.others, self.legit, w.now, slack=CLOCK_SKEW):
             return v
-        relayed: Dict[tuple, object] = {}
-        for e in w.relay:  # the first at a revision, among those a witness accepts the revision of
+        # Commits the relay published at each revision, among those a witness
+        # accepts the revision of. Usually one; after a stream gap a witness
+        # can resynchronize at a commit whose revision an earlier commit it
+        # never saw already had (inside the gap, which covers it).
+        relayed: Dict[tuple, set] = {}
+        for e in w.relay:
             if e.commit.rev <= rev_at(e.time + REV_ALLOWANCE):
-                relayed.setdefault((e.commit.account, e.commit.rev), e.commit)
+                relayed.setdefault((e.commit.account, e.commit.rev), set()).add(e.commit)
         err = self._check_integrity_alarms()
         if err:
             return err
@@ -408,7 +441,7 @@ class WitnessWalk:
                 for e in es:
                     d, aps, _other = e.root
                     mentioned = set(d) | {a.target for a in aps} | {a.signer for a in aps}
-                    if b in mentioned and relayed.get((b.account, rev)) == e.commit:
+                    if b in mentioned and e.commit in relayed.get((b.account, rev), ()):
                         ok = True
                 if not ok:
                     return f"{c.name} accepted {b} on rev {rev}, which its witness did not reconstruct"
@@ -430,7 +463,7 @@ class WitnessWalk:
                 return f"{c.name} lost or rewrote a gap"
         for x in self.wit.values():
             for e in x.archive:
-                if e.reconstructed and e.root != relayed[(e.account, e.hi)].root:
+                if e.reconstructed and (e.root != e.commit.root or e.commit not in relayed[(e.account, e.hi)]):
                     return f"{x.name} reconstructed {e.account} rev {e.hi} wrongly"
         return None
 
@@ -439,9 +472,9 @@ class WitnessWalk:
         w = self.w
         events = [e for e in w.relay if e.commit.account == "alice"]
         published = {e.commit for e in events}
-        index = {}
+        index: Dict[object, List[int]] = {}  # a replayed commit is relayed more than once
         for n, e in enumerate(events):
-            index.setdefault(e.commit, n)
+            index.setdefault(e.commit, []).append(n)
 
         def not_increasing(r: int) -> bool:
             return any(e.commit.rev == r and any(
@@ -456,8 +489,8 @@ class WitnessWalk:
                     return f"{c.name} alarmed that relayed {served} was never relayed"
                 if served in w.dropped and served not in self.concealed:
                     return f"{c.name} alarmed on {served}, which an honest relay dropped"
-                i, j = index.get(before), index.get(after)
-                if i is None or j is None or j != i + 1 or not before.rev < served.rev < after.rev:
+                adjacent = any(j == i + 1 for i in index.get(before, ()) for j in index.get(after, ()))
+                if not adjacent or not before.rev < served.rev < after.rev:
                     return f"{c.name} alarmed on {served} between {before} and {after}"
             for a in c.state.alarms:
                 if a.startswith("revision not increasing alice rev "):

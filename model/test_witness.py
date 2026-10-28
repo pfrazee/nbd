@@ -4,8 +4,9 @@ baseline InviterClient fooled under a forking PDS where it applies; the
 "What stays out of reach" items (`test_limitation_`); Astra's cases; the
 revision rules (`Revisions`: unrelayed commits against consecutive
 reconstructions, honest relay drops, far-future and non-increasing
-revisions); and
-findings about the proposal (`test_finding_`), each showing the goal failing
+revisions); stream gaps at any resync revision (`StreamGaps`), the
+reference relay's timestamps (`RelayTime`), and transit time (`Transit`);
+and findings about the proposal (`test_finding_`), each showing the goal failing
 under the rule as written and, where there is one, holding under the fix.
 
 Run: python3 -I -m unittest discover -s model
@@ -925,6 +926,200 @@ class Revisions(Base):
         restored = WitnessClient.restore(self.w, backup, self.app1)
         self.assertEqual(self.integrity_alarms(restored), [f"revision not increasing alice rev {c.rev}"])
         self.assertEqual([g.kind for g in restored.gap_warnings()], ["rev-not-increasing"])
+
+
+class StreamGaps(Base):
+    """A stream gap is a gap in every account's history, whatever revision
+    the witness resynchronizes at (Astra)."""
+
+    def replayed_original(self, then=None):
+        """Alice's witness is down past the relay's window while her PDS
+        publishes an impostor, which Bob accepts, and then a commit at a
+        revision not above the impostor's: the original replayed, or
+        `then`."""
+        orig = self.w.head["alice"]
+        self.app1.set_up(False)
+        self.w.now += 1
+        imp = self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        (then or (lambda: self.w.republish(orig)))()
+        self.w.now += RELAY_REPLAY_WINDOW + 1
+        self.app1.set_up(True)
+        self.alice.sync()
+        return orig, imp
+
+    def test_original_revision_replayed_during_a_stream_gap_is_a_gap(self):
+        # Astra's trace. On resync the witness finds the revision it held,
+        # with the same commit; the earlier rule called that missing nothing
+        # and recorded an empty interval, and Alice neither alarmed nor warned.
+        orig, imp = self.replayed_original()
+        self.assertEqual(self.w.head["alice"], orig)
+        self.assertEqual(self.app1.max_rev("alice"), orig.rev)
+        (g,) = self.alice.gap_warnings()
+        self.assertEqual(g.kind, "stream-gap")
+        self.assertLessEqual(g.lo, g.hi)
+        self.assertTrue(g.covers(imp.rev))
+        self.assertEqual(self.alice.state.cursors["alice"], orig.rev)
+        self.assertEqual(self.goal(), [])
+
+    def test_lower_revision_after_an_impostor_during_a_stream_gap_is_a_gap(self):
+        # The same without replaying the very revision: the resync revision
+        # lies between the one the witness held and the impostor's, so a gap
+        # only through the resync revision missed the impostor too.
+        orig = self.w.head["alice"]
+        _, imp = self.replayed_original(lambda: self.ungraft(rev=orig.rev + 1000))
+        self.assertLess(self.app1.max_rev("alice"), imp.rev)
+        self.assertTrue(self.alice.gap_covers(imp.rev))
+        self.assertEqual(self.goal(), [])
+
+    def test_commit_relayed_during_a_stream_gap_is_not_called_unrelayed(self):
+        # The commits before and after a stream gap are not consecutive
+        # reconstructions, even at one revision: the impostor was relayed.
+        _, imp = self.replayed_original()
+        self.w.serve("alice/a0", imp)
+        self.w.now += 1
+        self.w.post("alice")  # inverts to the original root
+        self.alice.sync()
+        self.assertEqual(self.app1.latest_rec("alice").kind, "commit")
+        self.assertEqual([a for a in self.alice.state.alarms if a.startswith("unrelayed")], [])
+
+    def test_commit_inside_a_stream_gaps_interval_after_resync_is_read(self):
+        # The interval reaches REV_ALLOWANCE past the relay's time at resync;
+        # the cursor moves only to the resync revision, so a commit relayed
+        # just after it, inside the interval, is still read.
+        orig, _ = self.replayed_original()
+        m2 = B("alice", "m2")
+        c = self.w.pds_write("alice", add=[m2], approve=[(m2, self.a0)])
+        (g,) = self.alice.state.gaps
+        self.assertTrue(orig.rev < c.rev <= g.hi)
+        self.alice.sync()
+        self.assertIn(m2, self.alice.state.own_alarms)
+
+
+class RelayTime(Base):
+    """The reference relay stamps each event when it first sequences it and
+    keeps that time for every subscriber and on replay."""
+
+    def test_replayed_event_keeps_the_time_it_was_sequenced(self):
+        self.app1.set_up(False)
+        self.w.now += 1
+        c = self.graft()
+        t = self.w.relay[-1].time
+        self.w.now += 10
+        self.app1.set_up(True)
+        self.app1.lag = 10  # replaying from its cursor, ten hours behind
+        self.alice.sync()
+        e = self.app1.latest_rec("alice")
+        self.assertEqual((e.hi, e.rtime), (c.rev, t))
+        self.assertAlmostEqual(e.wtime - e.rtime, 10)  # sent on replay ten hours later
+        self.assertAlmostEqual(self.app1.frontier("alice"), t)
+        self.assertAlmostEqual(self.alice.coverage_age(), 10)
+
+    def backlog(self, stamp=None, claims=False):
+        """Alice's witness falls 30 hours behind the relay; with `claims`, her
+        PDS first stamps hourly events with the time they will reach it.
+        Bob accepts an impostor, and 24 hours pass."""
+        if stamp:
+            self.w.STAMP = stamp
+        self.app1.lag = 30
+        for _ in range(10 if claims else 0):
+            self.w.pds_write("alice", claim=self.w.now + 30)
+            self.w.now += 1
+        self.w.now += 0.5
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.hours(24.1, self.alice)
+        self.assertNotIn(self.m, self.alice.state.own_alarms)
+
+    def test_backlog_shows_under_the_reference_relay(self):
+        self.backlog(claims=True)  # the claims are ignored
+        self.assertGreater(self.alice.coverage_age(), LIVENESS_LIMIT)
+        self.assertTrue(self.alice.liveness_warning())
+        self.assertEqual(self.goal(), [])
+
+    def test_limitation_relay_stamping_events_when_sent(self):
+        # A relay that stamps each event when it sends it to a subscriber, as
+        # on replay or to one with a backlog, makes the backlog look current:
+        # finding 1's witness, 30 hours behind, reports a frontier age of 0.
+        self.backlog("sent")
+        self.assertAlmostEqual(self.alice.coverage_age(), 0)
+        self.assertFalse(self.alice.liveness_warning())
+        self.assertTrue(self.goal())
+
+    def test_limitation_relay_passing_on_pds_times(self):
+        # A relay that passes on the PDS's time lets the PDS stamp events
+        # with the time they will reach a witness it knows is behind.
+        self.backlog("pds", claims=True)
+        self.assertLess(self.alice.coverage_age(), 1)
+        self.assertFalse(self.alice.liveness_warning())
+        self.assertTrue(self.goal())
+
+
+class Transit(Base):
+    """Coverage age counts from when the installation sent the request that
+    produced the answer (the first page's, for an answer in pages)."""
+
+    def lose_witness_after(self, req):
+        """Alice's request reaches the witness at hour 100, which answers;
+        then she loses the witness and an impostor is accepted at 100.5."""
+        self.assertIsNotNone(req)
+        self.app1.reachable = False
+        self.w.now += 0.5
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+
+    def test_answer_delayed_in_transit_does_not_refresh_coverage(self):
+        req = self.alice.request()
+        self.lose_witness_after(req)
+        self.hours(9.5, self.alice)
+        self.assertTrue(self.alice.deliver(req))  # the answer from hour 100 arrives at 110
+        self.assertAlmostEqual(self.alice.coverage_age(), 10)
+        self.assertNotIn(self.m, self.alice.state.seen_own)
+        self.hours(14.1, self.alice)  # 24.1 hours after the acceptance
+        self.assertTrue(self.alice.liveness_warning())
+        self.assertEqual(self.goal(), [])
+
+    def test_answer_in_pages_ages_from_the_first_pages_request(self):
+        self.alice.PAGE_SIZE = 1
+        self.w.post("alice")
+        self.w.post("alice")
+        req = self.alice.request()
+        self.assertEqual(len(req.answer.pages(1)), 2)
+        self.lose_witness_after(req)
+        self.hours(7.5, self.alice)
+        self.assertFalse(self.alice.deliver(req))  # page 1 at hour 108; page 2 requested
+        self.hours(2, self.alice)
+        self.assertTrue(self.alice.deliver(req))  # page 2 at hour 110
+        self.assertAlmostEqual(self.alice.coverage_age(), 10)
+        self.hours(14.1, self.alice)
+        self.assertTrue(self.alice.liveness_warning())
+        self.assertEqual(self.goal(), [])
+
+    def test_late_answer_does_not_move_coverage_back(self):
+        req = self.alice.request()
+        self.w.now += 5
+        self.alice.sync()  # a newer answer
+        self.w.now += 1
+        self.assertTrue(self.alice.deliver(req))  # the older one arrives late
+        self.assertAlmostEqual(self.alice.coverage_age(), 1)
+
+    def test_response_to_a_request_sent_before_a_restart_is_dropped(self):
+        # The monotonic clock restarts with the installation, so a request
+        # sent before a restart has no send time it can still measure from.
+        req = self.alice.request()
+        self.alice.stop()
+        self.w.now += 0.5
+        self.graft()
+        self.assertTrue(self.bob.accepted(self.m))
+        self.w.now += 19.5
+        self.app1.reachable = False
+        self.alice.start()  # coverage 20 hours old, by the wall clock
+        self.w.now += 1
+        self.alice.deliver(req)
+        self.assertAlmostEqual(self.alice.coverage_age(), 21)
+        self.hours(3.6, self.alice)
+        self.assertTrue(self.alice.liveness_warning())
+        self.assertEqual(self.goal(), [])
 
 
 class Findings(Base):

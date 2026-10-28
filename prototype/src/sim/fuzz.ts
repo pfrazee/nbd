@@ -114,7 +114,7 @@ export class Walk {
       if (!this.shared)
         kinds.push(["wfork", 1], ["unrelayed", 1], ["syncReplaced", 1], ["syncRoot", 1], ["replaceRoot", 1], ["withholdFetch", 1],
           ["witnessConn", 1], ["witnessReach", 1], ["witnessLag", 1], ["relayDelay", 1], ["witnessClock", 1],
-          ["relayDrop", 1], ["futureRev", 1]);
+          ["relayDrop", 1], ["futureRev", 1], ["replayRev", 1]);
     }
     if (!this.shared)
       kinds.push(["online", 2], ["lag", 2], ["sub", 1], ["hreset", 1], ["fork", 1], ["rollback", 1], ["stop", 1], ["backup", 1], ["restore", 1], ["member", 1],
@@ -249,6 +249,8 @@ export class Walk {
         return ["relayDrop", acct, pick([1, 2])];
       case "futureRev":
         return ["futureRev", acct, pick([0.05, 1, 24, 1000])];
+      case "replayRev":
+        return ["replayRev", acct, pick([1, 2])];
       default:
         return ["wait", pick(WAITS)];
     }
@@ -305,6 +307,16 @@ export class Walk {
     else if (kind === "witnessClock") w.setWitness(String(a[1]), { clockOffset: Number(a[2]) });
     else if (kind === "relayDrop") w.relayDrops(did(String(a[1])), Number(a[2]));
     else if (kind === "futureRev") w.futureCommit(did(String(a[1])), Number(a[2]));
+    else if (kind === "replayRev") {
+      // The PDS replays an earlier commit through a relay that doesn't check revisions.
+      const d = did(String(a[1]));
+      const h = w.pdsOf.get(d)?.repo(d).history ?? [];
+      const snap = h[h.length - 1 - Number(a[2])];
+      if (snap) {
+        w.uncheckedRelay(d);
+        w.replayRevision(d, snap.commit.rev);
+      }
+    }
   }
 
   /** Undo functions of brief impostors still published. */

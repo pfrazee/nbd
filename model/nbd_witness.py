@@ -12,8 +12,10 @@ variant replaces it with what the proposal relies on:
   `#sync` root and serve its contents only to some witnesses or replace it
   before they fetch (`publish_sync`, `replace_sync`), and withhold or stall
   fetches per witness. Revisions are timestamps the PDS chooses (`rev_at`);
-  an honest relay can still drop a commit (`drop_next`). `ClientView` is
-  what the PDS serves one baseline client.
+  an honest relay can still drop a commit (`drop_next`), and the PDS can
+  publish an earlier commit again (`republish`). The relay stamps each event
+  when it sequences it (`STAMP`). `ClientView` is what the PDS serves one
+  baseline client.
 - `Witness`: one per application. It tails the relay, reconstructs the
   device and approval collections at each exact root or records a gap,
   records stream gaps when the relay refuses to resume, reports per account
@@ -24,7 +26,8 @@ variant replaces it with what the proposal relies on:
   reports as published and reconstructed, processing every witnessed commit
   of each pinned account in order, watching its own account's whole history
   from a persisted cursor (a repo revision, so it can move between
-  witnesses), and warning on gaps and on coverage age.
+  witnesses), and warning on gaps and on coverage age, counted from when
+  it sent the request that produced the answer (`request`, `deliver`).
 - `goal_violations`: the proposal's goal, checked against client state.
 
 Commits are abstract: a commit is its account, revision, and the two
@@ -102,12 +105,24 @@ class Event:
     prev: Optional[Root]
     time: float  # relay time: when the (honest) relay sequenced it, not when any witness got it
     hidden_from: FrozenSet[str] = frozenset()  # witnesses a dishonest relay never delivers it to
+    claim: Optional[float] = None  # a time the PDS put on it, which only a non-reference relay passes on
 
 
 class RelayWorld(World):
     """World plus commits, the reference relay, and PDS behaviour. The base
     collections are the PDS's current records; every honest write commits
-    and is relayed."""
+    and is relayed.
+
+    STAMP: the `time` a subscriber sees on an event. "sequenced" (the
+    reference relay): the relay time at which it first sequenced the event,
+    the same for every subscriber and on every replay. Two behaviours the
+    sync specification allows an honest relay but NBD's reference relay
+    must not have, kept for the limitation tests: "sent", the relay time at
+    which it sends the event to each subscriber (refreshed on replay, and
+    for a subscriber with a backlog), and "pds", a time the PDS chose and
+    the relay passed on (`claim`)."""
+
+    STAMP = "sequenced"
 
     def __init__(self):
         super().__init__()
@@ -191,7 +206,7 @@ class RelayWorld(World):
 
     def commit(self, account: str, relay: bool = True, kind: str = "commit",
                prev=None, serve_to: Optional[FrozenSet[str]] = None,
-               rev: Optional[int] = None) -> Commit:
+               rev: Optional[int] = None, claim: Optional[float] = None) -> Commit:
         """Commit the account's current records. An honest `#commit` inverts
         to the PDS's previous commit; prev="relayed" inverts to the last
         relayed one instead, hiding that an unrelayed commit came between.
@@ -212,23 +227,35 @@ class RelayWorld(World):
                 prev = last.commit.root if last else EMPTY
             elif prev is None:
                 prev = old.root if old else EMPTY
-            self._emit(kind, c, prev if kind == "commit" else None)
+            self._emit(kind, c, prev if kind == "commit" else None, claim)
             if kind == "sync" and serve_to is not None:
                 self.sync_served[(account, c.root)] = serve_to
         return c
 
-    def _emit(self, kind: str, c: Commit, prev: Optional[Root]) -> Event:
+    def _emit(self, kind: str, c: Commit, prev: Optional[Root], claim: Optional[float] = None) -> Event:
         self._seq += 1
         hidden = frozenset(wn for wn, accts in self.relay_hides.items() if c.account in accts)
-        e = Event(self._seq, kind, c, prev, self.now, hidden)
+        if claim is None:
+            claim = self.now + self.pds_clock.get(c.account, 0.0)  # the PDS's own clock
+        e = Event(self._seq, kind, c, prev, self.now, hidden, claim)
         self.relay.append(e)
         return e
+
+    def stamp(self, e: Optional[Event], t: float, witness: "Witness") -> float:
+        """The `time` a witness sees on an event the relay sequenced at relay
+        time `t` (`e` None: the firehose's other traffic, from honest PDSes)."""
+        if self.STAMP == "sent":
+            return max(t + witness.lag, witness.up_since)  # when the relay sends it to this subscriber
+        if self.STAMP == "pds" and e is not None:
+            return e.claim
+        return t
 
     # ---- malicious PDS -----------------------------------------------------
 
     def pds_write(self, account: str, add=(), delete=(), approve=(), unapprove=(),
                   relay: bool = True, kind: str = "commit", prev=None,
-                  serve_to: Optional[FrozenSet[str]] = None, rev: Optional[int] = None) -> Commit:
+                  serve_to: Optional[FrozenSet[str]] = None, rev: Optional[int] = None,
+                  claim: Optional[float] = None) -> Commit:
         for b in add:
             self.devices.setdefault(account, set()).add(b)
         for b in delete:
@@ -237,7 +264,19 @@ class RelayWorld(World):
             self.approvals.setdefault(account, set()).add(Approval(s, t))
         for s, t in unapprove:
             self.approvals.get(account, set()).discard(Approval(s, t))
-        return self.commit(account, relay=relay, kind=kind, prev=prev, serve_to=serve_to, rev=rev)
+        return self.commit(account, relay=relay, kind=kind, prev=prev, serve_to=serve_to, rev=rev,
+                           claim=claim)
+
+    def republish(self, c: Commit, kind: str = "commit") -> Commit:
+        """Publish an earlier commit again, at its own revision: the PDS puts
+        its repo back as it was then and relays that commit once more, which
+        a relay that passes on non-increasing revisions carries."""
+        a = c.account
+        self.devices[a], self.approvals[a], self.other[a] = set(c.devices), set(c.approvals), c.other
+        old = self.head.get(a)
+        self.head[a] = c
+        self._emit(kind, c, (old.root if old else EMPTY) if kind == "commit" else None)
+        return c
 
     def publish_sync(self, account: str, serve_to: Optional[FrozenSet[str]] = None, **writes) -> Commit:
         """A `#sync` event. Like any root, the PDS serves it while it is the
@@ -343,12 +382,14 @@ class ClientView:
 class Entry:
     """One step of a witness's history of one account. A reconstructed entry
     carries the collections at its commit's exact root; a gap carries none
-    and covers the account's revisions lo..hi (a stream gap with nothing
-    missed for the account has lo > hi, and so does a commit the witness did
-    not accept into the history for its revision: a gap at its place in
-    relay order that covers no revision of its own). Positions are
+    and covers the account's revisions lo..hi (a commit the witness did not
+    accept into the history for its revision has lo > hi: a gap at its place
+    in relay order that covers no revision of its own). Positions are
     revisions, the same at every witness; `idx` is local to this witness and
-    never leaves it."""
+    never leaves it. `pos` is the cursor after the entry: its last revision,
+    except that a stream gap's interval can reach past the revision the
+    witness resynchronized at, and the cursor moves only that far, so that
+    commits relayed afterwards inside the interval are still read."""
 
     idx: int
     account: str
@@ -361,10 +402,15 @@ class Entry:
     rtime: float  # relay time of the event (when the relay sequenced it)
     wtime: float  # witness-clock time the witness handled it
     alarm: Optional[str] = None  # an integrity alarm the witness raised here
+    cursor: Optional[int] = None  # the cursor after it, where not `hi`
 
     @property
     def reconstructed(self) -> bool:
         return self.root is not None
+
+    @property
+    def pos(self) -> int:
+        return self.hi if self.cursor is None else self.cursor
 
 
 class Witness:
@@ -468,13 +514,13 @@ class Witness:
         while self.pos < len(w.relay) and w.relay[self.pos].time <= horizon + EPS:
             e = w.relay[self.pos]
             self.pos += 1
-            self.stream_time = max(self.stream_time, e.time)
+            self.stream_time = max(self.stream_time, self._t(e))
             if self.name in e.hidden_from:
                 continue
             self._process(e)
             if self.PENDING == "stream" and self.blocked:
                 return
-        self.stream_time = max(self.stream_time, horizon)  # other accounts' traffic, by relay time
+        self.stream_time = max(self.stream_time, w.stamp(None, horizon, self))  # other accounts' traffic
         ahead = self.stream_time - self.wnow()
         if ahead > CLOCK_SKEW:
             self.skewed = True
@@ -482,10 +528,15 @@ class Witness:
             self.skewed = False  # resolved: current, with a clock agreeing with the relay's
         self._prune()
 
+    def _t(self, e: Event) -> float:
+        """The relay `time` on an event as this witness receives it."""
+        return self.world.stamp(e, e.time, self)
+
     def _append(self, a: str, kind: str, lo: int, hi: int, commit: Optional[Commit],
-                root: Optional[Root], rtime: float, wtime: float, alarm: Optional[str] = None) -> Entry:
+                root: Optional[Root], rtime: float, wtime: float, alarm: Optional[str] = None,
+                cursor: Optional[int] = None) -> Entry:
         self.count += 1
-        e = Entry(self.count, a, kind, lo, hi, commit, root, rtime, wtime, alarm)
+        e = Entry(self.count, a, kind, lo, hi, commit, root, rtime, wtime, alarm, cursor)
         self.hist.setdefault(a, []).append(e)
         self.archive.append(e)
         return e
@@ -493,20 +544,19 @@ class Witness:
     def _record(self, a: str, kind: str, ev: Event, root: Root) -> None:
         c = ev.commit
         self.commits.setdefault(a, {})[c.rev] = c
-        self.latest[a] = self._append(a, kind, c.rev, c.rev, c, root, ev.time, self._when(ev))
+        self.latest[a] = self._append(a, kind, c.rev, c.rev, c, root, self._t(ev), self._when(ev))
         self.state[a] = root
         self.last_rev[a] = max(self.last_rev.get(a, 0), c.rev)
 
     def _gap(self, a: str, ev: Event) -> None:
         c = ev.commit
         self.commits.setdefault(a, {})[c.rev] = c
-        self._append(a, "gap", self.last_rev.get(a, 0) + 1, c.rev, c, None, ev.time, self._when(ev))
+        self._append(a, "gap", self.last_rev.get(a, 0) + 1, c.rev, c, None, self._t(ev), self._when(ev))
         self.state[a] = None
         self.last_rev[a] = max(self.last_rev.get(a, 0), c.rev)
 
-    @staticmethod
-    def _future(ev: Event) -> bool:
-        return ev.commit.rev > rev_at(ev.time + REV_ALLOWANCE)
+    def _future(self, ev: Event) -> bool:
+        return ev.commit.rev > rev_at(self._t(ev) + REV_ALLOWANCE)
 
     def _unplaced(self, a: str, ev: Event, kind: str, alarm: Optional[str]) -> None:
         """A relayed commit not accepted into the history for its revision: a
@@ -514,7 +564,7 @@ class Witness:
         its cursor positions."""
         c, last = ev.commit, self.last_rev.get(a, 0)
         self.unplaced.setdefault(a, []).append(c)
-        self._append(a, kind, last + 1, last, c, None, ev.time, self._when(ev), alarm)
+        self._append(a, kind, last + 1, last, c, None, self._t(ev), self._when(ev), alarm)
         self.state[a] = None
         if alarm:
             self.alarms.append((a, alarm, c))
@@ -582,8 +632,17 @@ class Witness:
                 self._process(e2)
 
     def _stream_gap(self) -> None:
+        """A stream gap is a gap in every account's history, even one the
+        witness resynchronizes at the revision it already held: a relay that
+        passes on non-increasing revisions may have carried higher revisions
+        in between (an impostor, then the original replayed). Any revision up
+        to REV_ALLOWANCE past the relay's time when it resumed could have been
+        accepted by another witness, so the interval runs that far, past the
+        revision it resynchronizes at; the cursor after it moves only to that
+        revision."""
         w = self.world
         self.pos = len(w.relay)
+        bound = rev_at(w.stamp(None, w.now, self) + REV_ALLOWANCE)
         for a in sorted(set(self.state) | set(w.head) | set(self.blocked)):
             for e, _ in self.blocked.pop(a, []):
                 self._gap(a, e)  # unprocessed when the stream broke
@@ -592,12 +651,12 @@ class Witness:
                 continue
             r, known = last.commit.rev, a in self.state
             if known:
-                self._append(a, "stream-gap", self.last_rev.get(a, 0) + 1, r, None, None,
-                             last.time, self.wnow())
-                held = self.commits.get(a, {}).get(r)
-                if r == self.last_rev.get(a, 0) and self.state[a] is not None and held == last.commit:
-                    continue  # it already holds the latest published root
-                if r < self.last_rev.get(a, 0) or (r == self.last_rev.get(a, 0) and held != last.commit):
+                cur, held = self.last_rev.get(a, 0), self.commits.get(a, {}).get(r)
+                self._append(a, "stream-gap", cur + 1, max(cur + 1, r, bound), None, None,
+                             self._t(last), self.wnow(), cursor=max(cur, r))
+                if r == cur and self.state[a] is not None and held == last.commit:
+                    continue  # it already holds that root; the gap stands
+                if r < cur or (r == cur and held != last.commit):
                     self._unplaced(a, last, "rev-not-increasing", f"revision not increasing {a} rev {r}")
                     continue
             self.state[a] = None
@@ -624,7 +683,7 @@ class Witness:
         f = self.stream_time
         q = self.blocked.get(account)
         if q and self.PENDING != "aside":
-            f = min(f, q[0][0].time)  # a commit awaiting a fetch holds its account's frontier
+            f = min(f, self._t(q[0][0]))  # a commit awaiting a fetch holds its account's frontier
         return f
 
     def frontier_age(self, account: str) -> float:
@@ -661,8 +720,6 @@ class Witness:
         between: there the relay published nothing."""
         prev = None
         for e in self.hist.get(account, []):
-            if e.kind == "stream-gap" and e.lo > e.hi:
-                continue  # resynchronized at the revision it held: it missed nothing
             if not e.reconstructed:
                 prev = None
                 continue
@@ -739,6 +796,37 @@ class WitnessState(InviterState):
         return copy.deepcopy(self)
 
 
+@dataclass
+class Answer:
+    """A witness's answer about the own account, computed when the first
+    page's request reaches it: the history after a cursor (each entry with
+    the cursor after it), what the witness lacks, and its frontier age at
+    that moment. Later pages are served from the same answer."""
+
+    after: int
+    lacks: Tuple[int, str]
+    entries: List[Tuple[Entry, int]]
+    frontier_age: float
+
+    def pages(self, size: Optional[int]) -> List[List[Tuple[Entry, int]]]:
+        if not size or not self.entries:
+            return [self.entries]
+        return [self.entries[i:i + size] for i in range(0, len(self.entries), size)]
+
+
+@dataclass
+class Request:
+    """An installation's outstanding request for an answer, possibly in
+    pages. Times are its monotonic clock when it sent each page's request."""
+
+    answer: Answer
+    epoch: int  # requests sent before a restart are discarded
+    first_sent: float  # the first page's request
+    sent: float  # the latest page's request
+    fresh: bool  # a fresh enrollment's replay
+    page: int = 0  # pages processed
+
+
 class WitnessedView:
     """The repo reads a WitnessClient decides on: for a pinned account, the
     collections at the last witnessed commit it processed; otherwise the
@@ -779,6 +867,7 @@ class WitnessClient(InviterClient):
     warnings and a liveness warning on coverage age."""
 
     FRESH_HISTORY_GAP = True  # finding 2's fix: history the witness lacks is a gap at enrollment too
+    PAGE_SIZE: Optional[int] = None  # history entries per page of an answer; None: one page
     MONO_COUNTS_SUSPEND = True  # finding 3: a monotonic clock that stops in suspend
     EXEMPT_UNCHANGED = True  # finding 13's fix: an unrelayed commit with the earlier one's data is no alarm
 
@@ -793,6 +882,8 @@ class WitnessClient(InviterClient):
         self.running = True
         self.suspended = 0.0
         self._mono_ck: Optional[float] = None
+        self._epoch = 0
+        self._boot = world.now  # the monotonic clock counts from the latest start
         if transfer is None:
             self.state = WitnessState(accepted={own: "own"}, own=own)
         else:  # restore or pairing: resume from the transferred cursor, on any witness
@@ -813,7 +904,7 @@ class WitnessClient(InviterClient):
     # ---- clocks and liveness ----------------------------------------------
 
     def mono(self) -> float:
-        return self.relay_world.now - (0.0 if self.MONO_COUNTS_SUSPEND else self.suspended)
+        return self.relay_world.now - self._boot - (0.0 if self.MONO_COUNTS_SUSPEND else self.suspended)
 
     def wall(self) -> float:
         return self.local_now()
@@ -836,12 +927,14 @@ class WitnessClient(InviterClient):
         self._checkpoint()
         self.running = False
         self._mono_ck = None
+        self._epoch += 1  # the monotonic clock restarts: outstanding requests are dropped
 
     def start(self) -> None:
         st = self.state
         d = None if st.cov_wall is None else self.wall() - st.cov_wall
         st.cov_base = INF if d is None or d < 0 else st.cov_base + d
         self.running = True
+        self._boot = self.relay_world.now
         self._mono_ck = self.mono()
         st.cov_wall = self.wall()
         self.sync()
@@ -861,14 +954,62 @@ class WitnessClient(InviterClient):
     # ---- decisions ----------------------------------------------------------
 
     def sync(self) -> None:
+        """Request an answer, receive it at once (every page), and follow
+        every account."""
         if not self.running:
             return
-        self.witness.poll()
-        if self.witness.reachable:
-            self._follow()
+        req = self.request()
+        if req is not None:
+            self._follow(req)
         else:
             self._observe()
         self._checkpoint()
+
+    def request(self) -> Optional[Request]:
+        """Send the first page's request for the own account's history; the
+        witness computes its answer as the request reaches it. None while
+        stopped or the witness is unreachable."""
+        if not self.running:
+            return None
+        self.witness.poll()
+        if not self.witness.reachable:
+            return None
+        own, w = self.own.account, self.witness
+        cur, fresh = self._start_cursor(own)
+        ans = Answer(cur, w.lacks(own), self._resume(w, own, cur), w.frontier_age(own))
+        return Request(ans, self._epoch, self.mono(), self.mono(), fresh)
+
+    def deliver(self, req: Request) -> bool:
+        """The response to the request's outstanding page arrives now and is
+        processed. If pages remain, the next page's request is sent at once
+        (False); once the whole answer is processed, the monitoring frontier
+        advances (True). A response to a request sent before a restart is
+        dropped."""
+        if req.epoch != self._epoch or not self.running:
+            return True
+        ans, n = req.answer, req.page
+        pages = ans.pages(self.PAGE_SIZE)
+        self._follow_account(self.own.account, ans.after, ans.lacks if n == 0 else (0, ""), pages[n], req.fresh)
+        req.page += 1
+        if req.page < len(pages):
+            req.sent = self.mono()  # the next page's request
+            return False
+        self._advance(ans.frontier_age, req.first_sent)
+        return True
+
+    def _advance(self, age: float, sent: float) -> None:
+        """The monitoring frontier advances to an answer's. Coverage age is
+        the frontier age the witness reported plus the local time elapsed
+        since the installation sent the request that produced the answer
+        (the first page's, for an answer in pages), so an answer delayed in
+        transit cannot make old coverage look fresh. An answer older than
+        the coverage already held does not move it back; a clock fault the
+        witness reports counts at once."""
+        st = self.state
+        age = age + (self.mono() - sent)
+        st.cov_base = age if age == INF else min(self.coverage_age(), age)
+        self._mono_ck = self.mono()
+        st.cov_wall = self.wall()
 
     def accepted(self, b: Binding, space: str = ""):
         self.sync()
@@ -1007,34 +1148,44 @@ class WitnessClient(InviterClient):
             if b.account != self.own.account:
                 self.state.basis.setdefault(b, (rev, self.relay_world.now))
 
-    def _follow(self) -> None:
+    def _follow(self, req: Request) -> None:
         own = self.own.account
         for x in sorted({own} | {b.account for b in self.state.accepted}):
-            self._follow_account(x)
+            if x == own:
+                while not self.deliver(req):  # every page, at once
+                    pass
+            else:
+                self._follow_account(x)
         self._incomplete(own)  # compare what the PDS serves this installation of its own repo
-        # The monitoring frontier: every commit the witness received is processed.
-        self.state.cov_base = self.witness.frontier_age(own)
-        self._mono_ck = self.mono()
-        self.state.cov_wall = self.wall()
 
-    def _follow_account(self, x: str) -> None:
+    def _start_cursor(self, x: str) -> Tuple[int, bool]:
+        """The cursor to read the own account's history from, and whether
+        this is a fresh enrollment, which replays it from its first event."""
+        st = self.state
+        if x in st.cursors:
+            return st.cursors[x], False
+        st.read_from = 0
+        st.cursors[x] = 0
+        return st.cursors[x], True
+
+    def _follow_account(self, x: str, after: Optional[int] = None, lacks: Optional[Tuple[int, str]] = None,
+                        entries: Optional[List[Tuple[Entry, int]]] = None, fresh: bool = False) -> None:
+        """Process the account's history after its cursor: read from the
+        witness now (pinned accounts), or a page of an answer (the own
+        account; `after` is the cursor the answer was computed from)."""
         st, w = self.state, self.witness
         own = x == self.own.account
-        fresh = False
         if x not in st.cursors:
-            if not own:
-                self._pin_new(x)
-                if x not in st.cursors:
-                    return
-            else:
-                fresh = True  # replay the account's history from its first event
-                st.read_from = 0
-                st.cursors[x] = 0
-        cur = st.cursors[x]
-        lack, kind = w.lacks(x)  # revisions after the cursor this witness does not have
+            self._pin_new(x)
+            if x not in st.cursors:
+                return
+        cur = st.cursors[x] if after is None else after
+        lack, kind = w.lacks(x) if lacks is None else lacks  # revisions after the cursor it lacks
         if lack > cur and (self.FRESH_HISTORY_GAP or not fresh):
             self._gap(x, Gap(cur + 1, lack, kind))
-        for e, pos in self._resume(w, x, cur):
+        if entries is None:
+            entries = self._resume(w, x, cur)
+        for e, pos in entries:
             if e.reconstructed:
                 st.obs[x], st.obs_rev[x] = e.root, e.hi
                 before = set(st.accepted)
@@ -1052,7 +1203,7 @@ class WitnessClient(InviterClient):
     def _resume(self, w: Witness, x: str, cur: int) -> List[Tuple[Entry, int]]:
         """The witness's history of x after cursor `cur`, each entry with the
         cursor after it: the account's repo revision, the same at every witness."""
-        return [(e, e.hi) for e in w.read(x, cur)]
+        return [(e, e.pos) for e in w.read(x, cur)]
 
     def _gap(self, x: str, g: Gap) -> None:
         gaps = self.state.gaps if x == self.own.account else self.state.audit_gaps.setdefault(x, [])

@@ -62,6 +62,11 @@ export interface Network {
   accepted?(by: Installation, b: Binding, rev: number | null, via: string): void;
 }
 
+/** A witness answer under way: its latest page's request `id`, when the
+ * first page's request was sent (`first`) and the latest (`sent`), and its
+ * frontier age, from the first page (null until it arrives). */
+type Request = { id: string; first: number; sent: number; age: number | null };
+
 /** A signed invite or capture record, saved with its vouch decision before
  * any upload. `firstMet`: the installation had no pin for the account when
  * it made the record. */
@@ -146,6 +151,11 @@ export class Installation {
   /** World-time intervals during which it ran (ground truth). */
   runs: { from: number; to: number }[] = [];
   private reported = new Set<string>();
+  /** Witness answers under way, per account (lost on a restart): the
+   * latest page's request, when the first page's request was sent and when
+   * the latest one was, and the answer's frontier age, from its first page. */
+  private requests = new Map<Did, Request>();
+  private requestCount = 0;
 
   constructor(
     private readonly net: Network,
@@ -571,6 +581,7 @@ export class Installation {
     const before = this.fingerprint();
     const now = this.net.now();
     if (!this.running) {
+      this.requests.clear();
       if (this.witnessed) this.restart();
       this.runs.push({ from: now, to: now });
     }
@@ -667,8 +678,12 @@ export class Installation {
     }
     let last: HistoryResponse | null = null;
     let applied = false;
+    let first = this.net.now();
+    let age = Infinity;
     for (let more = true; more; ) {
-      const r = w.history(this.id, did, cursor);
+      const got = this.ask(w, did, cursor);
+      if (!got) break; // in transit: asked again next time
+      const { r, req } = got;
       if (r.truncatedTo !== null && r.truncatedTo > cursor)
         this.recordGap(did, `${did}:retention:${cursor + 1}-${r.truncatedTo}`, cursor + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
       for (const e of own ? this.ownEntries(r.entries) : this.pinnedEntries(r.entries)) {
@@ -680,13 +695,19 @@ export class Installation {
       }
       this.integrity(did, r);
       more = r.more;
-      if (!more) last = r;
+      if (more) this.nextPage(req);
+      else {
+        last = r;
+        first = req.first;
+        age = req.age!;
+        this.requests.delete(did);
+      }
     }
     this.mon.cursors.set(did, cursor);
     // Nothing new: re-apply the rules to the witnessed view (holds elapse).
     if (!applied) this.trust.refresh(did);
     if (own && last) this.mon.fault = last.fault;
-    if (own) this.advance(last?.frontierAge ?? Infinity);
+    if (own) this.advance(age, first);
     this.crossCheck(w, did);
   }
 
@@ -708,8 +729,11 @@ export class Installation {
     const seen = new Map<string, Binding>();
     let last: Snapshot | null = null;
     let frontierAge = Infinity;
+    let first = this.net.now();
     for (let more = true; more; ) {
-      const r = w.history(this.id, this.did, cursor);
+      const got = this.ask(w, this.did, cursor);
+      if (!got) return; // in transit: enrollment starts over next time
+      const { r, req } = got;
       // History the witness no longer holds, from the account's first event.
       if (r.truncatedTo !== null && r.truncatedTo > (cursor ?? 0))
         this.recordGap(this.did, `${this.did}:retention:${(cursor ?? 0) + 1}-${r.truncatedTo}`, (cursor ?? 0) + 1, r.truncatedTo, null, "older than WITNESS_RETENTION");
@@ -728,9 +752,12 @@ export class Installation {
       }
       this.integrity(this.did, r);
       more = r.more;
-      if (!more) {
-        frontierAge = r.frontierAge;
+      if (more) this.nextPage(req);
+      else {
+        frontierAge = req.age!;
         this.mon.fault = r.fault;
+        first = req.first;
+        this.requests.delete(this.did);
       }
     }
     if (!last) return; // nothing reconstructed yet: INCOMPLETE
@@ -743,7 +770,34 @@ export class Installation {
         `${label(b)} was on your account before this device was set up, and has since been removed. Not yours? Your account was impersonated.`, { about: b });
     }
     this.mon.cursors.set(this.did, cursor ?? 0);
-    this.advance(frontierAge);
+    this.advance(frontierAge, first);
+  }
+
+  /** Ask the witness for a page of `did`'s history from `cursor`, for the
+   * answer under way or a new one whose first request is sent now. Null
+   * while nothing has arrived. An answer to an earlier request, such as one
+   * sent before a restart, is discarded. A paged answer carries one frontier
+   * age, computed when its first page's request arrived. */
+  private ask(w: WitnessApi, did: Did, cursor: number | null): { r: HistoryResponse; req: Request } | null {
+    let req = this.requests.get(did);
+    if (!req) this.requests.set(did, (req = { id: this.requestId(), first: this.net.now(), sent: this.net.now(), age: null }));
+    for (;;) {
+      const r = w.history(this.id, did, cursor, undefined, req.id);
+      if (!r) return null;
+      if (r.req !== undefined && r.req !== req.id) continue; // not this request's answer: discarded
+      if (req.age === null) req.age = r.frontierAge;
+      return { r, req };
+    }
+  }
+
+  /** The next page's request, sent now. */
+  private nextPage(req: Request): void {
+    req.id = this.requestId();
+    req.sent = this.net.now();
+  }
+
+  private requestId(): string {
+    return `${this.id}#${++this.requestCount}`;
   }
 
   /** Record a gap: the own account's raise their own warning; a pinned
@@ -809,11 +863,13 @@ export class Installation {
   }
 
   /** Advance the monitoring frontier after processing everything the
-   * witness reported. Only better coverage counts: a quick answer with a
-   * stale frontier changes nothing. */
-  private advance(frontierAge: number): void {
-    const now = this.net.now();
-    if (frontierAge < this.coverageAge()) this.mon.coverage = { base: frontierAge, mono: now };
+   * witness reported, in an answer to a request sent at `sent` (the first
+   * page's): the reported frontier age plus the time since then, in transit
+   * included. Only better coverage counts: a quick answer with a stale
+   * frontier, or a late answer whose frontier is older than the coverage
+   * held, changes nothing. */
+  private advance(frontierAge: number, sent: number): void {
+    if (frontierAge + Math.max(0, this.net.now() - sent) < this.coverageAge()) this.mon.coverage = { base: frontierAge, mono: sent };
     this.segment();
   }
 

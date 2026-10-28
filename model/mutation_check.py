@@ -160,23 +160,21 @@ WITNESS_MUTATIONS = {
         "            if src is not self.witness:\n                continue",
         "            if False:\n                continue"),
     "latest-only watching": (
-        "        for e, pos in self._resume(w, x, cur):",
-        "        for e, pos in ([p for p in self._resume(w, x, cur) if p[0].reconstructed][-1:] if own\n"
-        "                       else self._resume(w, x, cur)):"),
+        "        for e, pos in entries:",
+        "        for e, pos in ([p for p in entries if p[0].reconstructed][-1:] if own else entries):"),
     "gap erased on resync": (
         "            if e.reconstructed:\n                st.obs[x], st.obs_rev[x] = e.root, e.hi",
         "            if e.reconstructed:\n                if e.kind == \"resync\" and own:\n"
         "                    st.gaps.clear()\n                st.obs[x], st.obs_rev[x] = e.root, e.hi"),
     "deadline reset at check completion": (
-        "        self.state.cov_base = self.witness.frontier_age(own)", "        self.state.cov_base = 0.0"),
+        "        age = age + (self.mono() - sent)", "        age = 0.0"),
     "restore from now instead of cursor": (
         "            st.read_from = st.cursors.get(own.account, 0)",
         "            st.cursors[own.account] = witness.last_rev.get(own.account, 0)\n"
         "            st.read_from = st.cursors.get(own.account, 0)"),
     "snapshot skipping for pinned accounts": (
-        "        for e, pos in self._resume(w, x, cur):",
-        "        for e, pos in ([p for p in self._resume(w, x, cur) if p[0].reconstructed][-1:] if not own\n"
-        "                       else self._resume(w, x, cur)):"),
+        "        for e, pos in entries:",
+        "        for e, pos in ([p for p in entries if p[0].reconstructed][-1:] if not own else entries):"),
     "gap ack suppresses liveness": (
         "        return self.running and self.coverage_age() > LIVENESS_LIMIT",
         "        return self.running and self.coverage_age() > LIVENESS_LIMIT and not any(\n"
@@ -224,15 +222,15 @@ WITNESS_MUTATIONS = {
     "absence before presence revokes": (
         "            elif b in st.proven and rev > st.proven[b]:", "            else:"),
     "fresh enrollment starts at the head": (
-        "                st.cursors[x] = 0\n",
-        "                st.cursors[x] = w.last_rev.get(x, 0)\n"),
+        "        st.cursors[x] = 0\n",
+        "        st.cursors[x] = self.witness.last_rev.get(x, 0)\n"),
     "fresh enrollment presents nothing": (
         "            if fresh:\n                st.presented.add(b)", "            if fresh:\n                pass"),
     "unreachable witness decides": (
         "        if not self.witness.reachable:\n            return True",
         "        if False:\n            return True"),
     "cursor as a witness-local index": (
-        "        return [(e, e.hi) for e in w.read(x, cur)]",
+        "        return [(e, e.pos) for e in w.read(x, cur)]",
         "        return [(e, e.idx) for e in w.read(x, -1) if e.idx > cur]"),
     "witness: no inversion check": (
         "        if e.kind == \"commit\" and cur is not None and e.prev == cur:",
@@ -249,12 +247,33 @@ WITNESS_MUTATIONS = {
         "        if not self.up or not w.relay_up:\n            self.stream_time = w.now\n"
         "            return\n        self._drain()"),
     "witness: frontier from delivery time": (
-        "        self.stream_time = max(self.stream_time, horizon)",
+        "        self.stream_time = max(self.stream_time, w.stamp(None, horizon, self))",
         "        self.stream_time = max(self.stream_time, self.wnow())"),
     "witness: pending fetch does not hold the frontier": (
         "        if q and self.PENDING != \"aside\":", "        if False:"),
     "witness: skew fault ignored": (
         "        if self.skew_fault(account):\n            return INF", "        if False:\n            return INF"),
+    "witness: same-revision stream gap exempt": (
+        "                self._append(a, \"stream-gap\", cur + 1, max(cur + 1, r, bound), None, None,",
+        "                if not (r == cur and held == last.commit):\n"
+        "                    self._append(a, \"stream-gap\", cur + 1, max(cur + 1, r, bound), None, None,"),
+    "witness: stream gap ends at the resync revision": (
+        "max(cur + 1, r, bound), None, None,", "r, None, None,"),
+    "witness: cursor moves to the end of a stream gap": (
+        "self.wnow(), cursor=max(cur, r))", "self.wnow())"),
+    "witness: a stream gap keeps reconstructions consecutive": (
+        "        for e in self.hist.get(account, []):\n            if not e.reconstructed:",
+        "        for e in self.hist.get(account, []):\n            if e.kind == \"stream-gap\":\n"
+        "                continue\n            if not e.reconstructed:"),
+    "relay: time stamped when sent": ("    STAMP = \"sequenced\"", "    STAMP = \"sent\""),
+    "relay: PDS time passed on": ("    STAMP = \"sequenced\"", "    STAMP = \"pds\""),
+    "coverage aged from the response's arrival": (
+        "        age = age + (self.mono() - sent)", "        age = age + 0.0"),
+    "coverage aged from the last page's request": (
+        "self._advance(ans.frontier_age, req.first_sent)", "self._advance(ans.frontier_age, req.sent)"),
+    "late answer moves coverage back": ("min(self.coverage_age(), age)", "age"),
+    "response to a request before a restart processed": (
+        "        if req.epoch != self._epoch or not self.running:", "        if not self.running:"),
     "witness: skew fault not latched": (
         "        return self.skewed or self.frontier(account) > self.wnow() + CLOCK_SKEW",
         "        return self.frontier(account) > self.wnow() + CLOCK_SKEW"),

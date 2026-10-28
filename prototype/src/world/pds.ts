@@ -167,6 +167,20 @@ export class Pds {
     });
   }
 
+  /** Roll `did`'s public repo back to its commit at `rev` and send that
+   * commit to the relay again, as a `#sync`: a malicious PDS replaying a
+   * revision. Witnesses fetching the repo are then served that commit. */
+  replay(did: Did, rev: number): Snapshot {
+    const repo = this.repos.get(did)!;
+    const snap = repo.atRev(rev);
+    if (!snap) throw new Error(`pds: no commit of ${did} at revision ${rev}`);
+    repo.records = new Map(snap.records);
+    repo.history.push(snap);
+    repo.times.push(this.clock());
+    this.emit(did, snap, "sync");
+    return snap;
+  }
+
   /** What a witness gets when it fetches `did`'s public repo. */
   serveFetch(witness: string, did: Did): Snapshot | null {
     const repo = this.repos.get(did);

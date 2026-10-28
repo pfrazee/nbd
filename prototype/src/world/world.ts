@@ -8,7 +8,7 @@ import { Installation, type InstallationState, type InviteEvent, type Network } 
 import type { RecordPath, Snapshot, WriteOp } from "../protocol/repo";
 import { approvalPayload } from "../protocol/trust";
 import { type Approval, type Binding, COL, type Did, type Invite, type Policy, asCbor, label } from "../protocol/types";
-import type { WitnessApi } from "../protocol/witness";
+import type { HistoryResponse, WitnessApi } from "../protocol/witness";
 import { Adversary } from "./adversary";
 import { Host } from "./host";
 import { Pds, type Session, revAt } from "./pds";
@@ -151,7 +151,39 @@ export class World implements Network {
     const inst = this.installations.get(observer);
     if (!inst || !this.relay) return null;
     const w = this.witnessOf(inst.app);
-    return w.reachable ? w : null;
+    if (!w.reachable) return null;
+    const d = this.transit.get(observer) ?? 0;
+    if (!d) return w;
+    // Answers delayed in transit: each computed when its request arrives
+    // and delivered `d` hours later, whichever request the client is on.
+    return {
+      id: w.id,
+      history: (o, did, from, limit, req) => {
+        const slot = `${o} ${did}`;
+        const q = this.answers.get(slot) ?? [];
+        this.answers.set(slot, q);
+        if (!q.some((x) => x.req === req)) q.push({ req, at: this.t + d, r: w.history(o, did, from, limit, req) });
+        const i = q.findIndex((x) => x.at <= this.t + 1e-9);
+        return i < 0 ? null : q.splice(i, 1)[0].r;
+      },
+      commitAt: (o, did, rev) => w.commitAt(o, did, rev),
+      latest: (o, did) => w.latest(o, did),
+    };
+  }
+
+  /** Hours each witness answer to an installation spends in transit. */
+  private readonly transit = new Map<string, number>();
+  /** Answers in transit, by installation and account. They survive the
+   * installation restarting, which must discard them. */
+  private readonly answers = new Map<string, { req: string | undefined; at: number; r: HistoryResponse }[]>();
+
+  /** Witness answers to `inst` spend `hours` in transit: each is computed
+   * when its request arrives and delivered that much later. */
+  witnessTransit(inst: Installation, hours: number): void {
+    if (hours > 0) this.transit.set(inst.id, hours);
+    else this.transit.delete(inst.id);
+    this.note(`witness answers to ${inst.id} now spend ${hours}h in transit`);
+    this.settle();
   }
 
   otherWitnesses(observer: string): WitnessApi[] {
@@ -756,8 +788,9 @@ export class World implements Network {
 
   /** Witness conditions: an outage of its relay subscription, clients unable
    * to reach it, or processing hours behind. */
-  setWitness(app: string, opts: { connected?: boolean; reachable?: boolean; lag?: number; clockOffset?: number }): void {
+  setWitness(app: string, opts: { connected?: boolean; reachable?: boolean; lag?: number; clockOffset?: number; pageSize?: number }): void {
     const w = this.witnessOf(app);
+    if (opts.pageSize !== undefined) w.pageSize = opts.pageSize;
     if (opts.clockOffset !== undefined) w.clockOffset = opts.clockOffset;
     if (opts.connected !== undefined) w.setConnected(opts.connected);
     if (opts.reachable !== undefined) w.reachable = opts.reachable;
@@ -772,6 +805,26 @@ export class World implements Network {
   relayDelay(app: string, hours: number): void {
     this.relay!.deliveryDelay.set(this.witnessOf(app).id, hours);
     this.note(`the relay delivers to ${this.witnessOf(app).id} ${hours}h late`);
+    this.settle();
+  }
+
+  /** Not the reference relay: one that stamps each event with the time it
+   * sends it, so a replay or a slow subscriber's backlog carries fresh times
+   * (proposal: Reference relay forbids this). */
+  relayTimeOnDelivery(on = true): void {
+    this.relay!.timeOnDelivery = on;
+    this.note(`the relay ${on ? "stamps events with the time it sends them" : "keeps each event's sequencing time"}`);
+    this.settle();
+  }
+
+  /** `did`'s PDS rolls its repo back to its commit at revision `rev` and
+   * sends the relay that same commit again, as a `#sync`. A relay that
+   * checks revisions refuses it; one that doesn't publishes revision `rev`
+   * a second time, after whatever came between. */
+  replayRevision(did: Did, rev: number): void {
+    const pds = this.pdsOf.get(did)!;
+    pds.replay(did, rev);
+    this.note(`${pds.name} rolls ${did} back to revision ${rev} and sends it to the relay again`);
     this.settle();
   }
 
