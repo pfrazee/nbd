@@ -1,5 +1,5 @@
-// Goal-level detection check for the Relay-Witnessed Repos proposal
-// (proposal-reliable-detection.md, Goal). It judges against the world's
+// Goal-level detection check for witnessed history: README goal 7 (and
+// audit.md, Own-account history). It judges against the world's
 // ground truth, not the clients' reasoning:
 //
 //   Every device an honest installation accepted for account A that none of

@@ -1,7 +1,7 @@
-// The Relay-Witnessed Repos proposal (proposal-reliable-detection.md) as a
+// Witnessed history (device-enrollment.md, Witnessed history) as a
 // world policy. Scenarios 27-36 run in scenarios.test.ts; these cover Astra's
 // cases, each rule the mutations in mutate.mjs break, and the findings the
-// prototype makes about the proposal (see README.md#relay-witnessed-repos).
+// prototype made about the draft rules (see README.md#witnessed-history).
 
 import { COL, bindingId } from "../src/protocol/types";
 import { detectionViolations } from "../src/sim/detection";
@@ -1259,7 +1259,7 @@ describe("reference relay timestamps", () => {
 
   it("not the reference relay: one that stamps events with the time it sends them makes the backlog look current, and Bob misses the deadline", () => {
     // Documented non-reference behavior (Relay.timeOnDelivery): the sync
-    // specification allows it of an honest relay, and the proposal forbids
+    // specification allows it of an honest relay, and the rules forbid
     // it of the reference relay. The same backlog as above, and the f1
     // backlog, read as current.
     const { w, bobDid } = outage("t2", true);

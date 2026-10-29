@@ -48,7 +48,7 @@ Admin Alice adds Bob.
 
 6. **Device lists:** each sees the other's devices, with no badges or Verify action.
 7. **Unlinked devices:** if a new Bob device appears without a link from a Bob device already pinned, members' apps don't share keys with it, and there is no override. Device lists show "Bob has a device that isn't linked to his others," which can mean Bob skipped linking or someone is impersonating him.
-8. **Alarms:** Bob's client alarms if it finds a grant to a device he never approved, or records in his repo for devices he doesn't recognise ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to *Book club*." These are the main defense against substitution, so they are prominent.
+8. **Alarms:** Bob's client alarms if any device he never approved appears in his account's history, even briefly, as his app's witness reads it from the relay ([own-account history](../audit.md#own-account-history)), or if it finds a grant to such a device ([auditing](../audit.md#direct-sync)): "A device you don't recognise may have access to your spaces." When a grant names the space, the alarm names it too: "…may have access to *Book club*." These are the main defense against substitution, so they are prominent, and they come within a day even if Bob's provider hides the device from him.
 
 ![Adding a member (Paranoid), steps 4–8: Bob waits for a member's device, Carol's grant unlocks the history, Carol's list of Bob's devices shows his unlinked tablet getting no keys, and Bob's own app raises the unrecognised-device alarm](images/paranoid-adding-a-member-2.png)
 
@@ -60,7 +60,7 @@ Alice invites Bob, who has an account but no app yet.
 1. **Invite Bob.** Alice's app finds no devices for him and publishes a pending invite, which admits him ([invites](../core.md#invites)). The confirmation says: "If Bob joins after Tuesday, they'll get access when members' apps finish their checks."
 2. **Bob installs and joins.** The next time Alice's app syncs, it meets Bob's new device for the first time, vouches for it, and publishes the capture. Her devices grant at once, as if Bob had been installed when she invited him. Other members' apps hold his device as a first contact.
 3. **If Bob takes longer than the pending window** (a week of Alice's app's time), the invite still admits him, but Alice's app meets his device as an ordinary first contact and holds it like everyone else's.
-4. **The window is the remaining exposure.** If someone takes over Bob's account before he installs and enrolls the first device, Alice's app vouches for theirs. Bob's own app alarms when it sees a device it never approved, after the fact.
+4. **The window is the remaining exposure.** If someone takes over Bob's account before he installs and enrolls the first device, Alice's app vouches for theirs. Bob's own app alarms when it sees a device it never approved, after the fact: when he installs, it shows every device that was ever on his account, including deleted ones, and asks whether he recognises them ([fresh enrollment](../audit.md#watching-your-own-account)).
 
 ![Inviting someone who hasn't installed the app (Paranoid): the confirmation explains the pending window, Carol sees "Alice added Bob", Bob installs and gets the key from Alice at once, and Carol's member list shows "Invited by Alice" and when her device will share with Bob](images/paranoid-inviting-before-install.png)
 
@@ -127,6 +127,14 @@ NBD has no parent/child relationship; each space is cryptographically independen
 4. **No move offered.** Removing, plus signing a device out, is the whole response; the notice does not suggest a new space. Moving lives in space settings for groups that credibly believe the space is compromised beyond what the host can stop ([replacing a space](../core.md#replacing-a-space)).
 
 ![Removing a member or device (Paranoid): "Carol was removed" in the timeline, space info saying her devices still hold the key, signing the lost iPad out at the provider, and the device list after removal suggesting a password change](images/paranoid-removing.png)
+
+## Checking your account
+
+Bob's app checks his account's history for devices he didn't add, through a service his app runs that follows a shared relay ([own-account history](../audit.md#own-account-history)). When it can't check, it says so rather than staying quiet:
+
+1. **It couldn't check recently.** If its view of Bob's account falls more than a day behind, a banner stays until it catches up: "Your app couldn't check your account for unrecognised devices in the last day. *Your provider* or *the app's service* isn't responding." It names what failed and can't be dismissed while the problem lasts ([liveness](../audit.md#liveness-and-deadline)).
+2. **It couldn't check part of the history.** Each stretch it couldn't check gets its own notice: "Your app couldn't check your account between Tuesday 3:10 pm and 3:40 pm. A device you didn't add could have been there." Bob can acknowledge each one; that never hides a later one. These can happen for ordinary reasons, such as an outage, so they are warnings, not alarms ([gaps](../audit.md#monitoring-and-history)).
+3. **Integrity problems alarm.** If Bob's provider shows his app a different history than the one the relay published, the app alarms as it does for an unrecognised device: "Your provider showed this app a different version of your account than everyone else sees. Your account may be compromised."
 
 ## Keeping spaces available
 

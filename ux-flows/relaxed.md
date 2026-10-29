@@ -86,8 +86,14 @@ Removal and **I lost a device** stop new keys at once, with nothing held back, a
 
 Relaxed presentation does not soften these. They are integrity alarms, not routine notices:
 
-- **A device you don't recognise:** a grant to, or a record for, a device of the user's account that no device of theirs approved ([auditing](../audit.md#direct-sync)). Copy: "A device you don't recognise may have access to your spaces. Review devices."
+- **A device you don't recognise:** a device of the user's account that no device of theirs approved, in the account's history as their app's witness reads it, even briefly ([own-account history](../audit.md#own-account-history)), or in a grant ([auditing](../audit.md#direct-sync)). Copy: "A device you don't recognise may have access to your spaces. Review devices."
+- **A different history:** the provider showed this app a version of the account that the relay never published ([witnessed history](../device-enrollment.md#witnessed-history)), with the same copy and review flow.
 - **Host integrity:** a space reporting a different key commitment than first observed ([host state](../core.md#trusted-host-state)).
+
+Two warnings say when the app couldn't check, and are not softened either, though they are not alarms:
+
+- **Couldn't check recently:** a banner that can't be dismissed while the app's view of the account is more than a day behind, naming what isn't responding ([liveness](../audit.md#liveness-and-deadline)). Copy: "Your app couldn't check your account for unrecognised devices in the last day."
+- **Couldn't check part of the history:** one notice per stretch, which the user can acknowledge ([gaps](../audit.md#monitoring-and-history)). Copy: "Your app couldn't check part of your account's history. A device you didn't add could have been there."
 
 ![Alarms: a full-screen "A device you don't recognise may have access to your spaces" alarm, the device list with the never-approved device and a Remove action, and a persistent red banner when a space's security settings change unexpectedly](images/relaxed-alarms.png)
 
@@ -109,7 +115,8 @@ Surfaces the specification requires to exist but allows to be buried:
 | Member additions, removals, and readmissions are visibly surfaced ([host state](../core.md#trusted-host-state)). | |
 | Retained-history access is discoverable, here in space info ([host state](../core.md#trusted-host-state)). | The history explanation when inviting. |
 | Linking confirms adding a device, with an access warning ([approvals](../device-enrollment.md#approvals)). | |
-| Own-account device notices with removal, and alarms for devices the account never approved ([auditing](../audit.md#direct-sync)). | |
+| Own-account device notices with removal, and alarms for devices the account never approved, including ones seen only briefly in its history ([own-account history](../audit.md#own-account-history)). | |
+| The liveness warning and one warning per unchecked stretch of history ([liveness](../audit.md#liveness-and-deadline)). | |
 | Signing devices out at the provider, then removing them through a provider approval ([ending access](../core.md#ending-access)). | |
 | The re-enrollment hold, its member notice, and the alarm on a removed device ([re-enrollment](../device-enrollment.md#re-enrollment)). | |
 | A way to inspect observed grants to any member ([auditing](../audit.md#direct-sync)), which can live deep in settings. | The sole-holder indicator and device-list detail. |

@@ -67,7 +67,7 @@ export class InvariantMonitor {
   private firstSeen = new Map<string, number>();
   readonly violations: { at: number; text: string }[] = [];
   private readonly disclosure: DisclosureCheck;
-  /** The Relay-Witnessed Repos goal (witness policy only). */
+  /** README goal 7, under witnessed history (witness policy only). */
   private readonly detection: DetectionCheck | null;
   /** installation ID -> account -> event sequence when it first knew the account. */
   private knownSince = new Map<string, Map<string, number>>();

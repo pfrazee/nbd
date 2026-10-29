@@ -1,14 +1,14 @@
-"""Cases for WitnessClient (proposal-reliable-detection.md, relay-witnessed
-repos): each row of the proposal's "What it achieves" table, with the
-baseline InviterClient fooled under a forking PDS where it applies; the
-"What stays out of reach" items (`test_limitation_`); Astra's cases; the
+"""Cases for WitnessClient (device-enrollment.md, Witnessed history, and
+audit.md, Own-account history): each case in those rules and README goal 7,
+with the baseline InviterClient fooled under a forking PDS where it applies;
+the limits they state (`test_limitation_`); Astra's cases; the
 revision rules (`Revisions`: unrelayed commits against consecutive
 reconstructions, honest relay drops, far-future and non-increasing
 revisions, `since` continuity); stream gaps at any resync revision
 (`StreamGaps`), where a witness's history starts (`HistoryStarts`), the
 reference relay's timestamps (`RelayTime`), and transit time (`Transit`);
-and findings about the proposal (`test_finding_`), each showing the goal failing
-under the rule as written and, where there is one, holding under the fix.
+and findings about the draft rules (`test_finding_`), each showing the goal
+failing under the draft rule and, where there is one, holding under the fix.
 
 Run: python3 -I -m unittest discover -s model
 """
@@ -898,7 +898,7 @@ class Revisions(Base):
         self.assertIsNotNone(dropped)
 
     def test_finding_sync_after_a_dropped_commit_alarms_under_the_text(self):
-        # Under the proposal's wording (any two consecutive reconstructions),
+        # Under the draft's wording (any two consecutive reconstructions),
         # the honest relay drops a commit, the PDS's next event is a `#sync`
         # (after a migration, say), the witness fetches its exact root, and
         # a client holding the dropped commit alarms; PDS and relay honest.
@@ -1612,7 +1612,7 @@ class Findings(Base):
         # the witness counts the event as processed and stays live, and
         # nothing bounds the wait, the commit Bob accepted is neither
         # reconstructed nor a gap in Alice's history, and her coverage stays
-        # fresh. This answers the proposal's review question 4 with yes.
+        # fresh, so a PDS could hide a commit by stalling its fetch.
         self.app1.PENDING = "aside"
         self.app1.FETCH_TIMEOUT = INF
         self.w.stall("app1", "alice")
@@ -1648,7 +1648,7 @@ class Findings(Base):
     def test_finding_revoked_signer_impostor_is_only_a_notice(self):
         # Finding 6. A removed device's key approves an impostor beside a live
         # device. Alice's installation accepts it by approval, so the
-        # proposal's "alarm" is only the baseline own-account notice, even
+        # goal's "alarm" is only the baseline own-account notice, even
         # though her witnessed history shows the approval appearing after
         # its signer's removal, which no honest flow produces.
         self.w.delete_device(self.a1)

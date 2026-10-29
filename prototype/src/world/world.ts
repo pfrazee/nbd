@@ -846,7 +846,7 @@ export class World implements Network {
 
   /** Not the reference relay: one that stamps each event with the time it
    * sends it, so a replay or a slow subscriber's backlog carries fresh times
-   * (proposal: Reference relay forbids this). */
+   * (device-enrollment.md, Reference relay, forbids this). */
   relayTimeOnDelivery(on = true): void {
     this.relay!.timeOnDelivery = on;
     this.note(`the relay ${on ? "stamps events with the time it sends them" : "keeps each event's sequencing time"}`);
@@ -936,7 +936,7 @@ export class World implements Network {
   advance(hours: number): void {
     this.trace?.push({ op: "wait", h: hours });
     // Under the witness policy running installations check at least hourly
-    // (proposal: Liveness and deadline), so time passes in hourly settles.
+    // (audit.md, Liveness and deadline), so time passes in hourly settles.
     if (this.relay)
       for (let left = hours; left > 1e-9; ) {
         const d = Math.min(1, left);

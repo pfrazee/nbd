@@ -25,12 +25,12 @@ begin
  *   -D=REINVITE     rejected: an invite of an account already a member counts.
  *   -D=RETRO        rejected: an invite authorizes bindings first used after
  *                   it.
- *   -D=WITNESS      proposal-reliable-detection.md (relay-witnessed repos):
+ *   -D=WITNESS      witnessed history (device-enrollment.md, audit.md):
  *                   an honest reference relay and per-application witnesses;
  *                   clients accept and revoke only on witnessed entries, and
  *                   owners watch their own account's witnessed history.
  *                   Combined with one more flag, each restoring a rule the
- *                   proposal rejects:
+ *                   specified rules reject:
  *     -D=ANYWITNESS   a client accepts on any source's report of publication.
  *     -D=TWORELAYS    witnesses may tail different relays.
  *     -D=SKIPGAP      a witness may skip an entry without recording a gap.
@@ -384,9 +384,9 @@ restriction AcceptOnce:
 restriction RevokeOnce:
   "All c t #i #j. Revoke(c, t) @ i & Revoke(c, t) @ j ==> #i = #j"
 
-/* ---- Relay-witnessed repos (WITNESS) ---------------------------------- */
+/* ---- Witnessed history (WITNESS) ------------------------------------- */
 
-// proposal-reliable-detection.md. A relayed entry is one record change in
+// device-enrollment.md, Witnessed history. A relayed entry is one record change in
 // an account's repo: a binding (a device record added) or <'deleted', t>.
 // Positions are s('z'), s(s('z')), ...: the account's next event in the
 // relay's one stream, so skipped sequence numbers do not appear. Time, the
@@ -517,7 +517,7 @@ rule WitnessSkip:
 #endif
 
 #ifdef WITNESS & LATESTART
-// The proposal as written: a witness that starts following an account does
+// An earlier draft of the rule: a witness that starts following an account does
 // so at a verified snapshot, which becomes the start of its history, and
 // the interval before it is neither reconstructed nor a gap. (The snapshot's
 // contents are not modeled: the attack needs the binding deleted before
@@ -859,7 +859,7 @@ lemma inviters_grant_scope:
           & HoldDone(iss, B, <B, pr, per>) @ h)"
 #endif
 
-/* ---- Lemmas on relay-witnessed repos (WITNESS) ------------------------ */
+/* ---- Lemmas on witnessed history (WITNESS) ---------------------------- */
 
 // Under WITNESS, positions are relay positions, and OwnerAt(d, A, n) says an
 // installation's frontier reached position n. The lemmas below prove what

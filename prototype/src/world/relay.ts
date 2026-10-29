@@ -1,4 +1,4 @@
-// The Relay-Witnessed Repos proposal (proposal-reliable-detection.md), world
+// Witnessed history (device-enrollment.md, Witnessed history), world
 // side: the reference relay, a single ordered log every subscriber reads, and
 // the witnesses applications run to tail it. A witness reconstructs each
 // account's public repo (in this simulation the whole public repo is the
@@ -11,7 +11,7 @@
 // REV_ALLOWANCE ahead of its clock (though it passes on a `#sync` that
 // re-announces an account's current commit unchanged), may drop commits (a rate limit), stamps each
 // event with the time it first sequenced it and keeps that time for every
-// subscriber and on every replay (proposal: Reference relay), and delivers the
+// subscriber and on every replay (device-enrollment.md, Reference relay), and delivers the
 // same events to every subscriber, though possibly late to a slow one. It serves no repos (a
 // non-archival relay), so `#sync` events are reconstructed by fetching from
 // the PDS.
@@ -66,7 +66,7 @@ export class Relay {
    * findings). An event sequenced at `time` reaches it at `time + delay`. */
   readonly deliveryDelay = new Map<string, number>();
   /** A relay colluding with a PDS: events for `did` are hidden from the
-   * named subscribers. Out of the proposal's reach. */
+   * named subscribers. Out of reach (README non-goal 2). */
   readonly hideFrom = new Map<Did, Set<string>>();
   /** An honest relay dropping commits, as under a rate limit: how many of
    * each account's next events it discards on ingest. */
@@ -82,7 +82,7 @@ export class Relay {
    * it to the subscriber, not the time it first sequenced it, so a replay
    * after a resume, or a slow subscriber's backlog, carries fresh times. The
    * sync specification lets an honest relay replace an upstream time; NBD
-   * forbids its reference relay to (proposal: Reference relay), since a
+   * forbids its reference relay to (device-enrollment.md, Reference relay), since a
    * witness's frontier is read off these times. */
   timeOnDelivery = false;
   /** When each subscriber last resumed from a cursor: the relay replays
@@ -244,7 +244,7 @@ export class Witness implements WitnessApi {
   pageSize = PAGE;
   /** A dishonest witness, colluding with a PDS: it leaves these relay
    * sequence numbers out of an account's history, reporting neither the
-   * commits nor gaps. Out of the proposal's reach. */
+   * commits nor gaps. Out of reach (README non-goal 2). */
   readonly omits = new Map<Did, Set<number>>();
   /** Its relay subscription cursor: the last relay sequence number processed. */
   cursor = 0;
@@ -677,7 +677,7 @@ export class Witness implements WitnessApi {
 
 /** A "witness" run by a malicious PDS: it reports whatever the PDS serves
  * the asking client as published and current. Clients must not trust it
- * (proposal: Trusted witnesses); it exists so a mutation that does can be
+ * (device-enrollment.md, Trusted witnesses); it exists so a mutation that does can be
  * caught. */
 export class RogueWitness implements WitnessApi {
   constructor(readonly id: string, private readonly serve: (observer: string, did: Did) => Snapshot | null) {}

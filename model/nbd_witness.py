@@ -1,8 +1,9 @@
-"""Relay-witnessed repos: a variant of InviterClient for
-proposal-reliable-detection.md, beside the unchanged specified design.
+"""Witnessed history: InviterClient extended with the rules of
+device-enrollment.md, Witnessed history, and audit.md, Own-account history,
+beside InviterClient, which models the specified design without them.
 
 The baseline model assumes one shared, current view of every repo. This
-variant replaces it with what the proposal relies on:
+variant replaces it with what witnessed history relies on:
 
 - `RelayWorld`: the PDS's commits, a reference relay that publishes one
   ordered log of them, delivered identically to every subscriber, and a
@@ -34,7 +35,7 @@ variant replaces it with what the proposal relies on:
   from a persisted cursor (a repo revision, so it can move between
   witnesses), and warning on gaps and on coverage age, counted from when
   it sent the request that produced the answer (`request`, `deliver`).
-- `goal_violations`: the proposal's goal, checked against client state.
+- `goal_violations`: README goal 7, checked against client state.
 
 Commits are abstract: a commit is its account, revision, and the two
 collections; equal collections mean equal roots. Signatures are implicit:
@@ -451,7 +452,7 @@ class Witness:
     that cleared as soon as the frontier fell behind the slow clock would
     understate the age of a stalled witness by the clock's whole error.
 
-    PENDING: "account" (the proposal: a commit awaiting a fetch holds only its
+    PENDING: "account" (the specified rule: a commit awaiting a fetch holds only its
     account, whose later events queue behind it), "stream" (it holds the
     whole stream; finding 5) or "aside" (it holds nothing; finding 5).
 
@@ -466,7 +467,7 @@ class Witness:
     account's next commit is reconstructed as one after a gap is.
 
     CONSECUTIVE: which two reconstructions bracket a commit the relay never
-    published. "since" (the proposal): the later one is a `#commit` whose
+    published. "since" (the specified rule): the later one is a `#commit` whose
     `since` names the earlier one's revision and whose operations inverted
     to the earlier one's root; a `#commit` that inverts but names another
     revision records a gap before it but is itself reconstructed by its

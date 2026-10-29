@@ -1,5 +1,5 @@
-// Client side of the Relay-Witnessed Repos proposal
-// (proposal-reliable-detection.md): what an installation keeps about its
+// Client side of witnessed history (device-enrollment.md, Witnessed
+// history; audit.md, Own-account history): what an installation keeps about its
 // trusted witness's history. Cursors per followed account (repo revisions,
 // the same at every witness, so an installation can move between
 // witnesses), the monitoring frontier and coverage age for its own account,

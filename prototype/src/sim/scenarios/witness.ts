@@ -1,6 +1,6 @@
-// Scenarios for the Relay-Witnessed Repos proposal
-// (proposal-reliable-detection.md), one per row of its "What it achieves"
-// table, plus cases it keeps out of reach. Each runs under the "witness"
+// Scenarios for witnessed history (device-enrollment.md, Witnessed history;
+// audit.md, Own-account history), one per case its rules and README goal 7
+// cover, plus cases out of reach (README non-goal 2). Each runs under the "witness"
 // policy; where the comparison means something, the same steps also run
 // under the specified rule without witnessing ("inviters"), to show that it
 // misses the case. Bob's PDS is the attacker throughout. Bob's phone uses

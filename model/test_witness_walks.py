@@ -1,5 +1,5 @@
-"""Random adversarial walks over WitnessClient (relay-witnessed repos),
-checking the proposal's goal after every step. Alice is the account under
+"""Random adversarial walks over WitnessClient (witnessed history),
+checking README goal 7 after every step. Alice is the account under
 attack, with two installations on different applications (app1 and app2,
 whose witnesses have different clocks); Bob (app2) and Carol (app1) meet
 and invite her. Each walk is a seeded sequence of:
@@ -62,7 +62,7 @@ The goal is checked with `CLOCK_SKEW` of slack on its deadline (finding
 10: a witness clock slow by less than the allowance understates frontier
 age by that much).
 
-The main walks run the proposal's rules. The lag walks add the conditions
+The main walks run the specified rules. The lag walks add the conditions
 behind findings 1 and 2 (a witness hours behind the relay, fresh enrollment
 after history the witness lacks, 90-day waits), which the event-time
 frontier and the before-history gap now handle, so they must keep the goal.
@@ -359,7 +359,7 @@ class WitnessWalk:
             self.wit[act[1]].reachable = not act[2]
         elif k == "wait":
             # Running installations advance their frontier every few hours,
-            # as the proposal says they should, so warnings mean failures.
+            # as the specified rules say they should, so warnings mean failures.
             end = w.now + act[1]
             while w.now < end:
                 w.now = min(end, w.now + TICK)

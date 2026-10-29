@@ -8,10 +8,11 @@ export type Did = string;
 /** Which grant rule installations follow: "inviters", the specified rule
  * with grant standing (device-enrollment.md#grant-standing) and invites
  * (core.md#invites), or "baseline", the rule from before it, kept for
- * comparison. "witness" is the inviters rule plus the Relay-Witnessed Repos
- * proposal (proposal-reliable-detection.md): device decisions only on
- * commits a trusted witness reconstructed from the reference relay, and
- * full-history watching of the own account. */
+ * comparison. "witness" is the inviters rule plus witnessed history
+ * (device-enrollment.md, Witnessed history; audit.md, Own-account history):
+ * device decisions only on commits a trusted witness reconstructed from the
+ * reference relay, and full-history watching of the own account. It is
+ * specified but not yet the default (TODOs.md, TODO-20). */
 export type Policy = "baseline" | "inviters" | "witness";
 
 /** Grant standing and invites apply (inviters and witness policies). */

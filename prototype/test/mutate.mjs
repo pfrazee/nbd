@@ -53,7 +53,7 @@ const MUTATIONS = {
   "inviters: capture skips the published check": [CLIENT, "        if (!this.ownSpaceRecords(e.space, COL.invite).some(([k]) => k === record.captures)) {", "        if (false) {"],
   "inviters: adoption ignores approval chains": ["      } else if (!this.inLineage(b)) continue;", "      } else if (!st.lineage.has(bindingId(b))) continue;"],
   "inviters: lineage ignores approval chains": ["id && !seen.has(id); id = st.approvers.get(id)) {", "id && !seen.has(id); id = undefined) {"],
-  // The witness policy (proposal-reliable-detection.md), one per rule.
+  // The witness policy (device-enrollment.md#witnessed-history), one per rule.
   "witness: accept on a PDS-served commit": [CLIENT, "    if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {\n      this.mon.incomplete.add(did);", "    if (vouch.status === \"unknown\" && rev > (this.trust.state.views.get(did)?.rev ?? 0)) {\n      this.trust.observe(did, snap);"],
   "witness: any witness trusted": [CLIENT, "const w = this.net.witness?.(this.id) ?? null;", "const w = [this.net.witness?.(this.id) ?? null, ...(this.net.otherWitnesses?.(this.id) ?? [])].filter((x) => x !== null).sort((a, b) => (b!.latest(this.id, did)?.snap.commit.rev ?? 0) - (a!.latest(this.id, did)?.snap.commit.rev ?? 0))[0] ?? null;"],
   "witness: latest-only watching": [CLIENT, "return es; // own: every entry", "return [...es.filter((e) => e.kind === \"gap\"), ...es.filter((e) => e.kind === \"state\").slice(-1)];"],

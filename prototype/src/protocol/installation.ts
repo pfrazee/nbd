@@ -54,7 +54,7 @@ export interface Network {
    * see Installation.app), or null while it is unreachable. */
   witness?(observer: string): WitnessApi | null;
   /** Other witnesses a client could ask, including one a PDS runs. A client
-   * must never trust them (proposal: Trusted witnesses). */
+   * must never trust them (device-enrollment.md, Trusted witnesses). */
   otherWitnesses?(observer: string): WitnessApi[];
   /** Ground truth for the checks: this installation newly accepted a binding
    * of another account; `rev` is the revision of the witnessed commit it
@@ -630,7 +630,7 @@ export class Installation {
     this.reportAccepts(null, "observed");
   }
 
-  // ---- witness policy (proposal-reliable-detection.md) ---------------------
+  // ---- witness policy (device-enrollment.md, Witnessed history) -----------
 
   /** Ground truth: report bindings of other accounts accepted since last time. */
   private reportAccepts(rev: number | null, via: string, account?: Did): void {
