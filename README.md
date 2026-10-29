@@ -1,13 +1,15 @@
 # NBD: No Big Deal Encryption Proposal
 
-End-to-end encryption for atproto spaces. **Discussion draft:** baseline decisions are specified; implementation and independent validation remain outstanding.
+A casual end-to-end encryption scheme for atproto spaces. **Discussion draft:** baseline decisions are specified; implementation and independent validation remain outstanding.
 
 "NBD" means two things:
 
 1. Convenient: No big deal to implement
 2. Relaxed: No big deal data should be kept in it
 
-This scheme is for casual computing needs. It gives your space 72 hours to stop a remote account takeover, except from the member who invites the compromised account, and alerts you to changes in your own devices. If a PDS impersonates you to anyone, your devices alarm within a day, or warn you that they can't check. A stricter scheme would replace the trust-on-first-use (TOFU) scheme, add forward secrecy, and/or ensure regular key rotation. NBD is for people who trust the members of their space, semi-trust their PDS, and do not want to hide historic space activity from new members. It aims to minimize security tasks by users. If NBD does not fit your use-case, do not use it.
+This scheme is for casual computing needs. It avoids key-sharing flows between users (no "reading off a pin number") and uses the PDS and relay infrastructure to stall remote takeovers by 72 hours. It treats the PDS itself as semi-trusted, meaning that the user can detect when their PDS decrypts the space.
+
+A stricter scheme would replace the trust-on-first-use (TOFU) scheme, add forward secrecy, and/or ensure regular key rotation. NBD is for people who trust the members of their space, semi-trust their PDS, and do not want to hide historic space activity from new members. It aims to minimize security tasks by users. If NBD does not fit your use-case, do not use it.
 
 Usage looks like:
 
